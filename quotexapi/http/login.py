@@ -14,6 +14,7 @@ class Login(Browser):
     https_base_url = f'https://{base_url}'
 
     def get_token(self):
+        self.headers["referer"] = f"{self.https_base_url}/pt/trade"
         self.response = self.send_request(
             "GET",
             f"{self.https_base_url}/pt/sign-in/"
