@@ -52,7 +52,7 @@ class Login(Browser):
 
     def _get(self):
         return self.send_request(method="GET",
-                                 url="https://qxbroker.com/pt/trade")
+                                 url=f"f{self.https_base_url}/pt/trade")
 
     def _post(self, data):
         """Send get request for Quotex API login http resource.

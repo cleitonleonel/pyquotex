@@ -1,6 +1,13 @@
 # quotexapi
 Quotex API
 
+### Observação Importante
+Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
+aplica um block, o que impede o sucesso ao autenticar na plataforma por meio do uso de usuário 
+e senha, porém esse problema ocorre mais e com mais frequência quando usamos uma versão mais
+recente do python, o que não ocorre por exemplo com a versão 3.8 do python, sendo assim sugiro
+o uso de python 3.8 ou inferior para obter sucesso com essa api.
+
 ### Install
 ````shell
 git clone https://github.com/cleitonleonel/pyquotex.git
