@@ -36,7 +36,7 @@ class Login(Browser):
     def get_profile(self):
         self.response = self.send_request(method="GET",
                                           url=f"{self.https_base_url}/pt/trade")
-        if self.response:
+        if self.response.status:
             script = self.get_soup().find_all(
                 "script", {"type": "text/javascript"})[1].get_text()
             match = re.sub(
