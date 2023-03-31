@@ -7,6 +7,7 @@ import logging
 import threading
 import pathlib
 import requests
+import urllib3
 import certifi
 from quotexapi import global_value
 from quotexapi.http.login import Login
@@ -29,9 +30,9 @@ def nested_dict(n, type):
     else:
         return defaultdict(lambda: nested_dict(n - 1, type))
 
-requests.packages.urllib3.disable_warnings()
-logger = logging.getLogger(__name__)
 
+urllib3.disable_warnings()
+logger = logging.getLogger(__name__)
 
 cert_path = certifi.where()
 os.environ['SSL_CERT_FILE'] = cert_path
@@ -73,6 +74,7 @@ class QuotexAPI(object):
         self.wss_url = f"wss://ws2.{host}/socket.io/?EIO=3&transport=websocket"
         self.websocket_client = None
         self.set_ssid = None
+        self.user_agent = None
         self.token_login2fa = None
         self.proxies = proxies
         self.profile = Profile()
@@ -130,12 +132,12 @@ class QuotexAPI(object):
         """
         return GetCandles(self)
 
-    @staticmethod
-    def check_session():
+    def check_session(self):
         data = {}
         if os.path.isfile("./session.json"):
             with open("./session.json") as file:
                 data = json.loads(file.read())
+            self.user_agent = data.get("user_agent")
         return data.get("ssid"), data.get("cookies")
 
     def send_websocket_request(self, data, no_force_send=True):
@@ -240,7 +242,7 @@ class QuotexAPI(object):
         if not check_websocket:
             return check_websocket, websocket_reason
         else:
-            ssid = self.get_ssid()
+            # ssid = self.get_ssid()
             if not global_value.SSID:
                 global_value.SSID = ssid
         return True, websocket_reason

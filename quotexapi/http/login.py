@@ -36,7 +36,7 @@ class Login(Browser):
     def get_profile(self):
         self.response = self.send_request(method="GET",
                                           url=f"{self.https_base_url}/pt/trade")
-        if self.response.status == 200:
+        if self.response:
             script = self.get_soup().find_all(
                 "script", {"type": "text/javascript"})[1].get_text()
             match = re.sub(
@@ -45,7 +45,7 @@ class Login(Browser):
             output_file = Path("./session.json")
             output_file.parent.mkdir(exist_ok=True, parents=True)
             output_file.write_text(
-                json.dumps({"cookies": self.cookies, "ssid": self.ssid}, indent=4)
+                json.dumps({"cookies": self.cookies, "ssid": self.ssid, "user_agent": self.api.user_agent}, indent=4)
             )
             return self.response, json.loads(match)
         return None, None

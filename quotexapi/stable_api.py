@@ -135,9 +135,9 @@ class Quotex(object):
             if not global_value.check_accepted_connection:
                 check, reason = False, "Acesso negado, sessão não existe!!!"
             return check, reason
-        else:
+        elif os.path.isfile("session.json"):
             os.remove("session.json")
-            return False, reason
+        return False, reason
 
     def change_account(self, balance_mode="PRACTICE"):
         """Change active account `real` or `practice`"""

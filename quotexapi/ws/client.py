@@ -12,18 +12,6 @@ user_agent_list = agents.split("\n")
 
 class WebsocketClient(object):
     """Class for work with Quotex API websocket."""
-    headers = {
-        "Accept": "*/*",
-        "Accept-Language": "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Sec-WebSocket-Version": "13",
-        "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
-        "Sec-WebSocket-Key": "NyTCcISxt4pU1zWrLjyqZg==",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.5060.53 Safari/537.36",
-        # "User-Agent": user_agent_list[random.randint(0, len(user_agent_list) - 1)],
-    }
 
     def __init__(self, api):
         """
@@ -32,6 +20,10 @@ class WebsocketClient(object):
         :trace_ws: Enables and disable `enableTrace` in WebSocket Client.
         """
         self.api = api
+        self.headers = {
+            "User-Agent": self.api.user_agent,
+            # "User-Agent": user_agent_list[random.randint(0, len(user_agent_list) - 1)],
+        }
         websocket.enableTrace(self.api.trace_ws)
         self.wss = websocket.WebSocketApp(
             self.api.wss_url,

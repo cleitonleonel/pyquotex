@@ -7,3 +7,4 @@ simplejson==3.18.3
 soupsieve==2.4
 urllib3==1.26.14
 websocket-client==1.5.1
+cloudscraper~=1.2.69
