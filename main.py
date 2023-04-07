@@ -1,7 +1,8 @@
+import os
 import time
 from quotexapi.stable_api import Quotex
 
-client = Quotex(email="email@gmail.com", password="password")
+client = Quotex(email="email@gmail.com", password="password", browser=True)
 client.debug_ws_enable = False
 
 
@@ -20,6 +21,8 @@ def login(attempts=2):
             else:
                 print("Erro ao reconectar.")
                 attempt += 1
+                if os.path.isfile("session.json"):
+                    os.remove("session.json")
         elif not check:
             attempt += 1
         else:
@@ -70,9 +73,9 @@ def buy_and_check_win():
         client.change_account("PRACTICE")
         print("Saldo corrente: ", client.get_balance())
         amount = 1500
-        asset = "AUDCAD"  # "EURUSD_otc"
+        asset = "AUDCAD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 60  # in seconds
+        duration = 30  # in seconds
         status, buy_info = client.buy(amount, asset, direction, duration)
         # print(status, buy_info)
         if status:
@@ -164,9 +167,9 @@ def get_realtime_candle():
         client.close()
 
 
-get_balance()
+# get_balance()
 # get_payment()
 # get_candle()
 # asset_open()
-# buy_and_check_win()
+buy_and_check_win()
 # balance_refill()

@@ -59,7 +59,7 @@ class QuotexAPI(object):
     timesync = TimeSync()
     candles = Candles()
 
-    def __init__(self, host, username, password, proxies=None):
+    def __init__(self, host, username, password, proxies=None, browser=False):
         """
         :param str host: The hostname or ip address of a Quotex server.
         :param str username: The username of a Quotex server.
@@ -77,6 +77,7 @@ class QuotexAPI(object):
         self.user_agent = None
         self.token_login2fa = None
         self.proxies = proxies
+        self.browser = browser
         self.profile = Profile()
 
     @property
@@ -173,7 +174,8 @@ class QuotexAPI(object):
             print("Autenticando usuário...")
             ssid, cookies = self.login(
                 self.username,
-                self.password
+                self.password,
+                self.browser,
             )
             print("Login realizado com sucesso!!!")
             """except Exception as e:

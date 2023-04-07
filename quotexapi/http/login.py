@@ -1,6 +1,7 @@
 import re
 import json
 from pathlib import Path
+from quotexapi.http.qxbroker import authorize
 from quotexapi.http.navigator import Browser
 
 
@@ -72,18 +73,21 @@ class Login(Browser):
         result_data = self.get_profile()
         return result_data
 
-    def __call__(self, username, password):
+    def __call__(self, username, password, browser):
         """Method to get Quotex API login http request.
         :param str username: The username of a Quotex server.
         :param str password: The password of a Quotex server.
         :returns: The instance of :class:`requests.Response`.
         """
-        data = {
-            "_token": self.get_token(),
-            "email": username,
-            "password": password,
-            "remember": 1,
+        if browser:
+            authorize(username, password)
+        else:
+            data = {
+                "_token": self.get_token(),
+                "email": username,
+                "password": password,
+                "remember": 1,
 
-        }
-        response, self.api.profile.msg = self._post(data=data)
+            }
+            response, self.api.profile.msg = self._post(data=data)
         return self.ssid, self.cookies
