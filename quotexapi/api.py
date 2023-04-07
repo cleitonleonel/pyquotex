@@ -169,19 +169,18 @@ class QuotexAPI(object):
     def get_ssid(self):
         ssid, cookies = self.check_session()
         if not ssid:
-            try:
-                print("Autenticando usuário...")
-                ssid, cookies = self.login(
-                    self.username,
-                    self.password
-                )
-                print("Login realizado com sucesso!!!")
-            except Exception as e:
+            # try:
+            print("Autenticando usuário...")
+            ssid, cookies = self.login(
+                self.username,
+                self.password
+            )
+            print("Login realizado com sucesso!!!")
+            """except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.error(e)
-                return e
-        self.cookies = cookies
-        return ssid
+                return e"""
+        return ssid, cookies
 
     def start_websocket(self):
         global_value.check_websocket_if_connect = None
@@ -230,26 +229,24 @@ class QuotexAPI(object):
         return True
 
     def connect(self):
+        """Method for connection to Quotex API."""
         global_value.ssl_Mutual_exclusion = False
         global_value.ssl_Mutual_exclusion_write = False
-        """Method for connection to Quotex API."""
-        try:
+        if global_value.check_websocket_if_connect:
             self.close()
-        except:
-            pass
-        ssid = self.get_ssid()
+        ssid, self.cookies = self.get_ssid()
         check_websocket, websocket_reason = self.start_websocket()
         if not check_websocket:
             return check_websocket, websocket_reason
         else:
-            # ssid = self.get_ssid()
             if not global_value.SSID:
                 global_value.SSID = ssid
-        return True, websocket_reason
+        return check_websocket, websocket_reason
 
     def close(self):
-        self.websocket.close()
-        self.websocket_thread.join()
+        if self.websocket_client:
+            self.websocket.close()
+            self.websocket_thread.join()
 
     def websocket_alive(self):
         return self.websocket_thread.is_alive()

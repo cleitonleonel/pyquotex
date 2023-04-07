@@ -50,7 +50,7 @@ class Quotex(object):
 
     @staticmethod
     def check_connect():
-        if not global_value.check_websocket_if_connect:
+        if global_value.check_websocket_if_connect == 0:
             return False
         else:
             return True
@@ -119,10 +119,8 @@ class Quotex(object):
         return self.api.candles.candles_data
 
     def connect(self):
-        try:
-            self.api.close()
-        except:
-            pass
+        if global_value.check_websocket_if_connect:
+            self.close()
         self.api = QuotexAPI(
             "qxbroker.com",
             self.email,
@@ -132,12 +130,9 @@ class Quotex(object):
         check, reason = self.api.connect()
         if check:
             self.api.send_ssid()
-            if not global_value.check_accepted_connection:
+            if global_value.check_accepted_connection == 0:
                 check, reason = False, "Acesso negado, sessão não existe!!!"
-            return check, reason
-        elif os.path.isfile("session.json"):
-            os.remove("session.json")
-        return False, reason
+        return check, reason
 
     def change_account(self, balance_mode="PRACTICE"):
         """Change active account `real` or `practice`"""

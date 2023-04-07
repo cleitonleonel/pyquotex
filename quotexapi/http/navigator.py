@@ -1,8 +1,10 @@
+import random
 import requests
 import cloudscraper
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
+from quotexapi.http.user_agents import agents
 
 retry_strategy = Retry(
     total=3,
@@ -11,6 +13,7 @@ retry_strategy = Retry(
     allowed_methods=["HEAD", "POST", "PUT", "GET", "OPTIONS"]
 )
 adapter = HTTPAdapter(max_retries=retry_strategy)
+user_agent_list = agents.split("\n")
 
 
 class Browser(object):
@@ -26,7 +29,7 @@ class Browser(object):
 
     def get_headers(self):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)",
+            "User-Agent": user_agent_list[random.randint(0, len(user_agent_list) - 1)],
         }
         return self.headers
 

@@ -1,9 +1,9 @@
 """Module for Quotex websocket."""
 import os
+import json
 import random
 import logging
 import websocket
-import simplejson as json
 from quotexapi import global_value
 from quotexapi.http.user_agents import agents
 
@@ -42,10 +42,12 @@ class WebsocketClient(object):
             logger = logging.getLogger(__name__)
             message = message
             if "authorization/reject" in str(message):
-                os.remove("./session.json")
-                global_value.check_rejected_connection = True
+                if os.path.isfile("session.json"):
+                    os.remove("session.json")
+                global_value.SSID = None
+                global_value.check_rejected_connection = 1
             elif "s_authorization" in str(message):
-                global_value.check_accepted_connection = True
+                global_value.check_accepted_connection = 1
             try:
                 message = message[1:]
                 message = message.decode()
