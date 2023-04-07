@@ -80,7 +80,7 @@ class Login(Browser):
         :returns: The instance of :class:`requests.Response`.
         """
         if browser:
-            authorize(username, password)
+            self.ssid, self.cookies = authorize(username, password)
         else:
             data = {
                 "_token": self.get_token(),

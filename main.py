@@ -2,7 +2,8 @@ import os
 import time
 from quotexapi.stable_api import Quotex
 
-client = Quotex(email="email@gmail.com", password="password", browser=True)
+# browser=True enable playwright
+client = Quotex(email="email@gmail.com", password="password", browser=False)
 client.debug_ws_enable = False
 
 
@@ -167,9 +168,9 @@ def get_realtime_candle():
         client.close()
 
 
-# get_balance()
+get_balance()
 # get_payment()
 # get_candle()
 # asset_open()
-buy_and_check_win()
+# buy_and_check_win()
 # balance_refill()
