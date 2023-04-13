@@ -133,7 +133,9 @@ class Quotex(object):
         if check:
             self.api.send_ssid()
             if global_value.check_accepted_connection == 0:
-                check, reason = False, "Acesso negado, sessão não existe!!!"
+                check, reason = self.connect()
+                if not check:
+                    check, reason = False, "Acesso negado, sessão não existe!!!"
         return check, reason
 
     def change_account(self, balance_mode="PRACTICE"):
@@ -157,8 +159,8 @@ class Quotex(object):
     def get_balance(self):
         while not self.api.account_balance:
             time.sleep(0.1)
-        balance = self.api.account_balance.get("liveBalance") \
-                  or self.api.account_balance.get("demoBalance")
+        balance = self.api.account_balance.get("demoBalance") \
+            if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
         return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
 
     def buy(self, price, asset, direction, duration):

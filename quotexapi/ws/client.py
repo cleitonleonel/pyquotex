@@ -3,6 +3,8 @@ import os
 import json
 import random
 import logging
+import time
+
 import websocket
 from quotexapi import global_value
 from quotexapi.http.user_agents import agents
@@ -49,6 +51,7 @@ class WebsocketClient(object):
             elif "s_authorization" in str(message):
                 global_value.check_accepted_connection = 1
             try:
+                time.sleep(0.5)
                 message = message[1:]
                 message = message.decode()
                 logger.debug(message)
