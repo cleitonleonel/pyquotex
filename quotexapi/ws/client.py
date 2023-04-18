@@ -51,7 +51,6 @@ class WebsocketClient(object):
             elif "s_authorization" in str(message):
                 global_value.check_accepted_connection = 1
             try:
-                time.sleep(0.5)
                 message = message[1:]
                 message = message.decode()
                 logger.debug(message)
@@ -71,7 +70,7 @@ class WebsocketClient(object):
                     self.api.timesync.server_timestamp = message["closeTimestamp"]
                 elif message.get("ticket"):
                     self.api.sold_options_respond = message
-                elif message.get("deals"):
+                if message.get("deals"):
                     for get_m in message["deals"]:
                         self.api.profit_in_operation = get_m["profit"]
                         get_m["win"] = True if message["profit"] > 0 else False
@@ -79,13 +78,27 @@ class WebsocketClient(object):
                         self.api.listinfodata.set(
                             get_m["win"], get_m["game_state"], get_m["id"]
                         )
-                elif message.get("isDemo") and message.get("balance"):
+                if message.get("isDemo") and message.get("balance"):
                     self.api.training_balance_edit_request = message
                 elif message.get("error"):
                     # print(message)
                     pass
             except:
                 pass
+            if len(message[0]) == 4:
+                ans = {"time": message[0][1], "price": message[0][2]}
+                self.api.realtime_price[message[0][0]].append(ans)
+            if "signals" in str(message):
+                for i in message["signals"]:
+                    self.api.signal_data[i[0]][i[2]]["dir"] = i[1][0]["signal"]
+                    self.api.signal_data[i[0]][i[2]]["duration"] = i[1][0]["timeFrame"]
+            if "51-" in str(message):
+                self.api._temp_status = str(message)
+            elif self.api._temp_status == """51-["settings/list",{"_placeholder":true,"num":0}]""":
+                self.api.settings_list = message
+                self.api._temp_status = ""
+            elif self.api._temp_status == """51-["history/list/v2",{"_placeholder":true,"num":0}]""":
+                self.api.candle_v2_data[message["asset"]] = message["history"]
         except:
             pass
         wss.send('42["tick"]')

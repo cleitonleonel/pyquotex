@@ -5,8 +5,7 @@ import json
 import ssl
 import logging
 import threading
-import pathlib
-import requests
+import collections
 import urllib3
 import certifi
 from quotexapi import global_value
@@ -66,8 +65,13 @@ class QuotexAPI(object):
         :param str password: The password of a Quotex server.
         :param proxies: The proxies of a Quotex server.
         """
+        self._temp_status = ""
+        self.settings_list = {}
         self.username = username
         self.password = password
+        self.signal_data = nested_dict(2, dict)
+        self.getcandle_data = {}
+        self.candle_v2_data = {}
         self.cookies = None
         self.profile = None
         self.websocket_thread = None
@@ -78,6 +82,7 @@ class QuotexAPI(object):
         self.token_login2fa = None
         self.proxies = proxies
         self.browser = browser
+        self.realtime_price = {}
         self.profile = Profile()
 
     @property
@@ -87,6 +92,27 @@ class QuotexAPI(object):
         :returns: The instance of :class:`WebSocket <websocket.WebSocket>`.
         """
         return self.websocket_client.wss
+
+    def get_candle_v2(self):
+        payload = {
+            "_placeholder": True,
+            "num": 0
+        }
+        data = f'451-["history/list/v2", {json.dumps(payload)}]'
+        return self.send_websocket_request(data)
+
+    def subscribe_realtime_candle(self, asset, size, period):
+        self.realtime_price[asset] = collections.deque([], size)
+        payload = {
+            "asset": asset,
+            "period": period
+        }
+        data = f'42["instruments/update", {json.dumps(payload)}]'
+        return self.send_websocket_request(data)
+
+    def unsubscribe_realtime_candle(self, asset):
+        data = f'42["subfor", {json.dumps(asset)}]'
+        return self.send_websocket_request(data)
 
     @property
     def logout(self):
@@ -146,9 +172,6 @@ class QuotexAPI(object):
         :param str data: The websocket request data.
         :param bool no_force_send: Default None.
         """
-
-        logger = logging.getLogger(__name__)
-
         while (global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write) and no_force_send:
             pass
         global_value.ssl_Mutual_exclusion_write = True

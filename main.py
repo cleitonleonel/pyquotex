@@ -3,12 +3,11 @@ import time
 from quotexapi.stable_api import Quotex
 
 # browser=True enable playwright
-client = Quotex(email="email@gmail.com", password="password", browser=False)
+client = Quotex(email="email@gmail.com", password="senha", browser=False)
 client.debug_ws_enable = False
 
 
 def login(attempts=2):
-    client.debug_ws_enable = False
     check, reason = client.connect()
     print("Start your robot")
     attempt = 1
@@ -36,10 +35,10 @@ def get_balance():
     check_connect, message = login()
     print(check_connect, message)
     if check_connect:
-        client.change_account("PRACTICE")
+        client.change_account("practice")
         print("Saldo corrente: ", client.get_balance())
         print("Saindo...")
-        client.close()
+    client.close()
 
 
 def balance_refill():
@@ -48,7 +47,7 @@ def balance_refill():
     if check_connect:
         result = client.edit_practice_balance(50000)
         print(result)
-        client.close()
+    client.close()
 
 
 def buy():
@@ -64,12 +63,12 @@ def buy():
         print(status, buy_info)
         print("Saldo corrente: ", client.get_balance())
         print("Saindo...")
-        client.close()
+    client.close()
 
 
 def buy_and_check_win():
     check_connect, message = login()
-    print("CONEXÃO: ", check_connect, message)
+    print(check_connect, message)
     if check_connect:
         client.change_account("PRACTICE")
         print("Saldo corrente: ", client.get_balance())
@@ -89,7 +88,7 @@ def buy_and_check_win():
             print("Falha na operação!!!")
         print("Saldo Atual: ", client.get_balance())
         print("Saindo...")
-        client.close()
+    client.close()
 
 
 def sell_option():
@@ -99,14 +98,14 @@ def sell_option():
         client.change_account("PRACTICE")
         amount = 30
         asset = "EURUSD_otc"  # "EURUSD_otc"
-        direction = "call"
+        direction = "put"
         duration = 1000  # in seconds
         status, buy_info = client.buy(amount, asset, direction, duration)
         print(status, buy_info)
         client.sell_option(buy_info["id"])
         print("Saldo corrente: ", client.get_balance())
         print("Saindo...")
-        client.close()
+    client.close()
 
 
 def asset_open():
@@ -116,7 +115,7 @@ def asset_open():
         print("Check Asset Open")
         for i in client.get_all_asset_name():
             print(i, client.check_asset_open(i))
-        client.close()
+    client.close()
 
 
 def get_candle():
@@ -129,7 +128,7 @@ def get_candle():
         candles = client.get_candles(asset, offset, period)
         for candle in candles["data"]:
             print(candle)
-        client.close()
+    client.close()
 
 
 def get_payment():
@@ -140,37 +139,45 @@ def get_payment():
         for asset_name in all_data:
             asset_data = all_data[asset_name]
             print(asset_name, asset_data["payment"], asset_data["open"])
-        client.close()
+    client.close()
 
 
-# NÃO IMPLEMENTADO AINDA.
 def get_candle_v2():
     check_connect, message = login()
     print(check_connect, message)
-    print(check_connect, message)
     if check_connect:
-        print("\n\n------get")
-        a = client.get_candle_v2("NZDUSD_otc", 180)
+        a = client.get_candle_v2("USDJPY_otc", 10)
         print(a)
-        client.close()
+    client.close()
 
 
-# NÃO IMPLEMENTADO AINDA.
 def get_realtime_candle():
     check_connect, message = login()
     if check_connect:
         list_size = 10
-        client.start_candles_stream("NZDUSD_otc", list_size)
+        client.start_candles_stream("USDJPY_otc", list_size)
         while True:
-            if len(client.get_realtime_candles("NZDUSD_otc")) == list_size:
+            if len(client.get_realtime_candles("USDJPY_otc")) == list_size:
                 break
-        print(client.get_realtime_candles("NZDUSD_otc"))
-        client.close()
+        print(client.get_realtime_candles("USDJPY_otc"))
+    client.close()
 
 
+def get_signal_data():
+    check_connect, message = login()
+    if check_connect:
+        while True:
+            print(client.get_signal_data())
+            time.sleep(1)
+    client.close()
+
+
+# get_signal_data()
 get_balance()
 # get_payment()
 # get_candle()
+# get_candle_v2()
+# get_realtime_candle()
 # asset_open()
 # buy_and_check_win()
 # balance_refill()

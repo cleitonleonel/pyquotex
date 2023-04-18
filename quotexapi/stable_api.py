@@ -119,6 +119,16 @@ class Quotex(object):
                 self.connect()
         return self.api.candles.candles_data
 
+    def get_candle_v2(self, asset, period):
+        self.api.candle_v2_data[asset] = None
+        size = 10
+        self.stop_candles_stream(asset)
+        self.api.subscribe_realtime_candle(asset, size, period)
+        while self.api.candle_v2_data[asset] is None:
+            pass
+            time.sleep(1)
+        return self.api.candle_v2_data[asset]
+
     def connect(self):
         if global_value.check_websocket_if_connect:
             self.close()
@@ -193,6 +203,7 @@ class Quotex(object):
         assets_data = {}
         for i in self.api.instruments:
             assets_data[i[2]] = {
+                "turbo_payment": i[18],
                 "payment": i[5],
                 "open": i[14]
             }
@@ -216,9 +227,20 @@ class Quotex(object):
         self.api.listinfodata.delete(id_number)
         return listinfodata_dict["win"]
 
+    def start_candles_stream(self, asset, size, period=0):
+        self.api.subscribe_realtime_candle(asset, size, period)
+
+    def stop_candles_stream(self, asset):
+        self.api.unsubscribe_realtime_candle(asset)
+
+    def get_realtime_candles(self, asset):
+        while True:
+            if asset in self.api.realtime_price:
+                if len(self.api.realtime_price[asset]) > 0:
+                    return self.api.realtime_price[asset]
+
     def get_signal_data(self):
-        """ Get signal Quotex server"""
-        pass
+        return self.api.signal_data
 
     def get_profit(self):
         return self.api.profit_in_operation or 0
