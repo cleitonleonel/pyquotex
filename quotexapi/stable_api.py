@@ -181,7 +181,7 @@ class Quotex(object):
         count = 0.1
         while self.api.buy_id is None:
             count += 0.1
-            if count > self.duration:
+            if count > duration:
                 status_buy = False
                 break
             time.sleep(0.1)
