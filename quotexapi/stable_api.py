@@ -175,16 +175,15 @@ class Quotex(object):
 
     def buy(self, price, asset, direction, duration):
         """Buy Binary option"""
-        count = 0
-        status_buy = False
-        self.duration = duration - 1
+        self.duration = expiration.get_expiration_time_quotex(time.time(), duration)
         request_id = expiration.get_timestamp()
-        self.api.current_asset = asset
         self.api.buy(price, asset, direction, duration, request_id)
-        while not self.api.buy_id:
-            if count == 10:
+        count = 0.1
+        while self.api.buy_id is None:
+            count += 0.1
+            if count > self.duration:
+                status_buy = False
                 break
-            count += 1
             time.sleep(0.1)
         else:
             status_buy = True

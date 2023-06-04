@@ -11,6 +11,16 @@ def date_to_timestamp(dt):
     return time.mktime(dt.timetuple())
 
 
+def get_expiration_time_quotex(timestamp, duration):
+    now_date = datetime.fromtimestamp(timestamp)
+    shift = 0
+    if now_date.second >= 30:
+        shift = 1
+    exp_date = now_date.replace(second=0, microsecond=0)
+    exp_date = exp_date + timedelta(minutes=int(duration / 60) + shift)
+    return date_to_timestamp(exp_date)
+
+
 def get_expiration_time(timestamp, duration):
     now = datetime.now()
     new_date = now.replace(second=0, microsecond=0)

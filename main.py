@@ -3,7 +3,7 @@ import time
 from quotexapi.stable_api import Quotex
 
 # browser=True enable playwright
-client = Quotex(email="email@gmail.com", password="senha", browser=False)
+client = Quotex(email="email@gmail.com", password="password", browser=False)
 client.debug_ws_enable = False
 
 
@@ -55,10 +55,10 @@ def buy():
     print(check_connect, message)
     if check_connect:
         client.change_account("PRACTICE")
-        amount = 30
+        amount = 5
         asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 10  # in seconds
+        duration = 60  # in seconds
         status, buy_info = client.buy(amount, asset, direction, duration)
         print(status, buy_info)
         print("Saldo corrente: ", client.get_balance())
@@ -72,10 +72,10 @@ def buy_and_check_win():
     if check_connect:
         client.change_account("PRACTICE")
         print("Saldo corrente: ", client.get_balance())
-        amount = 1500
-        asset = "AUDCAD_otc"  # "EURUSD_otc"
+        amount = 5
+        asset = "AUDCAD"  # "EURUSD_otc"
         direction = "call"
-        duration = 30  # in seconds
+        duration = 60  # in seconds
         status, buy_info = client.buy(amount, asset, direction, duration)
         # print(status, buy_info)
         if status:
@@ -146,7 +146,7 @@ def get_candle_v2():
     check_connect, message = login()
     print(check_connect, message)
     if check_connect:
-        a = client.get_candle_v2("USDJPY_otc", 10)
+        a = client.get_candle_v2("USDJPY", 10)
         print(a)
     client.close()
 
@@ -173,11 +173,12 @@ def get_signal_data():
 
 
 # get_signal_data()
-get_balance()
+# get_balance()
 # get_payment()
 # get_candle()
 # get_candle_v2()
 # get_realtime_candle()
 # asset_open()
+buy()
 # buy_and_check_win()
 # balance_refill()
