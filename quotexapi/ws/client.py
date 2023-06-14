@@ -33,6 +33,8 @@ class WebsocketClient(object):
             on_error=self.on_error,
             on_close=self.on_close,
             on_open=self.on_open,
+            on_ping=self.on_ping,
+            on_pong=self.on_pong,
             header=self.headers,
             cookie=self.api.cookies
         )
@@ -40,6 +42,9 @@ class WebsocketClient(object):
     def on_message(self, wss, message):
         """Method to process websocket messages."""
         global_value.ssl_Mutual_exclusion = True
+        current_time = time.localtime()
+        if current_time.tm_sec == 0:
+            self.wss.send('42["tick"]')
         try:
             logger = logging.getLogger(__name__)
             message = message
@@ -75,6 +80,7 @@ class WebsocketClient(object):
                 elif message.get("ticket"):
                     self.api.sold_options_respond = message
                 if message.get("deals"):
+                    print(message["deals"])
                     for get_m in message["deals"]:
                         self.api.profit_in_operation = get_m["profit"]
                         get_m["win"] = True if message["profit"] > 0 else False
@@ -101,11 +107,10 @@ class WebsocketClient(object):
                 self.api.realtime_price[message[0][0]].append(ans)
         except:
             pass
-        wss.send('42["tick"]')
         global_value.ssl_Mutual_exclusion = False
+        self.wss.send('42["tick"]')
 
-    @staticmethod
-    def on_error(wss, error):
+    def on_error(self, wss, error):
         """Method to process websocket errors."""
         logger = logging.getLogger(__name__)
         logger.error(error)
@@ -118,9 +123,14 @@ class WebsocketClient(object):
         logger.debug("Websocket client connected.")
         global_value.check_websocket_if_connect = 1
 
-    @staticmethod
-    def on_close(wss, close_status_code, close_msg):
+    def on_close(self, wss, close_status_code, close_msg):
         """Method to process websocket close."""
         logger = logging.getLogger(__name__)
         logger.debug("Websocket connection closed.")
         global_value.check_websocket_if_connect = 0
+
+    def on_ping(self, wss, ping_msg):
+        pass
+
+    def on_pong(self, wss, pong_msg):
+        self.wss.send("2")

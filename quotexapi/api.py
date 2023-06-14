@@ -215,13 +215,13 @@ class QuotexAPI(object):
         self.websocket_thread = threading.Thread(
             target=self.websocket.run_forever,
             kwargs={
-                'ping_interval': 25,
-                'ping_timeout': 20,
-                'ping_payload': "2",
+                'ping_interval': 24,
+                'ping_timeout': 15,
+                # 'ping_payload': "2",
                 'origin': 'https://qxbroker.com',
                 'host': 'ws2.qxbroker.com',
                 'sslopt': {
-                    "check_hostname": False,
+                    # "check_hostname": False,
                     "cert_reqs": ssl.CERT_NONE,
                     "ca_certs": cacert,
                 }

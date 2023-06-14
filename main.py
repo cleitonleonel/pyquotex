@@ -1,10 +1,20 @@
 import os
 import time
+import asyncio
 from quotexapi.stable_api import Quotex
 
 # browser=True enable playwright
-client = Quotex(email="email@gmail.com", password="password", browser=False)
+client = Quotex(email="example@gmail.com", password="password", browser=False)
 client.debug_ws_enable = False
+
+
+def asset_parse(asset):
+    new_asset = asset[:3] + "/" + asset[3:]
+    if "_otc" in asset:
+        asset = new_asset.replace("_otc", " (OTC)")
+    else:
+        asset = new_asset
+    return asset
 
 
 def login(attempts=2):
@@ -59,33 +69,45 @@ def buy():
         asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
-        status, buy_info = client.buy(amount, asset, direction, duration)
-        print(status, buy_info)
+        asset_query = asset_parse(asset)
+        asset_open = client.check_asset_open(asset_query)
+        if asset_open[2]:
+            print("OK: Asset está aberto.")
+            status, buy_info = client.buy(amount, asset, direction, duration)
+            print(status, buy_info)
+        else:
+            print("ERRO: Asset está fechado.")
         print("Saldo corrente: ", client.get_balance())
         print("Saindo...")
     client.close()
 
 
-def buy_and_check_win():
+async def buy_and_check_win():
     check_connect, message = login()
     print(check_connect, message)
     if check_connect:
         client.change_account("PRACTICE")
         print("Saldo corrente: ", client.get_balance())
         amount = 5
-        asset = "AUDCAD"  # "EURUSD_otc"
+        asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 60  # in seconds
-        status, buy_info = client.buy(amount, asset, direction, duration)
-        # print(status, buy_info)
-        if status:
-            print("Aguardando resultado...")
-            if client.check_win(buy_info["id"]):
-                print(f"\nWin!!! \nVencemos moleque!!!\nLucro: R$ {client.get_profit()}")
+        duration = 30  # in seconds
+        asset_query = asset_parse(asset)
+        asset_open = client.check_asset_open(asset_query)
+        if asset_open[2]:
+            print("OK: Asset está aberto.")
+            status, buy_info = client.buy(amount, asset, direction, duration)
+            print(status, buy_info)
+            if status:
+                print("Aguardando resultado...")
+                if await client.check_win(buy_info["id"]):
+                    print(f"\nWin!!! \nVencemos moleque!!!\nLucro: R$ {client.get_profit()}")
+                else:
+                    print(f"\nLoss!!! \nPerdemos moleque!!!\nPrejuízo: R$ {client.get_profit()}")
             else:
-                print(f"\nLoss!!! \nPerdemos moleque!!!\nPrejuízo: R$ {client.get_profit()}")
+                print("Falha na operação!!!")
         else:
-            print("Falha na operação!!!")
+            print("ERRO: Asset está fechado.")
         print("Saldo Atual: ", client.get_balance())
         print("Saindo...")
     client.close()
@@ -108,12 +130,13 @@ def sell_option():
     client.close()
 
 
-def asset_open():
+def assets_open():
     check_connect, message = login()
     print(check_connect, message)
     if check_connect:
         print("Check Asset Open")
         for i in client.get_all_asset_name():
+            print(i)
             print(i, client.check_asset_open(i))
     client.close()
 
@@ -178,7 +201,7 @@ def get_signal_data():
 # get_candle()
 # get_candle_v2()
 # get_realtime_candle()
-# asset_open()
-buy()
-# buy_and_check_win()
+# assets_open()
+# buy()
+asyncio.run(buy_and_check_win())
 # balance_refill()

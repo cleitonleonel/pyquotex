@@ -2,6 +2,7 @@ import os
 import time
 import math
 import logging
+import asyncio
 from datetime import datetime
 from quotexapi import expiration
 from quotexapi import global_value
@@ -208,11 +209,18 @@ class Quotex(object):
             }
         return assets_data
 
-    def check_win(self, id_number):
-        """Check win based id"""
+    async def start_remaing_time(self):
         now_stamp = datetime.fromtimestamp(expiration.get_timestamp())
         expiration_stamp = datetime.fromtimestamp(self.api.timesync.server_timestamp)
         remaing_time = int((expiration_stamp - now_stamp).total_seconds())
+        while remaing_time >= 0:
+            remaing_time -= 1
+            print(f"\rRestando {remaing_time if remaing_time > 0 else 0} segundos ...", end="")
+            await asyncio.sleep(1)
+
+    async def check_win(self, id_number):
+        """Check win based id"""
+        await self.start_remaing_time()
         while True:
             try:
                 listinfodata_dict = self.api.listinfodata.get(id_number)
@@ -220,9 +228,6 @@ class Quotex(object):
                     break
             except:
                 pass
-            remaing_time -= 1
-            time.sleep(1)
-            print(f"\rRestando {remaing_time if remaing_time > 0 else 0} segundos ...", end="")
         self.api.listinfodata.delete(id_number)
         return listinfodata_dict["win"]
 
