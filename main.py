@@ -17,11 +17,11 @@ def asset_parse(asset):
     return asset
 
 
-def login(attempts=2):
+def login(attempts=5):
     check, reason = client.connect()
     print("Start your robot")
     attempt = 1
-    while attempt < attempts:
+    while attempt <= attempts:
         if not client.check_connect():
             print(f"Tentando reconectar, tentativa {attempt} de {attempts}")
             check, reason = client.connect()
@@ -37,7 +37,7 @@ def login(attempts=2):
             attempt += 1
         else:
             break
-        time.sleep(0.5)
+        time.sleep(1)
     return check, reason
 
 
@@ -89,9 +89,9 @@ async def buy_and_check_win():
         client.change_account("PRACTICE")
         print("Saldo corrente: ", client.get_balance())
         amount = 5
-        asset = "EURUSD_otc"  # "EURUSD_otc"
+        asset = "EURUSD"  # "EURUSD_otc"
         direction = "call"
-        duration = 30  # in seconds
+        duration = 60  # in seconds
         asset_query = asset_parse(asset)
         asset_open = client.check_asset_open(asset_query)
         if asset_open[2]:
@@ -198,10 +198,10 @@ def get_signal_data():
 # get_signal_data()
 # get_balance()
 # get_payment()
-# get_candle()
+get_candle()
 # get_candle_v2()
 # get_realtime_candle()
 # assets_open()
 # buy()
-asyncio.run(buy_and_check_win())
+# asyncio.run(buy_and_check_win())
 # balance_refill()
