@@ -19,7 +19,19 @@ async def run(username, password, playwright: Playwright) -> Tuple[Any, str]:
     await page.get_by_role("textbox", name="Senha").click()
     await page.get_by_role("textbox", name="Senha").fill(password)
     await page.get_by_role("button", name="Entrar").click()
-    await page.wait_for_url("https://qxbroker.com/pt/trade")
+
+    async with page.expect_navigation():
+        await page.wait_for_timeout(15000)
+        soup = BeautifulSoup(await page.content(), "html.parser")
+        if "Insira o código PIN que acabamos de enviar para o seu e-mail" in soup.get_text():
+            code = input("Insira o código PIN que acabamos de enviar para o seu e-mail: ")
+            """await page.evaluate(
+                f'() => {{ document.querySelector("input[name=\\"code\\"]").value = {int(code)}; }}')"""
+            await page.get_by_placeholder("Digite o código de 6 dígitos...").click()
+            await page.get_by_placeholder("Digite o código de 6 dígitos...").fill(code)
+            await page.get_by_role("button", name="Entrar").click()
+
+    await page.wait_for_timeout(10000)
     cookies = await context.cookies()
     source = await page.content()
     soup = BeautifulSoup(source, "html.parser")
@@ -28,6 +40,7 @@ async def run(username, password, playwright: Playwright) -> Tuple[Any, str]:
         "script", {"type": "text/javascript"})[1].get_text()
     match = re.sub(
         "window.settings = ", "", script.strip().replace(";", ""))
+
     ssid = json.loads(match).get("token")
     output_file = Path("./session.json")
     output_file.parent.mkdir(exist_ok=True, parents=True)

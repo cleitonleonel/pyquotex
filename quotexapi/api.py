@@ -245,6 +245,9 @@ class QuotexAPI(object):
 
     def send_ssid(self):
         self.profile.msg = None
+        if not global_value.SSID:
+            os.remove("session.json")
+            return False
         self.ssid(global_value.SSID)
         while not self.profile.msg:
             time.sleep(0.1)
