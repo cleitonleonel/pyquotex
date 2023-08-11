@@ -65,9 +65,11 @@ class WebsocketClient(object):
                     self.api.instruments = message
                     # print(message)
                 elif "signals" in str(message):
+                    print(message)
                     for i in message["signals"]:
                         self.api.signal_data[i[0]][i[2]]["dir"] = i[1][0]["signal"]
                         self.api.signal_data[i[0]][i[2]]["duration"] = i[1][0]["timeFrame"]
+
                 elif message.get("liveBalance") or message.get("demoBalance"):
                     self.api.account_balance = message
                 elif message.get("index"):

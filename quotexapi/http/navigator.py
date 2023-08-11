@@ -17,15 +17,15 @@ user_agent_list = agents.split("\n")
 
 
 class Browser(object):
-    session = requests.Session()
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
 
     def __init__(self, api):
         self.api = api
         self.response = None
         self.headers = self.get_headers()
+        self.session = requests.Session()
         self.api.user_agent = self.headers["User-Agent"]
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def get_headers(self):
         self.headers = {

@@ -1,4 +1,3 @@
-import os
 import time
 import math
 import logging
@@ -25,12 +24,11 @@ def truncate(f, n):
 class Quotex(object):
     __version__ = "1.0"
 
-    def __init__(self, email, password, browser=False):
+    def __init__(self, email, password):
         self.size = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
                      3600, 7200, 14400, 28800, 43200, 86400, 604800, 2592000]
         self.email = email
         self.password = password
-        self.browser = browser
         self.set_ssid = None
         self.duration = None
         self.suspend = 0.5
@@ -57,36 +55,36 @@ class Quotex(object):
         else:
             return True
 
-    def re_subscribe_stream(self):
+    async def re_subscribe_stream(self):
         try:
             for ac in self.subscribe_candle:
                 sp = ac.split(",")
-                self.start_candles_one_stream(sp[0], sp[1])
+                await self.start_candles_one_stream(sp[0], sp[1])
         except:
             pass
         try:
             for ac in self.subscribe_candle_all_size:
-                self.start_candles_all_size_stream(ac)
+                await self.start_candles_all_size_stream(ac)
         except:
             pass
         try:
             for ac in self.subscribe_mood:
-                self.start_mood_stream(ac)
+                await self.start_mood_stream(ac)
         except:
             pass
 
-    def get_instruments(self):
-        time.sleep(self.suspend)
+    async def get_instruments(self):
+        await asyncio.sleep(self.suspend)
         self.api.instruments = None
         while self.api.instruments is None:
             try:
-                self.api.get_instruments()
+                await self.api.get_instruments()
                 start = time.time()
                 while self.api.instruments is None and time.time() - start < 10:
-                    pass
+                    await asyncio.sleep(0.1)
             except:
                 logging.error('**error** api.get_instruments need reconnect')
-                self.connect()
+                await self.connect()
         return self.api.instruments
 
     def get_all_asset_name(self):
@@ -99,7 +97,7 @@ class Quotex(object):
                 if instrument == i[2]:
                     return i[0], i[2], i[14]
 
-    def get_candles(self, asset, offset, period=None):
+    async def get_candles(self, asset, offset, period=None):
         index = expiration.get_timestamp()
         # index - offset
         if period:
@@ -112,39 +110,37 @@ class Quotex(object):
             try:
                 self.api.getcandles(codes_asset[asset], offset, period, index)
                 while self.check_connect and self.api.candles.candles_data is None:
-                    pass
+                    await asyncio.sleep(0.1)
                 if self.api.candles.candles_data is not None:
                     break
             except:
                 logging.error('**error** get_candles need reconnect')
-                self.connect()
+                await self.connect()
         return self.api.candles.candles_data
 
-    def get_candle_v2(self, asset, period):
+    async def get_candle_v2(self, asset, period):
         self.api.candle_v2_data[asset] = None
         size = 10
         self.stop_candles_stream(asset)
         self.api.subscribe_realtime_candle(asset, size, period)
         while self.api.candle_v2_data[asset] is None:
-            pass
-            time.sleep(1)
+            await asyncio.sleep(1)
         return self.api.candle_v2_data[asset]
 
-    def connect(self):
+    async def connect(self):
         if global_value.check_websocket_if_connect:
             self.close()
         self.api = QuotexAPI(
             "qxbroker.com",
             self.email,
             self.password,
-            browser=self.browser,
         )
         self.api.trace_ws = self.debug_ws_enable
-        check, reason = self.api.connect()
+        check, reason = await self.api.connect()
         if check:
             self.api.send_ssid()
             if global_value.check_accepted_connection == 0:
-                check, reason = self.connect()
+                check, reason = await self.connect()
                 if not check:
                     check, reason = False, "Acesso negado, sessão não existe!!!"
         return check, reason
@@ -160,21 +156,21 @@ class Quotex(object):
             exit(1)
         self.api.send_ssid()
 
-    def edit_practice_balance(self, amount=None):
+    async def edit_practice_balance(self, amount=None):
         self.api.training_balance_edit_request = None
         self.api.edit_training_balance(amount)
         while self.api.training_balance_edit_request is None:
-            pass
+            await asyncio.sleep(0.1)
         return self.api.training_balance_edit_request
 
-    def get_balance(self):
+    async def get_balance(self):
         while not self.api.account_balance:
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         balance = self.api.account_balance.get("demoBalance") \
             if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
         return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
 
-    def buy(self, price, asset, direction, duration):
+    async def buy(self, price, asset, direction, duration):
         """Buy Binary option"""
         self.duration = expiration.get_expiration_time_quotex(time.time(), duration)
         request_id = expiration.get_timestamp()
@@ -185,17 +181,17 @@ class Quotex(object):
             if count > duration:
                 status_buy = False
                 break
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         else:
             status_buy = True
         return status_buy, self.api.buy_successful
 
-    def sell_option(self, options_ids):
+    async def sell_option(self, options_ids):
         """Sell asset Quotex"""
         self.api.sell_option(options_ids)
         self.api.sold_options_respond = None
         while self.api.sold_options_respond is None:
-            pass
+            await asyncio.sleep(0.1)
         return self.api.sold_options_respond
 
     def get_payment(self):
@@ -249,7 +245,7 @@ class Quotex(object):
     def get_profit(self):
         return self.api.profit_in_operation or 0
 
-    def start_candles_one_stream(self, asset, size):
+    async def start_candles_one_stream(self, asset, size):
         if not (str(asset + "," + str(size)) in self.subscribe_candle):
             self.subscribe_candle.append((asset + "," + str(size)))
         start = time.time()
@@ -268,10 +264,10 @@ class Quotex(object):
                 self.api.subscribe(codes_asset[asset], size)
             except:
                 logging.error('**error** start_candles_stream reconnect')
-                self.connect()
-            time.sleep(1)
+                await self.connect()
+            await asyncio.sleep(1)
 
-    def start_candles_all_size_stream(self, asset):
+    async def start_candles_all_size_stream(self, asset):
         self.api.candle_generated_all_size_check[str(asset)] = {}
         if not (str(asset) in self.subscribe_candle_all_size):
             self.subscribe_candle_all_size.append(str(asset))
@@ -290,10 +286,10 @@ class Quotex(object):
             except:
                 logging.error(
                     '**error** start_candles_all_size_stream reconnect')
-                self.connect()
-            time.sleep(1)
+                await self.connect()
+            await asyncio.sleep(1)
 
-    def start_mood_stream(self, asset, instrument="turbo-option"):
+    async def start_mood_stream(self, asset, instrument="turbo-option"):
         if asset not in self.subscribe_mood:
             self.subscribe_mood.append(asset)
         while True:
@@ -303,7 +299,7 @@ class Quotex(object):
                 self.api.traders_mood[codes_asset[asset]] = codes_asset[asset]
                 break
             except:
-                time.sleep(5)
+                await asyncio.sleep(5)
 
     def close(self):
         self.api.close()

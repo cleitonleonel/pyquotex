@@ -58,7 +58,7 @@ class QuotexAPI(object):
     timesync = TimeSync()
     candles = Candles()
 
-    def __init__(self, host, username, password, proxies=None, browser=False):
+    def __init__(self, host, username, password, proxies=None):
         """
         :param str host: The hostname or ip address of a Quotex server.
         :param str username: The username of a Quotex server.
@@ -81,7 +81,6 @@ class QuotexAPI(object):
         self.user_agent = None
         self.token_login2fa = None
         self.proxies = proxies
-        self.browser = browser
         self.realtime_price = {}
         self.profile = Profile()
 
@@ -190,21 +189,15 @@ class QuotexAPI(object):
         data = f'42["demo/refill",{json.dumps(amount)}]'
         self.send_websocket_request(data)
 
-    def get_ssid(self):
+    async def get_ssid(self):
         ssid, cookies = self.check_session()
         if not ssid:
-            # try:
             print("Autenticando usuário...")
-            ssid, cookies = self.login(
+            ssid, cookies = await self.login(
                 self.username,
                 self.password,
-                self.browser,
             )
             print("Login realizado com sucesso!!!")
-            """except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.error(e)
-                return e"""
         return ssid, cookies
 
     def start_websocket(self):
@@ -217,13 +210,14 @@ class QuotexAPI(object):
             kwargs={
                 'ping_interval': 24,
                 'ping_timeout': 15,
-                # 'ping_payload': "2",
+                'ping_payload': "2",
                 'origin': 'https://qxbroker.com',
                 'host': 'ws2.qxbroker.com',
                 'sslopt': {
                     # "check_hostname": False,
                     "cert_reqs": ssl.CERT_NONE,
                     "ca_certs": cacert,
+                    "ssl_version": ssl.PROTOCOL_TLSv1_2
                 }
             }
         )
@@ -246,7 +240,8 @@ class QuotexAPI(object):
     def send_ssid(self):
         self.profile.msg = None
         if not global_value.SSID:
-            os.remove("session.json")
+            if os.path.exists(os.path.join("session.json")):
+                os.remove("session.json")
             return False
         self.ssid(global_value.SSID)
         while not self.profile.msg:
@@ -256,13 +251,13 @@ class QuotexAPI(object):
             return False
         return True
 
-    def connect(self):
+    async def connect(self):
         """Method for connection to Quotex API."""
         global_value.ssl_Mutual_exclusion = False
         global_value.ssl_Mutual_exclusion_write = False
         if global_value.check_websocket_if_connect:
             self.close()
-        ssid, self.cookies = self.get_ssid()
+        ssid, self.cookies = await self.get_ssid()
         check_websocket, websocket_reason = self.start_websocket()
         if not check_websocket:
             return check_websocket, websocket_reason
