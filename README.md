@@ -1,5 +1,13 @@
-# quotexapi
-Quotex API
+# pyquotex
+PyQuotex API
+
+### Comunicado Importante
+Devido a crescente busca por essa lib, aumentaram também os "espertinhos" que vem clonam o projeto,
+pedem melhorias, não ajudam nem financeiramente e muito menos contribuem com algum código, e o pior
+aida vendem o código como se fosse propriedade deles, se está aqui público e nem eu mesmo vendo porque
+alguém o deveria fazê-lo ???
+Pois bem, diante disso estou arquivando o projeto e movendo os arquivos para um outro repositório privado
+Agradeço a quem de alguma forma ajudou e vida que segue...
 
 ### Observação Importante
 Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
