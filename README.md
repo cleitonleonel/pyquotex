@@ -7,11 +7,11 @@ pedem melhorias, não ajudam nem financeiramente e muito menos contribuem com al
 ainda vendem o código como se fosse propriedade deles, se está aqui público e nem eu mesmo vendo porque
 alguém o deveria fazê-lo ???
 Para alertar a galera o sujeito está vendendo a API no [Youtube](https://www.youtube.com/watch?v=5x-da5K-a_4) .
-Pois bem, diante disso estou arquivando o projeto e movendo os arquivos para um outro repositório privado
+Pois bem, diante disso estou arquivando o projeto e movendo os arquivos para um outro repositório privado.
 Agradeço a quem de alguma forma ajudou e vida que segue...
 
 ### Novidades Sobre o Projeto
-Após alguns dias de muitas solicitações pela volta do projeto de diante da demanda e busca pela API
+Após alguns dias de muitas solicitações pela volta do projeto e diante da demanda e busca pela API
 resolvi retomar os trabalhos, porém em um novo repositório, privado.
 Onde irei manter sempre atualizado e dar algum suporte, obviamente para ter acesso ao novo serviço,
 terá que pagar um valor "simbólico", se pagam ao cidadão que vende o que copia aqui por que não podem
