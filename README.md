@@ -16,7 +16,13 @@ resolvi retomar os trabalhos, porém em um novo repositório, privado.
 Onde irei manter sempre atualizado e dar algum suporte, obviamente para ter acesso ao novo serviço,
 terá que pagar um valor "simbólico", se pagam ao cidadão que vende o que copia aqui por que não podem
 pagar a mim ? não é mesmo...
-Aos interessados me procurem no [Telegram](https://t.me/cleitonLC)
+Aos interessados me procurem no [Telegram](https://t.me/cleitonLC) .
+
+After a few days of many requests for feedback from the project and given the demand and search for the API,
+I decided to resume work, but in a new private repository. Where I will always keep you updated 
+and provide some support, obviously to have access to the new service, you will have to pay a "symbolic" amount,
+if they pay the citizen who sells what they copy here why can't they pay me? this is not right... 
+For those interested, look for me on [Telegram](https://t.me/cleitonLC) .
 
 ### Observação Importante
 Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
