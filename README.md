@@ -33,6 +33,9 @@ aqui [Openssl-Windows](https://slproweb.com/products/Win32OpenSSL.html) .
 Para usuários linux também é recomendada versões mais recentes possíveis do openssl, bastando
 apenas executarem ```sudo apt install openssl```.
 
+## Let`s Go to the Private Repository
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://skrill.me/rq/Cleiton/1500.00/BRL?key=Ynr2CqjmMbzx0WqKH_drrnBFCtN)
+
 ### Install
 ````shell
 git clone https://github.com/cleitonleonel/pyquotex.git
