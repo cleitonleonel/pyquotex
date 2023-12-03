@@ -1,92 +1,60 @@
-# pyquotex
-PyQuotex API
-
-### Comunicado Importante
-Devido a crescente busca por essa lib, aumentaram também os "espertinhos" que vem clonam o projeto,
-pedem melhorias, não ajudam nem financeiramente e muito menos contribuem com algum código, e o pior
-ainda vendem o código como se fosse propriedade deles, se está aqui público e nem eu mesmo vendo porque
-alguém o deveria fazê-lo ???
-Para alertar a galera o sujeito está vendendo a API no [Youtube](https://www.youtube.com/watch?v=5x-da5K-a_4) .
-Pois bem, diante disso estou arquivando o projeto e movendo os arquivos para um outro repositório privado.
-Agradeço a quem de alguma forma ajudou e vida que segue...
-
-### Important report
-Due to the growing search for this lib, there has also been an increase in the number of “smart guys” who have been cloning the project,
-they ask for improvements, they don't even help financially, much less contribute any code, and the worst
-they still sell the code as if it were their property, if it is public here and I don't even sell it because
-Should someone do this???
-To alert people, the guy is selling the API on [Youtube](https://www.youtube.com/watch?v=5x-da5K-a_4) .
-Well, in light of this I'm archiving the project and moving the files to another private repository.
-I thank those who helped in some way and the life that goes on...
-
-### Novas informações:
-Voltarei a manter uma versão open-source dessa lib, contando com a colaboração de todos, obviamente
-a minha atenção estará mais voltada a versão fechada dessa lib e não teremos aqui as atualizações recorrentes
-que são feitas na versão privada, mas poderão desfrutar de uma versão ainda assim funcional e que poderá
-atender a bastante de vocês.Contribuam com essa lib seja com código, estrelinhas ou clicando no botão mais a baixo
-e pague um café a esse humilde desenvolvedor.
-Caso considerem o fato de migrarem para o repositório privado e obterem suporte e atualizações recorrentes
-me chamem para uma conversa e vamos alinhar isso.
-Aos interessados me procurem no [Telegram](https://t.me/cleitonLC) .
-
-### New information:
-I will keep the open source of this lib again, counting on everyone's collaboration, version obviously
-my attention will be more focused on the closed version of this lib and we will not have recurring updates here
-that are made in the private version, but you will be able to enjoy a version that is still functional and that can
-This helps you a lot. Contribute to this library with code, stars or by clicking the button below
-and buy this humble developer a coffee.
-If you consider moving to the private repository and getting recurring support and updates
-Call me for a chat and let's clarify this.
-For more details, look for me on [Telegram](https://t.me/cleitonLC) .
-
-### Observação Importante
-Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
-aplica um block, o que impede o sucesso ao autenticar na plataforma por meio do uso de usuário 
-e senha, recomendo o uso de python 3.8 ou superior para obter sucesso com essa api.
-Para usuários windows é necessário instalar openssl mais recente possível, que pode ser obtido
-aqui [Openssl-Windows](https://slproweb.com/products/Win32OpenSSL.html) .
-Para usuários linux também é recomendada versões mais recentes possíveis do openssl, bastando
-apenas executarem ```sudo apt install openssl```.
-
-### Important note
-For some reason, cloudflare ends up identifying automated access to the quotex API and we
-applies a block, which prevents successful authentication on the platform using a user
-and password, I recommend using Python 3.8 or higher to be successful with this API.
-For Windows users it is necessary to install the latest possible openssl, which can be obtained
-here [Openssl-Windows](https://slproweb.com/products/Win32OpenSSL.html) .
-For Linux users, the latest possible versions of openssl are also recommended, simply
-just run ```sudo apt install openssl```.
-
-## Let`s Go to the Private Repository
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cleiton.leonel)
-
-### Install
-````shell
-git clone https://github.com/cleitonleonel/pyquotex.git
-cd pyquotex
-pip install -r requirements.txt
-````
-
-### Import
-```python
-from quotexapi.stable_api import Quotex
-```
-
-### Login by email and password
-if connect sucess return True,None  
-
-if connect fail return False,None
-
-```python
 import os
 import sys
+import json
+import random
+import asyncio
+import logging
+import pyfiglet
+import configparser
 from pathlib import Path
 from quotexapi.stable_api import Quotex
 
-email = "email"
-password = "settings"
-email_pass = "settings"
-user_data_dir = "user_data_dir"
+__author__ = "Cleiton Leonel Creton"
+__version__ = "1.0.0"
+
+__message__ = f"""
+Use com moderação, pois gerenciamento é tudo!
+suporte: cleiton.leonel@gmail.com ou +55 (27) 9 9577-2291
+"""
+
+
+def resource_path(relative_path: str | Path) -> Path:
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    base_dir = Path(__file__).parent
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base_dir = Path(sys._MEIPASS)
+    return base_dir / relative_path
+
+
+config_path = Path(os.path.join(".", "settings/config.ini"))
+if not config_path.exists():
+    config_path.parent.mkdir(exist_ok=True, parents=True)
+    text_settings = (f"[settings]\n"
+                     f"email={input('Insira o e-mail da conta: ')}\n"
+                     f"password={input('Insira a senha da conta: ')}\n"
+                     f"email_pass={input('Insira a senha da conta de e-mail: ')}\n"
+                     f"user_data_dir={input('Insira um caminho para o profile do browser: ')}\n"
+                     )
+    config_path.write_text(text_settings)
+
+config = configparser.ConfigParser()
+
+config.read(config_path, encoding="utf-8")
+
+custom_font = pyfiglet.Figlet(font="ansi_shadow")
+ascii_art = custom_font.renderText("PyQuotex")
+art_effect = f"""{ascii_art}
+
+        author: {__author__} versão: {__version__}
+        {__message__}
+"""
+
+print(art_effect)
+
+email = config.get("settings", "email")
+password = config.get("settings", "password")
+email_pass = config.get("settings", "email_pass")
+user_data_dir = config.get("settings", "user_data_dir")
 
 if not email.strip() or not password.strip():
     print("E-mail e Senha não podem estar em branco...")
@@ -100,29 +68,14 @@ client = Quotex(email=email,
                 user_data_dir=Path(os.path.join(".", user_data_dir))
                 )
 
-```
-### All Functions
 
-```python
-import os
-import sys
-import json
-import random
-import asyncio
-from pathlib import Path
-from quotexapi.stable_api import Quotex
+# client.debug_ws_enable = True
 
-email = "email"
-password = "settings"
-email_pass = "settings"
-user_data_dir = "user_data_dir"
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 
-client = Quotex(email=email,
-                password=password,
-                email_pass=email_pass,
-                user_data_dir=Path(os.path.join(".", user_data_dir))
-                )
-client.debug_ws_enable = False
+
+# PRACTICE mode is default / REAL mode is optional
+# client.set_account_mode("REAL")
 
 
 def get_all_options():
@@ -466,4 +419,3 @@ if __name__ == "__main__":
         print("Encerrando o programa.")
     finally:
         loop.close()
-```

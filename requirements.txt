@@ -1,0 +1,14 @@
+beautifulsoup4==4.12.2
+certifi==2023.7.22
+charset-normalizer==3.2.0
+greenlet==3.0.0
+idna==3.4
+playwright==1.39.0
+pyee==11.0.1
+requests==2.31.0
+soupsieve==2.4.1
+typing_extensions==4.8.0
+urllib3==2.0.7
+websocket-client==1.6.4
+pyfiglet~=1.0.2
+setuptools~=68.2.0
