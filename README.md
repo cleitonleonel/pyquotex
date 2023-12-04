@@ -1,5 +1,5 @@
 # PyQuotex
-PyQuotex API
+
 <img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
 
 ### Comunicado Importante
