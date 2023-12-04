@@ -1,5 +1,6 @@
-# pyquotex
+# PyQuotex
 PyQuotex API
+<img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
 
 ### Comunicado Importante
 Devido a crescente busca por essa lib, aumentaram também os "espertinhos" que vem clonam o projeto,
@@ -61,11 +62,12 @@ just run ```sudo apt install openssl```.
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cleiton.leonel)
 
 ### Install
-````shell
+```shell
 git clone https://github.com/cleitonleonel/pyquotex.git
 cd pyquotex
 pip install -r requirements.txt
-````
+python3 main.py <option>
+```
 
 ### Import
 ```python

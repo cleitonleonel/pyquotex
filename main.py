@@ -189,7 +189,7 @@ async def buy_and_check_win():
     if check_connect:
         print("Saldo corrente: ", await client.get_balance())
         amount = 50
-        asset = "EURJPY_otc"  # "EURUSD_otc"
+        asset = "EURUSD"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
         asset_query = asset_parse(asset)
