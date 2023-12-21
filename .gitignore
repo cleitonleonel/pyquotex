@@ -1,2 +1,4 @@
 settings/config.ini
 *.pyc
+browser/*
+session.json
