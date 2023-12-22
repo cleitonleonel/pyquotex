@@ -13,7 +13,7 @@ from .http.login import Login
 from .http.logout import Logout
 from .http.settings import Settings
 from .ws.channels.ssid import Ssid
-from .ws.channels.buy import Buy
+from .ws.channels.trade import Trade
 from .ws.channels.candles import GetCandles
 from .ws.channels.sell_option import SellOption
 from .ws.objects.timesync import TimeSync
@@ -42,11 +42,11 @@ def nested_dict(n, type):
 class QuotexAPI(object):
     """Class for communication with Quotex API."""
     socket_option_opened = {}
-    buy_id = None
+    trade_id = None
     trace_ws = False
-    buy_expiration = None
+    trade_expiration = None
     current_asset = None
-    buy_successful = None
+    trade_successful = None
     account_balance = None
     account_type = None
     instruments = None
@@ -151,12 +151,12 @@ class QuotexAPI(object):
         return Ssid(self)
 
     @property
-    def buy(self):
+    def trade(self):
         """Property for get Quotex websocket ssid channel.
-        :returns: The instance of :class:`Buy
-            <Quotex.ws.channels.buy.Buy>`.
+        :returns: The instance of :class:`Trade
+            <Quotex.ws.channels.trade.Trade>`.
         """
-        return Buy(self)
+        return Trade(self)
 
     @property
     def sell_option(self):
@@ -199,8 +199,8 @@ class QuotexAPI(object):
                or global_value.ssl_Mutual_exclusion_write) and no_force_send:
             pass
         global_value.ssl_Mutual_exclusion_write = True
-        self.websocket.send(data)
         logger.debug(data)
+        self.websocket.send(data)
         global_value.ssl_Mutual_exclusion_write = False
 
     def edit_training_balance(self, amount):
