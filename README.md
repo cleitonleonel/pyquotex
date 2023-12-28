@@ -69,7 +69,12 @@ pip install -r requirements.txt
 python3 main.py <option>
 ```
 
-### Import
+### Install by pip
+```shell
+pip install git+https://github.com/cleitonleonel/pyquotex.git
+```
+
+### Import as lib
 ```python
 from quotexapi.stable_api import Quotex
 ```
