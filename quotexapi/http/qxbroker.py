@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from ..http.automail import get_pin
 from ..utils.playwright_install import install
 from playwright.async_api import Playwright, async_playwright, expect
+from playwright_stealth import stealth_async
 
 
 class Browser(object):
@@ -59,6 +60,7 @@ class Browser(object):
             )
             context = await browser.new_context()
             page = await context.new_page()
+            await stealth_async(page)
         await page.set_extra_http_headers({
             'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0',
         })
