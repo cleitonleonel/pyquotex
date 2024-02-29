@@ -203,24 +203,25 @@ class Quotex(object):
     async def get_profile(self):
         return await self.api.get_profile()
 
-    async def buy(self, amount, asset, direction, duration):
-        """Buy Binary option"""
+    async def trade(self, action: str, amount, asset: str, duration):
+        """Trade Binary option"""
+        status_trade = False
         request_id = expiration.get_timestamp()
         self.api.current_asset = asset
         self.api.subscribe_realtime_candle(asset, duration)
-        self.api.buy(amount, asset, direction, duration, request_id)
+        self.api.trade(action, amount, asset, duration, request_id)
         count = 0.1
-        while self.api.buy_id is None:
+        while self.api.trade_id is None:
             count += 0.1
             if count > duration:
-                status_buy = False
+                status_trade = False
                 break
             await asyncio.sleep(0.1)
             if global_value.check_websocket_if_error:
                 return False, global_value.websocket_error_reason
         else:
-            status_buy = True
-        return status_buy, self.api.buy_successful
+            status_trade = True
+        return status_trade, self.api.trade_successful
 
     async def sell_option(self, options_ids):
         """Sell asset Quotex"""

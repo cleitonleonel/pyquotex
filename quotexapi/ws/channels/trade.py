@@ -2,13 +2,12 @@ import json
 from quotexapi.ws.channels.base import Base
 from quotexapi.expiration import get_expiration_time_quotex
 
+class Trade(Base):
+    """Class for Quotex trade websocket channel."""
 
-class Buy(Base):
-    """Class for Quotex buy websocket channel."""
+    name = "trade"
 
-    name = "buy"
-
-    def __call__(self, price, asset, direction, duration, request_id):
+    def __call__(self, action: str, amount, asset: str, duration: int, request_id: int):
         option_type = 100
         if "_otc" not in asset:
             option_type = 1
@@ -51,9 +50,9 @@ class Buy(Base):
 
         payload = {
             "asset": asset,
-            "amount": price,
+            "amount": amount,
             "time": duration,
-            "action": direction,
+            "action": action,
             "isDemo": self.api.account_type,
             "tournamentId": 0,
             "requestId": request_id,
