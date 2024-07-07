@@ -42,17 +42,14 @@ class Quotex(object):
             3600,
             7200,
             14400,
-            28800,
-            43200,
             86400,
-            604800,
-            2592000
         ]
         self.email = email
         self.password = password
         self.email_pass = email_pass
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
+        self.session_data = None
         self.set_ssid = None
         self.duration = None
         self.suspend = 0.5
@@ -68,7 +65,6 @@ class Quotex(object):
     @property
     def websocket(self):
         """Property to get websocket.
-
         :returns: The instance of :class:`WebSocket <websocket.WebSocket>`.
         """
         return self.websocket_client.wss
@@ -79,6 +75,9 @@ class Quotex(object):
             return True
         else:
             return False
+
+    def set_session(self, session):
+        self.session_data = session
 
     async def re_subscribe_stream(self):
         try:
@@ -123,19 +122,14 @@ class Quotex(object):
                     self.api.current_asset = instrument.replace("/", "")
                     return i[0], i[2], i[14]
 
-    async def get_candles(self, asset, offset, period=None):
+    async def get_candles(self, asset, end_from_time, offset, period):
         index = expiration.get_timestamp()
-        # index - offset
-        if period:
-            period = expiration.get_period_time(period)
-        else:
-            period = index
         self.api.current_asset = asset
         self.api.candles.candles_data = None
-        self.start_candles_stream(asset)
+        self.start_candles_stream(asset, period)
         while True:
             try:
-                self.api.get_candles(codes_asset[asset], offset, period, index)
+                self.api.get_candles(asset, index, end_from_time, offset, period)
                 while self.check_connect and self.api.candles.candles_data is None:
                     await asyncio.sleep(0.1)
                 if self.api.candles.candles_data is not None:
@@ -162,10 +156,12 @@ class Quotex(object):
             resource_path=self.resource_path,
             user_data_dir=self.user_data_dir
         )
+        await self.api.logout()
         self.api.trace_ws = self.debug_ws_enable
+        self.api.session_data = self.session_data
+        global_value.SSID = self.session_data.get("token")
         check, reason = await self.api.connect(self.account_is_demo)
         if check:
-            self.api.send_ssid()
             if global_value.check_accepted_connection == 0:
                 check, reason = await self.connect()
                 if not check:
@@ -206,6 +202,7 @@ class Quotex(object):
     async def buy(self, amount, asset, direction, duration):
         """Buy Binary option"""
         request_id = expiration.get_timestamp()
+        self.api.buy_id = None
         self.api.current_asset = asset
         self.api.subscribe_realtime_candle(asset, duration)
         self.api.buy(amount, asset, direction, duration, request_id)
@@ -249,6 +246,7 @@ class Quotex(object):
             remaing_time -= 1
             print(f"\rRestando {remaing_time if remaing_time > 0 else 0} segundos ...", end="")
             await asyncio.sleep(1)
+        await asyncio.sleep(5)
 
     async def check_win(self, id_number):
         """Check win based id"""
@@ -345,7 +343,7 @@ class Quotex(object):
             try:
                 self.api.traders_mood[codes_asset[asset]] = codes_asset[asset]
                 break
-            except:
+            finally:
                 await asyncio.sleep(0.1)
 
     def close(self):

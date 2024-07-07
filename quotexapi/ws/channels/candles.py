@@ -7,19 +7,21 @@ class GetCandles(Base):
 
     name = "candles"
 
-    def __call__(self, asset_id, offset, period, index):
+    def __call__(self, asset, index, time, offset, period):
         """Method to send message to candles websocket chanel.
 
-        :param asset_id: The active/asset identifier.
-        :param period: The candle duration (timeframe for the candles).
-        :param offset: The number of candles you want to have
+        :param asset: The active/asset identifier.
         :param index: The index of candles.
+        :param time: The time of candles.
+        :param offset: The number of candles you want to have
+        :param period: The candle duration (timeframe for the candles).
         """
         payload = {
-            "id": asset_id,
+            "asset": asset,
             "index": index,
-            "time": period,
+            "time": time,
             "offset": offset,
+            "period": period
         }
-        data = f'42["history/load/line",{json.dumps(payload)}]'
+        data = f'42["history/load",{json.dumps(payload)}]'
         self.send_websocket_request(data)

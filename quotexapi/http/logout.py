@@ -1,22 +1,24 @@
 """Module for Quotex http login resource."""
 
-from ..http.navigator import Browser
+from ..http.resource import Resource
 
 
-class Logout(Browser):
+class Logout(Resource):
     """Class for Quotex login resource."""
 
-    base_url = 'qxbroker.com'
-    https_base_url = f'https://{base_url}'
-
-    def _post(self, data=None, headers=None):
+    def _get(self, data=None, headers=None):
         """Send get request for Quotex API login http resource.
         :returns: The instance of :class:`navigator.Session`.
         """
-        return self.send_request(method="POST",
-                                 url=f"{self.https_base_url}/logout",
-                                 data=data,
-                                 headers=headers)
+        return self.send_http_request(
+            method="GET",
+            data=data,
+            headers=headers
+        )
 
-    def __call__(self):
-        return self._post()
+    async def __call__(self):
+        self.url = f"{self.api.https_url}/pt/logout"
+        headers = {
+            "referer": f"{self.api.https_url}/pt/trade"
+        }
+        return self._get(headers=headers)

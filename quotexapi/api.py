@@ -4,6 +4,7 @@ import time
 import json
 import ssl
 import urllib3
+import requests
 import certifi
 import logging
 import platform
@@ -12,6 +13,7 @@ from . import global_value
 from .http.login import Login
 from .http.logout import Logout
 from .http.settings import Settings
+from .http.navigator import Browser
 from .ws.channels.ssid import Ssid
 from .ws.channels.buy import Buy
 from .ws.channels.candles import GetCandles
@@ -26,7 +28,8 @@ from collections import defaultdict
 urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
-cert_path = certifi.where()
+# cert_path = certifi.where()
+cert_path = os.path.join("../", "quotex.pem")
 os.environ['SSL_CERT_FILE'] = cert_path
 os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
 cacert = os.environ.get('WEBSOCKET_CLIENT_CA_BUNDLE')
@@ -75,6 +78,9 @@ class QuotexAPI(object):
         :param proxies: The proxies of a Quotex server.
         :param user_data_dir: The path browser user data dir.
         """
+        self.host = host
+        self.https_url = f"https://{host}"
+        self.wss_url = f"wss://ws2.{host}/socket.io/?EIO=3&transport=websocket"
         self.wss_message = None
         self.websocket_thread = None
         self.websocket_client = None
@@ -88,7 +94,6 @@ class QuotexAPI(object):
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
         self.proxies = proxies
-        self.wss_host = host
         self.settings_list = {}
         self.signal_data = {}
         self.get_candle_data = {}
@@ -96,6 +101,8 @@ class QuotexAPI(object):
         self.realtime_price = {}
         self.realtime_sentiment = {}
         self.session_data = {}
+        self.browser = Browser()
+        self.browser.set_headers()
 
     @property
     def websocket(self):
@@ -125,6 +132,11 @@ class QuotexAPI(object):
     def unsubscribe_realtime_candle(self, asset):
         data = f'42["subfor", {json.dumps(asset)}]'
         return self.send_websocket_request(data)
+
+    def indicators(self):
+        # 42["indicator/change",{"id":"Y5zYtYaUtjI6eUz06YlGF","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
+        # 42["indicator/delete", {"id": "23507dc2-05ca-4aec-9aef-55939735b3e0"}]
+        pass
 
     @property
     def logout(self):
@@ -171,6 +183,53 @@ class QuotexAPI(object):
         """
         return GetCandles(self)
 
+    def send_http_request_v1(self, resource, method, data=None, params=None, headers=None):
+        """Send http request to Quotex server.
+
+        :param resource: The instance of
+        :class:`Resource <quotexapi.http.resource.Resource>`.
+        :param str method: The http request method.
+        :param dict data: (optional) The http request data.
+        :param dict params: (optional) The http request params.
+        :param dict headers: (optional) The http request headers.
+        :returns: The instance of :class:`Response <requests.Response>`.
+        """
+        url = resource.url
+        logger.debug(url)
+        cookies = self.session_data.get('cookies')
+        user_agent = self.session_data.get('user_agent')
+        if cookies:
+            self.browser.headers["Cookie"] = cookies
+        if user_agent:
+            self.browser.headers["User-Agent"] = user_agent
+        self.browser.headers["Connection"] = "keep-alive"
+        self.browser.headers["Accept-Encoding"] = "gzip, deflate, br"
+        self.browser.headers["Accept-Language"] = "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3"
+        self.browser.headers["Accept"] = (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        )
+        self.browser.headers["Referer"] = headers.get('referer')
+        self.browser.headers["Upgrade-Insecure-Requests"] = "1"
+        self.browser.headers["Sec-Ch-Ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+        self.browser.headers["Sec-Ch-Ua-Mobile"] = "?0"
+        self.browser.headers["Sec-Ch-Ua-Platform"] = '"Linux"'
+        self.browser.headers["Sec-Fetch-Site"] = "same-origin"
+        self.browser.headers["Sec-Fetch-User"] = "?1"
+        self.browser.headers["Sec-Fetch-Dest"] = "document"
+        self.browser.headers["Sec-Fetch-Mode"] = "navigate"
+        self.browser.headers["Dnt"] = "1"
+        response = self.browser.send_request(
+            method=method,
+            url=url,
+            data=data,
+            params=params
+        )
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            return None
+        return response
+
     async def get_profile(self):
         settings = Settings(self)
         user_settings = settings.get_settings()
@@ -184,11 +243,6 @@ class QuotexAPI(object):
         self.profile.country_name = user_settings.get("data")["countryName"]
         self.profile.currency_symbol = user_settings.get("data")["currencySymbol"]
         return self.profile
-
-    async def check_session(self):
-        if os.path.isfile(os.path.join(self.resource_path, "session.json")):
-            with open(os.path.join(self.resource_path, "session.json")) as file:
-                self.session_data = json.loads(file.read())
 
     def send_websocket_request(self, data, no_force_send=True):
         """Send websocket request to Quotex server.
@@ -212,33 +266,32 @@ class QuotexAPI(object):
         self.send_websocket_request(data)
 
     async def autenticate(self):
-        await self.check_session()
-        if not self.session_data.get("token"):
-            print("Autenticando usuário...")
-            await self.login(
-                self.username,
-                self.password,
-                self.email_pass,
-                self.user_data_dir
-            )
-            if self.session_data.get("token"):
-                print("Login realizado com sucesso!!!")
+        print("Autenticando usuário...")
+        response = await self.login(
+            self.username,
+            self.password,
+            self.email_pass,
+            self.user_data_dir
+        )
+        if response:
+            print("Login realizado com sucesso!!!")
+        return response
 
-    async def start_websocket(self, reconnect):
-        if not reconnect:
-            await self.autenticate()
+    async def start_websocket(self):
         global_value.check_websocket_if_connect = None
         global_value.check_websocket_if_error = False
         global_value.websocket_error_reason = None
+        if not global_value.SSID:
+            await self.autenticate()
         self.websocket_client = WebsocketClient(self)
         payload = {
-            "ping_interval": 25,
-            "ping_timeout": 15,
+            "ping_interval": 24,
+            "ping_timeout": 20,
             "ping_payload": "2",
-            "origin": "https://qxbroker.com",
-            "host": "ws2.qxbroker.com",
+            "origin": self.https_url,
+            "host": f"ws2.{self.host}",
             "sslopt": {
-                # "check_hostname": False,
+                "check_hostname": False,
                 "cert_reqs": ssl.CERT_NONE,
                 "ca_certs": cacert,
             }
@@ -252,24 +305,23 @@ class QuotexAPI(object):
         self.websocket_thread.daemon = True
         self.websocket_thread.start()
         while True:
-            try:
-                if global_value.check_websocket_if_error:
-                    return False, global_value.websocket_error_reason
-                elif global_value.check_websocket_if_connect == 0:
-                    logger.debug("Websocket conexão fechada.")
-                    return False, "Websocket conexão fechada."
-                elif global_value.check_websocket_if_connect == 1:
-                    logger.debug("Websocket conectado com sucesso!!!")
-                    return True, "Websocket conectado com sucesso!!!"
-            except:
-                pass
-            pass
+            if global_value.check_websocket_if_error:
+                return False, global_value.websocket_error_reason
+            elif global_value.check_websocket_if_connect == 0:
+                logger.debug("Websocket conexão fechada.")
+                return False, "Websocket conexão fechada."
+            elif global_value.check_websocket_if_connect == 1:
+                logger.debug("Websocket conectado com sucesso!!!")
+                return True, "Websocket conectado com sucesso!!!"
+            elif global_value.check_rejected_connection == 1:
+                global_value.SSID = None
+                logger.debug("Reconnecting...")
+                await self.autenticate()
+                return False, "Reconnecting..."
 
     def send_ssid(self):
         self.wss_message = None
         if not global_value.SSID:
-            if os.path.exists(os.path.join(self.resource_path, "session.json")):
-                os.remove(os.path.join(self.resource_path, "session.json"))
             return False
         self.ssid(global_value.SSID)
         while not self.wss_message:
@@ -278,7 +330,7 @@ class QuotexAPI(object):
             return False
         return True
 
-    async def connect(self, is_demo, reconnect=False):
+    async def connect(self, is_demo):
         """Method for connection to Quotex API."""
         self.account_type = is_demo
         global_value.ssl_Mutual_exclusion = False
@@ -286,18 +338,18 @@ class QuotexAPI(object):
         if global_value.check_websocket_if_connect:
             logger.info("Closing websocket connection...")
             self.close()
-        check_websocket, websocket_reason = await self.start_websocket(reconnect)
+        check_websocket, websocket_reason = await self.start_websocket()
         if not check_websocket:
             return check_websocket, websocket_reason
-        else:
-            if not global_value.SSID:
-                global_value.SSID = self.session_data.get("token")
+        check_ssid = self.send_ssid()
+        if not check_ssid:
+            await self.autenticate()
         return check_websocket, websocket_reason
 
     async def reconnect(self):
         """Method for connection to Quotex API."""
         logger.info("Websocket Reconnection...")
-        await self.start_websocket(reconnect=True)
+        await self.start_websocket()
 
     def close(self):
         if self.websocket_client:

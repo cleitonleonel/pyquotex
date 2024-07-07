@@ -1,9 +1,9 @@
 import os
 import sys
 import json
+import time
 import random
 import asyncio
-import logging
 import pyfiglet
 import configparser
 from pathlib import Path
@@ -16,6 +16,8 @@ __message__ = f"""
 Use com moderação, pois gerenciamento é tudo!
 suporte: cleiton.leonel@gmail.com ou +55 (27) 9 9577-2291
 """
+
+USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
 
 def resource_path(relative_path: str | Path) -> Path:
@@ -37,10 +39,6 @@ if not config_path.exists():
                      )
     config_path.write_text(text_settings)
 
-config = configparser.ConfigParser()
-
-config.read(config_path, encoding="utf-8")
-
 custom_font = pyfiglet.Figlet(font="ansi_shadow")
 ascii_art = custom_font.renderText("PyQuotex")
 art_effect = f"""{ascii_art}
@@ -51,6 +49,9 @@ art_effect = f"""{ascii_art}
 
 print(art_effect)
 
+config = configparser.ConfigParser()
+config.read(config_path, encoding="utf-8")
+
 email = config.get("settings", "email")
 password = config.get("settings", "password")
 email_pass = config.get("settings", "email_pass")
@@ -59,42 +60,49 @@ user_data_dir = config.get("settings", "user_data_dir")
 if not email.strip() or not password.strip():
     print("E-mail e Senha não podem estar em branco...")
     sys.exit()
-if user_data_dir.strip():
+if not user_data_dir.strip():
     user_data_dir = "browser/instance/quotex.default"
 
-client = Quotex(email=email,
-                password=password,
-                email_pass=email_pass,
-                user_data_dir=Path(os.path.join(".", user_data_dir))
-                )
+
+def load_session():
+    output_file = Path(
+        resource_path(
+            "session.json"
+        )
+    )
+    if os.path.isfile(output_file):
+        with open(output_file) as file:
+            session_data = json.loads(
+                file.read()
+            )
+    else:
+        output_file.parent.mkdir(
+            exist_ok=True,
+            parents=True
+        )
+        session_result = json.dumps({
+            "user_agent": USER_AGENT
+        }, indent=4)
+        output_file.write_text(
+            session_result
+        )
+        session_data = json.loads(
+            session_result
+        )
+    return session_data
 
 
-# client.debug_ws_enable = True
+session = load_session()
 
-# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
+client = Quotex(
+    email=email,
+    password=password,
+    email_pass=email_pass,
+    user_data_dir=Path(os.path.join(".", user_data_dir))
+)
 
-
-# PRACTICE mode is default / REAL mode is optional
-# client.set_account_mode("REAL")
-
-
-def get_all_options():
-    return """Opções disponíveis:
-    - get_profile
-    - get_balance
-    - get_signal_data
-    - get_payment
-    - get_candle
-    - get_candle_v2
-    - get_realtime_candle
-    - get_realtime_sentiment
-    - assets_open
-    - buy_simple
-    - buy_and_check_win
-    - buy_multiple
-    - balance_refill
-    - help
-    """
+client.set_session(session)
+client.debug_ws_enable = False
 
 
 def asset_parse(asset):
@@ -140,6 +148,27 @@ async def get_balance():
     client.close()
 
 
+async def buy_simple():
+    check_connect, message = await connect()
+    if check_connect:
+        amount = 50
+        asset = "EURUSD_otc"  # "EURUSD_otc"
+        direction = "call"
+        duration = 60  # in seconds
+        asset_query = asset_parse(asset)
+        print(asset_query)
+        asset_open = client.check_asset_open(asset_query)
+        if asset_open[2]:
+            print("OK: Asset está aberto.")
+            status, buy_info = await client.buy(amount, asset, direction, duration)
+            print(status, buy_info)
+        else:
+            print("ERRO: Asset está fechado.")
+        print("Saldo corrente: ", await client.get_balance())
+    print("Saindo...")
+    client.close()
+
+
 async def get_profile():
     check_connect, message = await connect()
     if check_connect:
@@ -164,32 +193,12 @@ async def balance_refill():
     client.close()
 
 
-async def buy_simple():
-    check_connect, message = await connect()
-    if check_connect:
-        amount = 50
-        asset = "EURUSD_otc"  # "EURUSD_otc"
-        direction = "call"
-        duration = 60  # in seconds
-        asset_query = asset_parse(asset)
-        asset_open = client.check_asset_open(asset_query)
-        if asset_open[2]:
-            print("OK: Asset está aberto.")
-            status, buy_info = await client.buy(amount, asset, direction, duration)
-            print(status, buy_info)
-        else:
-            print("ERRO: Asset está fechado.")
-        print("Saldo corrente: ", await client.get_balance())
-    print("Saindo...")
-    client.close()
-
-
 async def buy_and_check_win():
     check_connect, message = await connect()
     if check_connect:
         print("Saldo corrente: ", await client.get_balance())
         amount = 50
-        asset = "EURUSD"  # "EURUSD_otc"
+        asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
         asset_query = asset_parse(asset)
@@ -215,14 +224,14 @@ async def buy_and_check_win():
 
 async def buy_multiple(orders=10):
     order_list = [
-        {"amount": 5, "asset": "EURUSD_otc", "direction": "call", "duration": 60},
+        {"amount": 5, "asset": "EURUSD", "direction": "call", "duration": 60},
         {"amount": 10, "asset": "AUDCAD_otc", "direction": "put", "duration": 60},
         {"amount": 15, "asset": "AUDJPY_otc", "direction": "call", "duration": 60},
         {"amount": 20, "asset": "AUDUSD_otc", "direction": "put", "duration": 60},
-        {"amount": 25, "asset": "CADJPY_otc", "direction": "call", "duration": 60},
+        {"amount": 25, "asset": "CADJPY", "direction": "call", "duration": 60},
         {"amount": 30, "asset": "EURCHF_otc", "direction": "put", "duration": 60},
         {"amount": 35, "asset": "EURGBP_otc", "direction": "call", "duration": 60},
-        {"amount": 40, "asset": "EURJPY_otc", "direction": "put", "duration": 60},
+        {"amount": 40, "asset": "EURJPY", "direction": "put", "duration": 60},
         {"amount": 45, "asset": "GBPAUD_otc", "direction": "call", "duration": 60},
         {"amount": 50, "asset": "GBPJPY_otc", "direction": "put", "duration": 60},
     ]
@@ -278,12 +287,29 @@ async def get_candle():
     check_connect, message = await connect()
     if check_connect:
         asset = "AUDCAD_otc"
-        # 60 at 86400
-        offset = 180  # in seconds
-        period = 86400  # in seconds / opcional
-        candles = await client.get_candles(asset, offset, period)
+        offset = 86400  # in seconds
+        period = 15  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        end_from_time = time.time()
+        candles = await client.get_candles(asset, end_from_time, offset, period)
         for candle in candles["data"]:
             print(candle)
+    print("Saindo...")
+    client.close()
+
+
+async def get_candle_progressive():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        asset = "EURJPY_otc"
+        offset = 86400  # in seconds
+        period = 15  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        end_from_time = time.time()
+        list_candles = []
+        for i in range(5):
+            candles = await client.get_candles(asset, end_from_time, offset, period)
+            end_from_time = int(candles["data"][0]["time"]) - 1
+            list_candles.append(candles["data"])
+        print(list_candles)
     print("Saindo...")
     client.close()
 
@@ -319,7 +345,7 @@ async def get_candle_v2():
 async def get_realtime_candle():
     check_connect, message = await connect()
     if check_connect:
-        list_size = 10
+        list_size = 100
         asset = "USDJPY_otc"
         asset_query = asset_parse(asset)
         asset_open = client.check_asset_open(asset_query)
@@ -369,49 +395,12 @@ async def get_signal_data():
 
 
 async def main():
-    if len(sys.argv) != 2:
-        print(f"Uso: {'./main' if getattr(sys, 'frozen', False) else 'python main.py'} <opção>")
-        sys.exit(1)
-
-    async def execute(argument):
-        match argument:
-            case "get_profile":
-                return await get_profile()
-            case "get_balance":
-                return await get_balance()
-            case "get_signal_data":
-                return await get_signal_data()
-            case "get_payment":
-                return await get_payment()
-            case "get_candle":
-                return await get_candle()
-            case "get_candle_v2":
-                return await get_candle_v2()
-            case "get_realtime_candle":
-                return await get_realtime_candle()
-            case "get_realtime_sentiment":
-                return await get_realtime_sentiment()
-            case "assets_open":
-                return await assets_open()
-            case "buy_simple":
-                return await buy_simple()
-            case "buy_and_check_win":
-                return await buy_and_check_win()
-            case "buy_multiple":
-                return await buy_multiple()
-            case "balance_refill":
-                return await balance_refill()
-            case "help":
-                return print(get_all_options())
-            case _:
-                return print("Opção inválida. Use 'help' para obter a lista de opções.")
-
-    option = sys.argv[1]
-    await execute(option)
+    await get_balance()
+    # await buy_simple()
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(main())
         # loop.run_forever()

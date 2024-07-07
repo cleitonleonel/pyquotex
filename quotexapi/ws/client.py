@@ -1,8 +1,6 @@
 """Module for Quotex websocket."""
-import os
 import json
 import time
-import asyncio
 import logging
 import websocket
 from .. import global_value
@@ -22,10 +20,13 @@ class WebsocketClient(object):
         self.api = api
         self.headers = {
             "User-Agent": self.api.session_data.get("user_agent"),
+            "Origin": self.api.https_url,
+            "Host": f"ws2.{self.api.host}",
         }
+
         websocket.enableTrace(self.api.trace_ws)
         self.wss = websocket.WebSocketApp(
-            f"wss://ws2.{self.api.wss_host}/socket.io/?EIO=3&transport=websocket",
+            self.api.wss_url,
             on_message=self.on_message,
             on_error=self.on_error,
             on_close=self.on_close,
@@ -44,9 +45,6 @@ class WebsocketClient(object):
             self.wss.send('42["tick"]')
         try:
             if "authorization/reject" in str(message):
-                if os.path.isfile(os.path.join(self.api.resource_path, "session.json")):
-                    os.remove(os.path.join(self.api.resource_path, "session.json"))
-                global_value.SSID = None
                 global_value.check_rejected_connection = 1
             elif "s_authorization" in str(message):
                 global_value.check_accepted_connection = 1
@@ -102,24 +100,22 @@ class WebsocketClient(object):
             except:
                 pass
             if str(message) == "41":
-                print("Evento de desconexão disparado pela plataforma, fazendo reconexão automática.")
+                logger.info("Evento de desconexão disparado pela plataforma, fazendo reconexão automática.")
                 global_value.check_websocket_if_connect = 0
-                asyncio.run(self.api.reconnect())
             if "51-" in str(message):
                 self.api._temp_status = str(message)
             elif self.api._temp_status == """451-["settings/list",{"_placeholder":true,"num":0}]""":
                 self.api.settings_list = message
                 self.api._temp_status = ""
             elif self.api._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
-                self.api.candles.candles_data = message["candles"]
                 self.api.candle_v2_data[message["asset"]] = message
                 self.api.candle_v2_data[message["asset"]]["candles"] = [{
-                        "time": candle[0],
-                        "open": candle[1],
-                        "close": candle[2],
-                        "high": candle[3],
-                        "low": candle[4]
-                    } for candle in message["candles"]]
+                    "time": candle[0],
+                    "open": candle[1],
+                    "close": candle[2],
+                    "high": candle[3],
+                    "low": candle[4]
+                } for candle in message["candles"]]
             elif len(message[0]) == 4:
                 result = {
                     "time": message[0][1],
@@ -148,13 +144,12 @@ class WebsocketClient(object):
         """Method to process websocket open."""
         logger.info("Websocket client connected.")
         global_value.check_websocket_if_connect = 1
+        global_value.check_rejected_connection = 0
         self.wss.send('42["tick"]')
         self.wss.send('42["indicator/list"]')
         self.wss.send('42["drawing/load"]')
         self.wss.send('42["pending/list"]')
-        # self.wss.send('42["instruments/update",{"asset":"EURUSD","period":60}]')
         self.wss.send('42["chart_notification/get"]')
-        # self.wss.send('42["depth/follow","EURUSD"]')
         self.wss.send('42["tick"]')
 
     def on_close(self, wss, close_status_code, close_msg):
