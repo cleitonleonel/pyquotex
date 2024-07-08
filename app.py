@@ -141,7 +141,7 @@ async def connect(attempts=5):
 
 
 async def get_balance():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         print("Saldo corrente: ", await client.get_balance())
     print("Saindo...")
@@ -149,7 +149,7 @@ async def get_balance():
 
 
 async def buy_simple():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         amount = 50
         asset = "EURUSD_otc"  # "EURUSD_otc"
@@ -170,7 +170,7 @@ async def buy_simple():
 
 
 async def get_profile():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         profile = await client.get_profile()
         description = (f"\nUsuário: {profile.nick_name}\n"
@@ -186,7 +186,7 @@ async def get_profile():
 
 
 async def balance_refill():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         result = await client.edit_practice_balance(5000)
         print(result)
@@ -194,7 +194,7 @@ async def balance_refill():
 
 
 async def buy_and_check_win():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         print("Saldo corrente: ", await client.get_balance())
         amount = 50
@@ -235,7 +235,7 @@ async def buy_multiple(orders=10):
         {"amount": 45, "asset": "GBPAUD_otc", "direction": "call", "duration": 60},
         {"amount": 50, "asset": "GBPJPY_otc", "direction": "put", "duration": 60},
     ]
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     for i in range(0, orders):
         print("\n/", 80 * "=", "/", end="\n")
         print(f"ABRINDO ORDEM: {i + 1}")
@@ -258,7 +258,7 @@ async def buy_multiple(orders=10):
 
 
 async def sell_option():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         amount = 30
         asset = "EURUSD_otc"  # "EURUSD_otc"
@@ -273,7 +273,7 @@ async def sell_option():
 
 
 async def assets_open():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         print("Check Asset Open")
         for i in client.get_all_asset_name():
@@ -284,7 +284,7 @@ async def assets_open():
 
 
 async def get_candle():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         asset = "AUDCAD_otc"
         offset = 86400  # in seconds
@@ -315,7 +315,7 @@ async def get_candle_progressive():
 
 
 async def get_payment():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         all_data = client.get_payment()
         for asset_name in all_data:
@@ -326,7 +326,7 @@ async def get_payment():
 
 
 async def get_candle_v2():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         asset = "EURUSD_otc"
         asset_query = asset_parse(asset)
@@ -343,7 +343,7 @@ async def get_candle_v2():
 
 
 async def get_realtime_candle():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         list_size = 100
         asset = "USDJPY_otc"
@@ -364,7 +364,7 @@ async def get_realtime_candle():
 
 
 async def get_realtime_sentiment():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         asset = "EURUSD_otc"
         asset_query = asset_parse(asset)
@@ -382,7 +382,7 @@ async def get_realtime_sentiment():
 
 
 async def get_signal_data():
-    check_connect, message = await connect()
+    check_connect, message = await client.connect()
     if check_connect:
         client.start_signals_data()
         while True:
