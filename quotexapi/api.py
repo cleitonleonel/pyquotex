@@ -87,6 +87,7 @@ class QuotexAPI(object):
         self.set_ssid = None
         self.object_id = None
         self.token_login2fa = None
+        self.is_logged = False
         self._temp_status = ""
         self.username = username
         self.password = password
@@ -274,6 +275,7 @@ class QuotexAPI(object):
             self.user_data_dir
         )
         if response:
+            self.is_logged = True
             print("Login realizado com sucesso!!!")
         return response
 
@@ -317,6 +319,9 @@ class QuotexAPI(object):
                 global_value.SSID = None
                 logger.debug("Reconnecting...")
                 await self.autenticate()
+                if not self.is_logged:
+                    global_value.check_websocket_if_connect = 0
+                    return False, "Websocket conexão fechada."
                 return False, "Reconnecting..."
 
     def send_ssid(self):

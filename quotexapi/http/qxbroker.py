@@ -24,6 +24,7 @@ class Browser(object):
 
     def __init__(self, api):
         self.api = api
+        self.html = None
 
     async def run(self, playwright: Playwright) -> None:
         if self.user_data_dir:
@@ -82,11 +83,13 @@ class Browser(object):
         await page.wait_for_timeout(5000)
         cookies = await context.cookies()
         source = await page.content()
-        soup = BeautifulSoup(source, "html.parser")
+        self.html = BeautifulSoup(source, "html.parser")
         user_agent = await page.evaluate("() => navigator.userAgent;")
         self.api.session_data["user_agent"] = user_agent
-        script = soup.find_all("script", {"type": "text/javascript"})
-        if not script:
+        script = self.html.find_all("script", {"type": "text/javascript"})
+        status, message = self.success_login()
+        if not status:
+            print(message)
             await context.close() if self.user_data_dir else await browser.close()
             return
         settings = script[1].get_text().strip().replace(";", "")
@@ -102,6 +105,15 @@ class Browser(object):
             json.dumps({"cookies": cookies_string, "token": token, "user_agent": user_agent}, indent=4)
         )
         await context.close() if self.user_data_dir else await browser.close()
+
+    def success_login(self):
+        match = self.html.find(
+            "div", {"class": "hint -danger"}
+        )
+        if match is None:
+            return True, "Login successful."
+
+        return False, f"Login failed. {match.text.strip()}"
 
     async def main(self) -> None:
         async with async_playwright() as playwright:

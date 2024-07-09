@@ -1,7 +1,7 @@
+import re
 import imaplib
 import email
 import asyncio
-from bs4 import BeautifulSoup
 
 
 async def get_pin(email_address,
@@ -12,7 +12,7 @@ async def get_pin(email_address,
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     mail.login(email_address, email_pass)
     mail.select("inbox")
-    while count := 0 <= attempts:
+    while 0 <= attempts:
         status, email_ids = mail.search(None, f'(FROM "{quotex_email}")')
         email_id_list = email_ids[0].split()
         status, email_data = mail.fetch(email_id_list[-1], "(RFC822)")
@@ -24,22 +24,18 @@ async def get_pin(email_address,
                 content_disposition = str(part.get("Content-Disposition"))
                 if "attachment" not in content_disposition:
                     body = part.get_payload(decode=True).decode()
-                    if ("PIN" in body
-                            or "Your authentication PIN-code:" in body
-                            or "Seu código PIN de autenticação" in body):
-                        soup = BeautifulSoup(body, "html.parser")
-                        pin_code = soup.find("b").get_text()
+                    match = re.search(r'<b>(\d+)</b>', body)
+                    if match is not None:
+                        pin_code = match.group(1)
         else:
             body = msg.get_payload(decode=True).decode()
-            if ("PIN" in body
-                    or "Your authentication PIN-code:" in body
-                    or "Seu código PIN de autenticação" in body):
-                soup = BeautifulSoup(body, "html.parser")
-                pin_code = soup.find("b").get_text()
+            match = re.search(r'<b>(\d+)</b>', body)
+            if match is not None:
+                pin_code = match.group(1)
         if pin_code:
             return pin_code
-        count += 1
-        if count > attempts:
+        attempts -= 1
+        if attempts <= 0:
             print("Nenhum email da Quotex...")
             mail.logout()
         await asyncio.sleep(1)

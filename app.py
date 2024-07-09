@@ -105,6 +105,27 @@ client.set_session(session)
 client.debug_ws_enable = False
 
 
+def get_all_options():
+    return """Opções disponíveis:
+    - test_connection
+    - get_profile
+    - get_balance
+    - get_signal_data
+    - get_payment
+    - get_candle
+    - get_candle_v2
+    - get_candle_progressive
+    - get_realtime_candle
+    - get_realtime_sentiment
+    - assets_open
+    - buy_simple
+    - buy_and_check_win
+    - buy_multiple
+    - balance_refill
+    - help
+    """
+
+
 def asset_parse(asset):
     new_asset = asset[:3] + "/" + asset[3:]
     if "_otc" in asset:
@@ -138,6 +159,14 @@ async def connect(attempts=5):
         return check, reason
     print(reason)
     return check, reason
+
+
+async def test_connection():
+    await client.connect()
+    is_connected = client.check_connect()
+    print(f"Connected: {is_connected}")
+    print("Saindo...")
+    client.close()
 
 
 async def get_balance():
@@ -394,9 +423,52 @@ async def get_signal_data():
     client.close()
 
 
+async def execute(argument):
+    match argument:
+        case "test_connection":
+            return await test_connection()
+        case "get_profile":
+            return await get_profile()
+        case "get_balance":
+            return await get_balance()
+        case "get_signal_data":
+            return await get_signal_data()
+        case "get_payment":
+            return await get_payment()
+        case "get_candle":
+            return await get_candle()
+        case "get_candle_v2":
+            return await get_candle_v2()
+        case "get_candle_progressive":
+            return await get_candle_progressive()
+        case "get_realtime_candle":
+            return await get_realtime_candle()
+        case "get_realtime_sentiment":
+            return await get_realtime_sentiment()
+        case "assets_open":
+            return await assets_open()
+        case "buy_simple":
+            return await buy_simple()
+        case "buy_and_check_win":
+            return await buy_and_check_win()
+        case "buy_multiple":
+            return await buy_multiple()
+        case "balance_refill":
+            return await balance_refill()
+        case "help":
+            print(f"Uso: {'./app' if getattr(sys, 'frozen', False) else 'python app.py'} <opção>")
+            return print(get_all_options())
+        case _:
+            return print("Opção inválida. Use 'help' para obter a lista de opções.")
+
+
 async def main():
-    await get_balance()
-    # await buy_simple()
+    if len(sys.argv) != 2:
+        await test_connection()
+        return
+
+    option = sys.argv[1]
+    await execute(option)
 
 
 if __name__ == "__main__":

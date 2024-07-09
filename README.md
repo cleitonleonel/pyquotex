@@ -154,6 +154,7 @@ client.debug_ws_enable = False
 
 def get_all_options():
     return """Opções disponíveis:
+    - test_connection
     - get_profile
     - get_balance
     - get_signal_data
@@ -205,6 +206,14 @@ async def connect(attempts=5):
         return check, reason
     print(reason)
     return check, reason
+
+
+async def test_connection():
+    await client.connect()
+    is_connected = client.check_connect()
+    print(f"Connected: {is_connected}")
+    print("Saindo...")
+    client.close()
 
 
 async def get_balance():
@@ -492,6 +501,7 @@ async def execute(argument):
         case "balance_refill":
             return await balance_refill()
         case "help":
+            print(f"Uso: {'./app' if getattr(sys, 'frozen', False) else 'python app.py'} <opção>")
             return print(get_all_options())
         case _:
             return print("Opção inválida. Use 'help' para obter a lista de opções.")
@@ -499,8 +509,8 @@ async def execute(argument):
 
 async def main():
     if len(sys.argv) != 2:
-        print(f"Uso: {'./main' if getattr(sys, 'frozen', False) else 'python main.py'} <opção>")
-        sys.exit(1)
+        await test_connection()
+        return
 
     option = sys.argv[1]
     await execute(option)

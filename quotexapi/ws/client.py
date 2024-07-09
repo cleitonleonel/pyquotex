@@ -48,6 +48,7 @@ class WebsocketClient(object):
                 global_value.check_rejected_connection = 1
             elif "s_authorization" in str(message):
                 global_value.check_accepted_connection = 1
+                global_value.check_rejected_connection = 0
             elif "instruments/list" in str(message):
                 global_value.started_listen_instruments = True
             try:
@@ -144,7 +145,6 @@ class WebsocketClient(object):
         """Method to process websocket open."""
         logger.info("Websocket client connected.")
         global_value.check_websocket_if_connect = 1
-        global_value.check_rejected_connection = 0
         self.wss.send('42["tick"]')
         self.wss.send('42["indicator/list"]')
         self.wss.send('42["drawing/load"]')
