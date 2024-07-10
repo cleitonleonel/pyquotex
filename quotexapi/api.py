@@ -275,7 +275,9 @@ class QuotexAPI(object):
             self.user_data_dir
         )
         if response:
+            global_value.SSID = self.session_data.get("token")
             self.is_logged = True
+            self.send_ssid()
             print("Login realizado com sucesso!!!")
         return response
 
