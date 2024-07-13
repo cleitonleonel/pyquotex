@@ -122,3 +122,4 @@ class Browser(object):
 
     async def get_cookies_and_ssid(self):
         await self.main()
+        return self.success_login()

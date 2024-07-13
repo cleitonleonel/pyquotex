@@ -16,4 +16,4 @@ class Login(Browser):
         self.email = email
         self.password = password
         self.email_pass = email_pass
-        await self.get_cookies_and_ssid()
+        return await self.get_cookies_and_ssid()

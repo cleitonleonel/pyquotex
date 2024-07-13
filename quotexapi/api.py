@@ -277,7 +277,6 @@ class QuotexAPI(object):
         if response:
             global_value.SSID = self.session_data.get("token")
             self.is_logged = True
-            self.send_ssid()
             print("Login realizado com sucesso!!!")
         return response
 
@@ -319,12 +318,8 @@ class QuotexAPI(object):
                 return True, "Websocket conectado com sucesso!!!"
             elif global_value.check_rejected_connection == 1:
                 global_value.SSID = None
-                logger.debug("Reconnecting...")
-                await self.autenticate()
-                if not self.is_logged:
-                    global_value.check_websocket_if_connect = 0
-                    return False, "Websocket conexão fechada."
-                return False, "Reconnecting..."
+                logger.debug("Websocket Token Rejeitado.")
+                return True, "Websocket Token Rejeitado."
 
     def send_ssid(self):
         self.wss_message = None
@@ -351,6 +346,8 @@ class QuotexAPI(object):
         check_ssid = self.send_ssid()
         if not check_ssid:
             await self.autenticate()
+            if self.is_logged:
+                self.send_ssid()
         return check_websocket, websocket_reason
 
     async def reconnect(self):
