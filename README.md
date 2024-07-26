@@ -25,6 +25,12 @@ just run ```sudo apt install openssl```.
 ## Let`s Go to the Private Repository
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cleiton.leonel)
 
+
+
+https://github.com/user-attachments/assets/acaa0cbb-80c2-450c-9c8f-83fdbfedf0fa
+
+
+
 ### Install
 ```shell
 git clone https://github.com/cleitonleonel/pyquotex.git
