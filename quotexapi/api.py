@@ -34,6 +34,13 @@ os.environ['SSL_CERT_FILE'] = cert_path
 os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
 cacert = os.environ.get('WEBSOCKET_CLIENT_CA_BUNDLE')
 
+# Configuração do contexto SSL para usar TLS 1.3
+ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2  # Desativar versões TLS mais antigas
+ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3  # Garantir o uso de TLS 1.3
+
+ssl_context.load_verify_locations(certifi.where())
+
 
 def nested_dict(n, type):
     if n == 1:
@@ -49,6 +56,7 @@ class QuotexAPI(object):
     trace_ws = False
     buy_expiration = None
     current_asset = None
+    current_period = None
     buy_successful = None
     account_balance = None
     account_type = None
@@ -66,6 +74,7 @@ class QuotexAPI(object):
                  host,
                  username,
                  password,
+                 lang,
                  email_pass=None,
                  proxies=None,
                  resource_path=None,
@@ -74,6 +83,7 @@ class QuotexAPI(object):
         :param str host: The hostname or ip address of a Quotex server.
         :param str username: The username of a Quotex server.
         :param str password: The password of a Quotex server.
+        :param str lang: The lang of a Quotex platform.
         :param str email_pass: The password of a Email.
         :param proxies: The proxies of a Quotex server.
         :param user_data_dir: The path browser user data dir.
@@ -95,6 +105,7 @@ class QuotexAPI(object):
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
         self.proxies = proxies
+        self.lang = lang
         self.settings_list = {}
         self.signal_data = {}
         self.get_candle_data = {}
@@ -133,6 +144,23 @@ class QuotexAPI(object):
     def unsubscribe_realtime_candle(self, asset):
         data = f'42["subfor", {json.dumps(asset)}]'
         return self.send_websocket_request(data)
+
+    def edit_training_balance(self, amount):
+        data = f'42["demo/refill",{json.dumps(amount)}]'
+        self.send_websocket_request(data)
+
+    def signals_subscribe(self):
+        data = f'42["signal/subscribe"]'
+        self.send_websocket_request(data)
+
+    def change_account(self, account_type):
+        self.account_type = account_type
+        payload = {
+            "demo": self.account_type,
+            "tournamentId": 0
+        }
+        data = f'42["account/change",{json.dumps(payload)}]'
+        self.send_websocket_request(data)
 
     def indicators(self):
         # 42["indicator/change",{"id":"Y5zYtYaUtjI6eUz06YlGF","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
@@ -258,14 +286,6 @@ class QuotexAPI(object):
         logger.debug(data)
         global_value.ssl_Mutual_exclusion_write = False
 
-    def edit_training_balance(self, amount):
-        data = f'42["demo/refill",{json.dumps(amount)}]'
-        self.send_websocket_request(data)
-
-    def signals_subscribe(self):
-        data = f'42["signal/subscribe"]'
-        self.send_websocket_request(data)
-
     async def autenticate(self):
         print("Autenticando usuário...")
         response = await self.login(
@@ -297,10 +317,11 @@ class QuotexAPI(object):
                 "check_hostname": False,
                 "cert_reqs": ssl.CERT_NONE,
                 "ca_certs": cacert,
+                "context": ssl_context
             }
         }
         if platform.system() == "Linux":
-            payload["sslopt"]["ssl_version"] = ssl.PROTOCOL_TLSv1_2
+            payload["sslopt"]["ssl_version"] = ssl.PROTOCOL_TLS
         self.websocket_thread = threading.Thread(
             target=self.websocket.run_forever,
             kwargs=payload

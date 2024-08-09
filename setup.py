@@ -20,10 +20,18 @@ setup(
     # download_url='https://github.com/cleitonleonel/pyquotex/archive/v_1.0.0.tar.gz',
     keywords=['SOME', 'MEANINGFULL', 'KEYWORDS'],
     install_requires=[
+        "certifi",
+        "greenlet",
+        "pyOpenSSL",
+        "pytz",
+        "requests-toolbelt",
         'requests',
         'beautifulsoup4',
         'websocket-client',
-        'playwright'
+        'playwright',
+        'playwright-stealth',
+        'pyfiglet',
+        'numpy'
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',

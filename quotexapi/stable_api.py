@@ -7,26 +7,25 @@ from . import expiration
 from . import global_value
 from .api import QuotexAPI
 from .constants import codes_asset
-from collections import defaultdict
+from .utils.services import truncate
 
 __version__ = "1.0.0"
 logger = logging.getLogger(__name__)
 
 
-def nested_dict(n, type):
-    if n == 1:
-        return defaultdict(type)
-    else:
-        return defaultdict(lambda: nested_dict(n - 1, type))
-
-
-def truncate(f, n):
-    return math.floor(f * 10 ** n) / 10 ** n
-
-
 class Quotex(object):
 
-    def __init__(self, email, password, email_pass=None, resource_path=".", user_data_dir=None):
+    def __init__(
+            self,
+            email,
+            password,
+            lang="pt",
+            email_pass=None,
+            resource_path=".",
+            user_data_dir=None,
+            asset_default="EURUSD",
+            period_default=60
+    ):
         self.size = [
             1,
             5,
@@ -46,9 +45,12 @@ class Quotex(object):
         ]
         self.email = email
         self.password = password
+        self.lang = lang
         self.email_pass = email_pass
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
+        self.asset_default = asset_default
+        self.period_default = period_default
         self.session_data = None
         self.set_ssid = None
         self.duration = None
@@ -71,7 +73,7 @@ class Quotex(object):
 
     @staticmethod
     def check_connect():
-        if global_value.check_websocket_if_connect == 1:
+        if global_value.check_accepted_connection == 1:
             return True
         else:
             return False
@@ -98,29 +100,29 @@ class Quotex(object):
             pass
 
     async def get_instruments(self):
-        await asyncio.sleep(self.suspend)
-        self.api.instruments = None
-        while self.api.instruments is None:
-            try:
-                await self.api.get_instruments()
-                start = time.time()
-                while self.api.instruments is None and time.time() - start < 10:
-                    await asyncio.sleep(0.1)
-            except:
-                logger.error('**error** api.get_instruments need reconnect')
-                await self.connect()
-        return self.api.instruments
+        while self.check_connect and self.api.instruments is None:
+            await asyncio.sleep(0.1)
+        return self.api.instruments or []
 
     def get_all_asset_name(self):
         if self.api.instruments:
             return [instrument[2].replace("\n", "") for instrument in self.api.instruments]
 
-    def check_asset_open(self, instrument):
-        if self.api.instruments:
-            for i in self.api.instruments:
-                if instrument == i[2]:
-                    self.api.current_asset = instrument.replace("/", "")
-                    return i[0], i[2], i[14]
+    async def get_available_asset(self, asset_name: str, force_open: bool = False):
+        asset_open = await self.check_asset_open(asset_name)
+        if force_open and (not asset_open or not asset_open[2]):
+            condition_otc = "otc" not in asset_name
+            refactor_asset = asset_name.replace("_otc", "")
+            asset_name = f"{asset_name}_otc" if condition_otc else refactor_asset
+            asset_open = await self.check_asset_open(asset_name)
+        return asset_name, asset_open
+
+    async def check_asset_open(self, asset_name: str):
+        instruments = await self.get_instruments()
+        for i in instruments:
+            if asset_name == i[1]:
+                self.api.current_asset = asset_name
+                return i[0], i[2], i[14]
 
     async def get_candles(self, asset, end_from_time, offset, period):
         index = expiration.get_timestamp()
@@ -152,6 +154,7 @@ class Quotex(object):
             "qxbroker.com",
             self.email,
             self.password,
+            self.lang,
             email_pass=self.email_pass,
             resource_path=self.resource_path,
             user_data_dir=self.user_data_dir
@@ -159,6 +162,8 @@ class Quotex(object):
         await self.api.logout()
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
+        self.api.current_asset = self.asset_default
+        self.api.current_period = self.period_default
         global_value.SSID = self.session_data.get("token")
         check, reason = await self.api.connect(self.account_is_demo)
         if check:
@@ -178,9 +183,10 @@ class Quotex(object):
             logger.error("ERROR doesn't have this mode")
             exit(1)
 
-    def change_account(self, balance_mode):
+    def change_account(self, balance_mode: str):
         """Change active account `real` or `practice`"""
         self.account_is_demo = 0 if balance_mode.upper() == "REAL" else 1
+        self.api.change_account(self.account_is_demo)
 
     async def edit_practice_balance(self, amount=None):
         self.api.training_balance_edit_request = None
@@ -199,11 +205,12 @@ class Quotex(object):
     async def get_profile(self):
         return await self.api.get_profile()
 
-    async def buy(self, amount, asset, direction, duration):
+    async def buy(self, amount: float, asset: str, direction: str, duration: int):
         """Buy Binary option"""
         request_id = expiration.get_timestamp()
         self.api.buy_id = None
         self.api.current_asset = asset
+        self.api.timesync.server_timestamp = time.time()
         self.api.subscribe_realtime_candle(asset, duration)
         self.api.buy(amount, asset, direction, duration, request_id)
         count = 0.1

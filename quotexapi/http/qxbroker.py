@@ -10,6 +10,32 @@ from ..utils.playwright_install import install
 from playwright.async_api import Playwright, async_playwright, expect
 
 
+async def fill_form(page, email, password):
+    email_selector = 'input.input-control-cabinet__input[type="email"]'
+    password_selector = 'input.input-control-cabinet__input[type="password"]'
+    login_button_selector = 'button.button--primary[type="submit"]'
+
+    await page.locator(email_selector).wait_for(state='visible')
+    await page.locator(email_selector).fill(email)
+
+    await page.locator(password_selector).wait_for(state='visible')
+    await page.locator(password_selector).fill(password)
+
+    await page.locator(login_button_selector).wait_for(state='visible')
+    await page.locator(login_button_selector).click()
+
+
+async def fill_code_form(page, code):
+    code_selector = 'input.input-control-cabinet__input[name="code"]'
+    login_button_selector = 'button.button--primary[type="submit"]'
+
+    await page.locator(code_selector).wait_for(state='visible')
+    await page.locator(code_selector).fill(code)
+
+    await page.locator(login_button_selector).wait_for(state='visible')
+    await page.locator(login_button_selector).click()
+
+
 class Browser(object):
     user_data_dir = None
     base_url = 'qxbroker.com'
@@ -19,7 +45,26 @@ class Browser(object):
     email_pass = None
     args = [
         '--disable-web-security',
-        '--no-sandbox'
+        '--no-sandbox',
+        '--aggressive-cache-discard',
+        '--disable-cache',
+        '--disable-application-cache',
+        '--disable-offline-load-stale-cache',
+        '--disk-cache-size=0',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--safebrowsing-disable-auto-update',
+        '--ignore-certificate-errors',
+        '--ignore-ssl-errors',
+        '--ignore-certificate-errors-spki-list',
+        '--disable-features=LeakyPeeker',
+        '--disable-setuid-sandbox'
     ]
 
     def __init__(self, api):
@@ -55,31 +100,28 @@ class Browser(object):
             )
             page = await context.new_page()
         await stealth_async(page)
-        await page.goto(url=f"{self.https_base_url}/pt/sign-in")
-        if page.url != f"{self.https_base_url}/pt/trade":
+        url = f"{self.https_base_url}/{self.api.lang}/sign-in/modal/"
+        await page.goto(url=url)
+        if page.url != f"{self.https_base_url}/{self.api.lang}/trade":
             await page.wait_for_timeout(5000)
-            await page.get_by_role("textbox", name="E-mail").click()
-            await page.get_by_role("textbox", name="E-mail").fill(self.email)
-            await page.get_by_role("textbox", name="Senha").click()
-            await page.get_by_role("textbox", name="Senha").fill(self.password)
-            await page.get_by_role("button", name="Entrar").click()
+            await fill_form(
+                page,
+                self.email,
+                self.password
+            )
             async with page.expect_navigation():
                 await page.wait_for_timeout(5000)
                 soup = BeautifulSoup(await page.content(), "html.parser")
-                if "Insira o código PIN que acabamos de enviar para o seu e-mail" in soup.get_text():
+                required_keep_code = soup.find("input", {"name": "keep_code"})
+                if required_keep_code:
+                    auth_body = soup.find("main", {"class": "auth__body"})
+                    input_message = (
+                        f'{auth_body.find("p").text}: ' if auth_body.find("p")
+                        else "Insira o código PIN que acabamos de enviar para o seu e-mail: "
+                    )
                     pin_code = await get_pin(self.email, self.email_pass)
-                    if pin_code:
-                        code = pin_code
-                    else:
-                        code = input("Insira o código PIN que acabamos de enviar para o seu e-mail: ")
-                    try:
-                        await page.get_by_placeholder("Digite o código de 6 dígitos...").click()
-                        await page.get_by_placeholder("Digite o código de 6 dígitos...").fill(code)
-                        await page.get_by_role("button", name="Entrar").click()
-                    except:
-                        await page.get_by_placeholder("Digite o código de 6 dígitos...").click()
-                        await page.get_by_placeholder("Digite o código de 6 dígitos...").fill(code)
-                        await page.get_by_role("button", name="Entrar").click()
+                    code = pin_code or int(input(input_message))
+                    await fill_code_form(page, code)
         await page.wait_for_timeout(5000)
         cookies = await context.cookies()
         source = await page.content()
@@ -89,7 +131,6 @@ class Browser(object):
         script = self.html.find_all("script", {"type": "text/javascript"})
         status, message = self.success_login()
         if not status:
-            print(message)
             await context.close() if self.user_data_dir else await browser.close()
             return
         settings = script[1].get_text().strip().replace(";", "")

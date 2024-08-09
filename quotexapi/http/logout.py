@@ -17,8 +17,8 @@ class Logout(Resource):
         )
 
     async def __call__(self):
-        self.url = f"{self.api.https_url}/pt/logout"
+        self.url = f"{self.api.https_url}/{self.api.lang}/logout"
         headers = {
-            "referer": f"{self.api.https_url}/pt/trade"
+            "referer": f"{self.api.https_url}/{self.api.lang}/trade"
         }
         return self._get(headers=headers)

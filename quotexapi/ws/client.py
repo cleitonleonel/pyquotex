@@ -146,10 +146,14 @@ class WebsocketClient(object):
         """Method to process websocket open."""
         logger.info("Websocket client connected.")
         global_value.check_websocket_if_connect = 1
+        asset_name = self.api.current_asset
+        period = self.api.current_period
         self.wss.send('42["tick"]')
         self.wss.send('42["indicator/list"]')
         self.wss.send('42["drawing/load"]')
         self.wss.send('42["pending/list"]')
+        self.wss.send('42["instruments/update",{"asset":"%s","period":%d}]' % (asset_name, period))
+        self.wss.send('42["depth/follow","%s"]' % asset_name)
         self.wss.send('42["chart_notification/get"]')
         self.wss.send('42["tick"]')
 

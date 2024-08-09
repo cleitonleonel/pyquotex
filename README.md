@@ -58,8 +58,10 @@ user_data_dir = "user_data_dir"
 client = Quotex(
     email=email,
     password=password,
-    email_pass=email_pass,
-    user_data_dir=Path(os.path.join(".", user_data_dir))
+    email_pass=email_pass, # If you use gmail and 2FA enabled.
+    user_data_dir=Path(
+        os.path.join(".", user_data_dir)
+    ) # Path to the playwright's cache.
 )
 ```
 
@@ -255,13 +257,14 @@ async def get_profile():
     check_connect, message = await client.connect()
     if check_connect:
         profile = await client.get_profile()
-        description = (f"\nUsuário: {profile.nick_name}\n"
-                       f"Saldo Demo: {profile.demo_balance}\n"
-                       f"Saldo Real: {profile.live_balance}\n"
-                       f"Id: {profile.profile_id}\n"
-                       f"Avatar: {profile.avatar}\n"
-                       f"País: {profile.country_name}\n"
-                       )
+        description = (
+            f"\nUsuário: {profile.nick_name}\n"
+            f"Saldo Demo: {profile.demo_balance}\n"
+            f"Saldo Real: {profile.live_balance}\n"
+            f"Id: {profile.profile_id}\n"
+            f"Avatar: {profile.avatar}\n"
+            f"País: {profile.country_name}\n"
+        )
         print(description)
     print("Saindo...")
     client.close()

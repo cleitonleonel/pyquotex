@@ -11,7 +11,7 @@ class Settings(Browser):
 
     def get_settings(self):
         self.headers["content-type"] = "application/json"
-        self.headers["Referer"] = "https://qxbroker.com/pt/trade"
+        self.headers["Referer"] = f"https://qxbroker.com/{self.api.lang}/trade"
         self.headers["cookie"] = self.api.session_data["cookies"]
         self.headers["User-Agent"] = self.api.session_data["user_agent"]
         response = self.send_request("GET",
