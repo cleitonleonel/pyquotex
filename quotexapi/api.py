@@ -78,7 +78,7 @@ class QuotexAPI(object):
                  email_pass=None,
                  proxies=None,
                  resource_path=None,
-                 user_data_dir=None):
+                 user_data_dir="."):
         """
         :param str host: The hostname or ip address of a Quotex server.
         :param str username: The username of a Quotex server.
@@ -342,15 +342,16 @@ class QuotexAPI(object):
                 logger.debug("Websocket Token Rejeitado.")
                 return True, "Websocket Token Rejeitado."
 
-    def send_ssid(self):
+    def send_ssid(self, timeout=10):
         self.wss_message = None
         if not global_value.SSID:
             return False
         self.ssid(global_value.SSID)
-        while not self.wss_message:
-            time.sleep(0.3)
-        if not self.wss_message:
-            return False
+        start_time = time.time()
+        while self.wss_message is None:
+            if time.time() - start_time > timeout:
+                return False
+            time.sleep(0.5)
         return True
 
     async def connect(self, is_demo):

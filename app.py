@@ -5,8 +5,8 @@ import time
 import random
 import asyncio
 import pyfiglet
-import configparser
 from pathlib import Path
+from quotexapi.config import config
 from quotexapi.stable_api import Quotex
 
 __author__ = "Cleiton Leonel Creton"
@@ -19,27 +19,6 @@ suporte: cleiton.leonel@gmail.com ou +55 (27) 9 9577-2291
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
-
-def resource_path(relative_path: str | Path) -> Path:
-    """Get absolute path to resource, works for dev and for PyInstaller"""
-    base_dir = Path(__file__).parent
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        base_dir = Path(sys._MEIPASS)
-    return base_dir / relative_path
-
-
-config_path = Path(os.path.join(".", "settings/config.ini"))
-if not config_path.exists():
-    config_path.parent.mkdir(exist_ok=True, parents=True)
-    text_settings = (
-        f"[settings]\n"
-        f"email={input('Insira o e-mail da conta: ')}\n"
-        f"password={input('Insira a senha da conta: ')}\n"
-        f"email_pass={input('Insira a senha da conta de e-mail: ')}\n"
-        f"user_data_dir={input('Insira um caminho para o profile do browser: ')}\n"
-    )
-    config_path.write_text(text_settings)
-
 custom_font = pyfiglet.Figlet(font="ansi_shadow")
 ascii_art = custom_font.renderText("PyQuotex")
 art_effect = f"""{ascii_art}
@@ -50,62 +29,22 @@ art_effect = f"""{ascii_art}
 
 print(art_effect)
 
-config = configparser.ConfigParser()
-config.read(config_path, encoding="utf-8")
-
 email = config.get("settings", "email")
 password = config.get("settings", "password")
-email_pass = config.get("settings", "email_pass")
-user_data_dir = config.get("settings", "user_data_dir")
+email_pass = config.get("settings", "email_pass")  # If you use gmail and 2FA enabled.
+user_data_dir = config.get("settings", "user_data_dir") # Path to save browser profile
 
 if not email.strip() or not password.strip():
     print("E-mail e Senha não podem estar em branco...")
     sys.exit()
-if not user_data_dir.strip():
-    user_data_dir = "browser/instance/quotex.default"
-
-
-def load_session():
-    output_file = Path(
-        resource_path(
-            "session.json"
-        )
-    )
-    if os.path.isfile(output_file):
-        with open(output_file) as file:
-            session_data = json.loads(
-                file.read()
-            )
-    else:
-        output_file.parent.mkdir(
-            exist_ok=True,
-            parents=True
-        )
-        session_result = json.dumps({
-            "user_agent": USER_AGENT
-        }, indent=4)
-        output_file.write_text(
-            session_result
-        )
-        session_data = json.loads(
-            session_result
-        )
-    return session_data
-
-
-session = load_session()
 
 client = Quotex(
     email=email,
     password=password,
     lang="pt",  # Default pt -> Português.
-    email_pass=email_pass,  # If you use gmail and 2FA enabled.
-    user_data_dir=Path(
-        os.path.join(".", user_data_dir)
-    )  # Path to the playwright's cache.
+    email_pass=email_pass,
 )
 
-client.set_session(session)
 client.debug_ws_enable = False
 
 
@@ -471,10 +410,10 @@ async def execute(argument):
 async def main():
     if len(sys.argv) != 2:
         # await test_connection()
-        # await get_balance()
+        await get_balance()
         # await get_profile()
         # await buy_simple()
-        await get_candle()
+        # await get_candle()
         return
 
     option = sys.argv[1]

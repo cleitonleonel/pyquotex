@@ -88,8 +88,7 @@ class Browser(object):
         else:
             browser = await playwright.firefox.launch(
                 headless=True,
-                args=self.args,
-                ignore_default_args=False,
+                args=self.args
             )
             context = await browser.new_context(
                 viewport={

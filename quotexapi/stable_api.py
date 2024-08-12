@@ -1,5 +1,4 @@
 import time
-import math
 import logging
 import asyncio
 from datetime import datetime
@@ -8,6 +7,10 @@ from . import global_value
 from .api import QuotexAPI
 from .constants import codes_asset
 from .utils.services import truncate
+from .config import (
+    load_session,
+    resource_path
+)
 
 __version__ = "1.0.0"
 logger = logging.getLogger(__name__)
@@ -21,8 +24,9 @@ class Quotex(object):
             password,
             lang="pt",
             email_pass=None,
-            resource_path=".",
-            user_data_dir=None,
+            user_agent="Quotex/1.0",
+            root_path=".",
+            user_data_dir="browser",
             asset_default="EURUSD",
             period_default=60
     ):
@@ -47,22 +51,25 @@ class Quotex(object):
         self.password = password
         self.lang = lang
         self.email_pass = email_pass
-        self.resource_path = resource_path
+        self.resource_path = root_path
         self.user_data_dir = user_data_dir
         self.asset_default = asset_default
         self.period_default = period_default
-        self.session_data = None
-        self.set_ssid = None
-        self.duration = None
-        self.suspend = 0.5
         self.subscribe_candle = []
         self.subscribe_candle_all_size = []
         self.subscribe_mood = []
         self.account_is_demo = 1
+        self.suspend = 0.5
+        self.api = None
+        self.session_data = None
+        self.set_ssid = None
+        self.duration = None
         self.websocket_client = None
         self.websocket_thread = None
         self.debug_ws_enable = False
-        self.api = None
+        self.resource_path = resource_path(root_path)
+        session = load_session(user_agent)
+        self.session_data = session
 
     @property
     def websocket(self):
@@ -78,7 +85,11 @@ class Quotex(object):
         else:
             return False
 
-    def set_session(self, session):
+    def set_session(self, user_agent: str, cookie: str = None):
+        session = {
+            "user_agent": user_agent,
+            "cookies": cookie,
+        }
         self.session_data = session
 
     async def re_subscribe_stream(self):
