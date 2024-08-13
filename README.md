@@ -2,7 +2,26 @@
 
 <img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
 
-For more details and support, look for me on [Telegram](https://t.me/cleitonLC) .
+To access more features and greater stability, consider joining the private version. If you're interested, feel free to contact me on [Telegram](https://t.me/cleitonLC) .
+
+# Sobre a Biblioteca para Quotex
+
+Esta biblioteca foi desenvolvida com o propósito de facilitar a comunicação com a plataforma Quotex através de WebSockets, permitindo a obtenção de dados em tempo real e a automação de operações. **É importante ressaltar que esta biblioteca não é um bot trader, nem possui a pretensão de ser**.
+
+## Objetivo da Biblioteca
+
+O objetivo principal desta biblioteca é fornecer as ferramentas necessárias para que desenvolvedores possam integrar suas aplicações com a plataforma QXBroker/Quotex, automatizando operações específicas de forma segura e eficiente. 
+
+## Implementação de Automação
+
+Qualquer automação adicional, incluindo a criação de bots automáticos que tomem decisões de trading, deve ser implementada pelo desenvolvedor que optar por utilizar esta biblioteca em seus projetos. A responsabilidade por essas implementações adicionais recai inteiramente sobre o desenvolvedor.
+
+## Isenção de Responsabilidade
+
+Eu, como desenvolvedor desta biblioteca, **não me responsabilizo por qualquer mal funcionamento ou quebra de aplicação** que possa ocorrer devido ao uso inadequado da biblioteca ou à implementação de automações que vão além do escopo original desta ferramenta.
+
+Se você decidir utilizar esta biblioteca, é crucial que faça uma análise cuidadosa e teste rigorosamente suas implementações para garantir que estão de acordo com suas necessidades e expectativas.
+
 
 ### Observação Importante
 Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
