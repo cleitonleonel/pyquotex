@@ -22,6 +22,14 @@ Eu, como desenvolvedor desta biblioteca, **não me responsabilizo por qualquer m
 
 Se você decidir utilizar esta biblioteca, é crucial que faça uma análise cuidadosa e teste rigorosamente suas implementações para garantir que estão de acordo com suas necessidades e expectativas.
 
+# Aviso sobre Suporte e Discussões
+
+Devido ao grande volume de mensagens buscando informações e suporte, e considerando que sou apenas uma pessoa e não tenho tempo para ajudar a todos individualmente, **criei um [grupo de discussão no Telegram](https://t.me/+Uzcmc-NZvN4xNTQx)**.
+
+Este grupo foi criado para que os membros possam se ajudar mutuamente, tirar dúvidas, e colaborar com outras pessoas que também utilizam essa lib. Sua participação e interação no grupo são altamente encorajadas, pois dessa forma todos podem se beneficiar da experiência coletiva.
+
+Sinta-se à vontade para entrar no grupo e contribuir com suas perguntas e conhecimentos.
+
 
 ### Observação Importante
 Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
@@ -31,6 +39,7 @@ Para usuários windows é necessário instalar openssl mais recente possível, q
 aqui [Openssl-Windows](https://slproweb.com/products/Win32OpenSSL.html) .
 Para usuários linux também é recomendada versões mais recentes possíveis do openssl, bastando
 apenas executarem ```sudo apt install openssl```.
+
 
 ### Important note
 For some reason, cloudflare ends up identifying automated access to the quotex API and we
