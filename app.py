@@ -6,7 +6,12 @@ import random
 import asyncio
 import pyfiglet
 from pathlib import Path
-from quotexapi.config import config
+from quotexapi.config import (
+    email,
+    password,
+    email_pass,
+    user_data_dir
+)
 from quotexapi.stable_api import Quotex
 
 __author__ = "Cleiton Leonel Creton"
@@ -29,20 +34,12 @@ art_effect = f"""{ascii_art}
 
 print(art_effect)
 
-email = config.get("settings", "email")
-password = config.get("settings", "password")
-email_pass = config.get("settings", "email_pass")  # If you use gmail and 2FA enabled.
-user_data_dir = config.get("settings", "user_data_dir") # Path to save browser profile
-
-if not email.strip() or not password.strip():
-    print("E-mail e Senha não podem estar em branco...")
-    sys.exit()
-
 client = Quotex(
     email=email,
     password=password,
     lang="pt",  # Default pt -> Português.
-    email_pass=email_pass,
+    email_pass=email_pass,  # If you use gmail and 2FA enabled.
+    user_data_dir=user_data_dir  # Path to the playwright's cache.
 )
 
 client.debug_ws_enable = False
