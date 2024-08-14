@@ -76,14 +76,14 @@ pip install git+https://github.com/cleitonleonel/pyquotex.git
 ```python
 from quotexapi.stable_api import Quotex
 
-email = "email"
-password = "settings"
-email_pass = "settings"  # If you use gmail and 2FA enabled.
+email = "account@gmail.com"
+password = "you_password"
+email_pass = "gmail_app_key"  # If you use gmail and 2FA enabled.
 
 client = Quotex(
     email=email,
     password=password,
-    email_pass=email_pass,
+    email_pass=email_pass
 )
 ```
 
@@ -100,19 +100,14 @@ import time
 import random
 import asyncio
 from pathlib import Path
-from quotexapi.config import config
 from quotexapi.stable_api import Quotex
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
-email = config.get("settings", "email")
-password = config.get("settings", "password")
-email_pass = config.get("settings", "email_pass") # If you use gmail and 2FA enabled.
-user_data_dir = config.get("settings", "user_data_dir") # Path to save browser profile
-
-if not email.strip() or not password.strip():
-    print("E-mail e Senha não podem estar em branco...")
-    sys.exit()
+email = "account@gmail.com"
+password = "you_password"
+email_pass = "gmail_app_key"  # If you use gmail and 2FA enabled.
+user_data_dir = "user profile path to browser"
 
 client = Quotex(
     email=email,
