@@ -149,6 +149,8 @@ class Browser(object):
     def success_login(self):
         match = self.html.find(
             "div", {"class": "hint -danger"}
+        ) or self.html.find(
+            "div", {"class": "hint hint--danger"}
         )
         if match is None:
             return True, "Login successful."

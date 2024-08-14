@@ -1,5 +1,6 @@
 """Module for Quotex websocket."""
 import os
+import sys
 import time
 import json
 import ssl
@@ -288,17 +289,17 @@ class QuotexAPI(object):
 
     async def autenticate(self):
         print("Autenticando usuário...")
-        response = await self.login(
+        status, message = await self.login(
             self.username,
             self.password,
             self.email_pass,
             self.user_data_dir
         )
-        if response:
-            global_value.SSID = self.session_data.get("token")
-            self.is_logged = True
-            print("Login realizado com sucesso!!!")
-        return response
+        print(message)
+        if not status:
+            sys.exit(1)
+        global_value.SSID = self.session_data.get("token")
+        self.is_logged = True
 
     async def start_websocket(self):
         global_value.check_websocket_if_connect = None
