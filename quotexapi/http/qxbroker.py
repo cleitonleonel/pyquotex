@@ -118,8 +118,10 @@ class Browser(object):
                         f'{auth_body.find("p").text}: ' if auth_body.find("p")
                         else "Insira o código PIN que acabamos de enviar para o seu e-mail: "
                     )
-                    pin_code = await get_pin(self.email, self.email_pass)
-                    code = pin_code or int(input(input_message))
+                    pin_code = None
+                    if self.email_pass:
+                        pin_code = await get_pin(self.email, self.email_pass)
+                    code = pin_code or input(input_message)
                     await fill_code_form(page, code)
         await page.wait_for_timeout(5000)
         cookies = await context.cookies()
