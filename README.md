@@ -2,43 +2,34 @@
 
 <img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
 
-To access more features and greater stability, consider joining the private version. If you're interested, feel free to contact me on [Telegram](https://t.me/cleitonLC) .
+To access more features and greater stability, consider joining the private version.
 
-# Sobre a Biblioteca PyQuotex
+# About the PyQuotex Library
 
-Esta biblioteca foi desenvolvida com o propósito de facilitar a comunicação com a plataforma Quotex através de WebSockets, permitindo a obtenção de dados em tempo real e a automação de operações. **É importante ressaltar que esta biblioteca não é um bot trader, nem possui a pretensão de ser**.
+This library was developed with the purpose of facilitating communication with the Quotex platform through WebSockets, enabling real-time data retrieval and the automation of operations. **It is important to note that this library is not a trading bot, nor does it intend to be**.
 
-## Objetivo da Biblioteca
+## Library Objective
 
-O objetivo principal desta biblioteca é fornecer as ferramentas necessárias para que desenvolvedores possam integrar suas aplicações com a plataforma Quotex, automatizando operações específicas de forma segura e eficiente. 
+The main goal of this library is to provide the necessary tools for developers to integrate their applications with the Quotex platform, automating specific operations in a safe and efficient manner.
 
-## Implementação de Automação
+## Automation Implementation
 
-Qualquer automação adicional, incluindo a criação de bots automáticos que tomem decisões de trading, deve ser implementada pelo desenvolvedor que optar por utilizar esta biblioteca em seus projetos. A responsabilidade por essas implementações adicionais recai inteiramente sobre o desenvolvedor.
+Any additional automation, including the creation of automatic bots that make trading decisions, must be implemented by the developer who chooses to use this library in their projects. The responsibility for these additional implementations lies entirely with the developer.
 
-## Isenção de Responsabilidade
+## Disclaimer
 
-Eu, como desenvolvedor desta biblioteca, **não me responsabilizo por qualquer mal funcionamento ou quebra de aplicação** que possa ocorrer devido ao uso inadequado da biblioteca ou à implementação de automações que vão além do escopo original desta ferramenta.
+As the developer of this library, **I am not responsible for any malfunction or application failure** that may occur due to improper use of the library or the implementation of automations that go beyond the original scope of this tool.
 
-Se você decidir utilizar esta biblioteca, é crucial que faça uma análise cuidadosa e teste rigorosamente suas implementações para garantir que estão de acordo com suas necessidades e expectativas.
+If you decide to use this library, it is crucial that you carefully analyze and rigorously test your implementations to ensure that they meet your needs and expectations.
 
-# Aviso sobre Suporte e Discussões
+# Notice about Support and Discussions
 
-Devido ao grande volume de mensagens buscando informações e suporte, e considerando que sou apenas uma pessoa e não tenho tempo para ajudar a todos individualmente, **criei um [grupo de discussão no Telegram](https://t.me/+Uzcmc-NZvN4xNTQx)**.
+Due to the high volume of messages seeking information and support, and considering that I am just one person and do not have the time to assist everyone individually, **I have created a [discussion group on Telegram](https://t.me/+Uzcmc-NZvN4xNTQx)**.
 
-Este grupo foi criado para que os membros possam se ajudar mutuamente, tirar dúvidas, e colaborar com outras pessoas que também utilizam essa lib. Sua participação e interação no grupo são altamente encorajadas, pois dessa forma todos podem se beneficiar da experiência coletiva.
+This group was created so that members can help each other, ask questions, and collaborate with others who are also using this library. Your participation and interaction in the group are highly encouraged, as this way everyone can benefit from the collective experience.
 
-Sinta-se à vontade para entrar no grupo e contribuir com suas perguntas e conhecimentos.
+Feel free to join the group and contribute with your questions and knowledge.
 
-
-### Observação Importante
-Por algum motivo a cloudflare acaba identificando o acesso automatizado a api da quotex e nos
-aplica um block, o que impede o sucesso ao autenticar na plataforma por meio do uso de usuário 
-e senha, recomendo o uso de python 3.8 ou superior para obter sucesso com essa api.
-Para usuários windows é necessário instalar openssl mais recente possível, que pode ser obtido
-aqui [Openssl-Windows](https://slproweb.com/products/Win32OpenSSL.html) .
-Para usuários linux também é recomendada versões mais recentes possíveis do openssl, bastando
-apenas executarem ```sudo apt install openssl```.
 
 
 ### Important note
