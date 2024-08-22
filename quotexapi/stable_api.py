@@ -9,6 +9,7 @@ from .constants import codes_asset
 from .utils.services import truncate
 from .config import (
     load_session,
+    update_session,
     resource_path
 )
 
@@ -61,8 +62,6 @@ class Quotex(object):
         self.account_is_demo = 1
         self.suspend = 0.5
         self.api = None
-        self.session_data = None
-        self.set_ssid = None
         self.duration = None
         self.websocket_client = None
         self.websocket_thread = None
@@ -87,11 +86,11 @@ class Quotex(object):
 
     def set_session(self, user_agent: str, cookies: str = None, ssid: str = None):
         session = {
-            "user_agent": user_agent,
             "cookies": cookies,
-            "token": ssid
+            "token": ssid,
+            "user_agent": user_agent
         }
-        self.session_data = session
+        self.session_data = update_session(session)
 
     async def re_subscribe_stream(self):
         try:

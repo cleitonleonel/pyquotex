@@ -35,7 +35,7 @@ if not user_data_dir.strip():
     user_data_dir = "browser/instance/quotex.default"
 
 
-def load_session(user_agent, cookie=None):
+def load_session(user_agent):
     output_file = Path(
         resource_path(
             "session.json"
@@ -52,10 +52,9 @@ def load_session(user_agent, cookie=None):
             parents=True
         )
         session_dict = {
-            "headers": {
-                "User-Agent": user_agent,
-                "Cookie": cookie
-            },
+            "cookies": None,
+            "token": None,
+            "user_agent": user_agent
         }
         session_result = json.dumps(session_dict, indent=4)
         output_file.write_text(
@@ -65,6 +64,23 @@ def load_session(user_agent, cookie=None):
             session_result
         )
     return session_data
+
+
+def update_session(session_data):
+    output_file = Path(
+        resource_path(
+            "session.json"
+        )
+    )
+    session_result = json.dumps(session_data, indent=4)
+    output_file.write_text(
+        session_result
+    )
+    session_data = json.loads(
+        session_result
+    )
+    return session_data
+
 
 
 def resource_path(relative_path: str | Path) -> Path:
