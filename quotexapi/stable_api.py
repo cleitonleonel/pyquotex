@@ -85,10 +85,11 @@ class Quotex(object):
         else:
             return False
 
-    def set_session(self, user_agent: str, cookie: str = None):
+    def set_session(self, user_agent: str, cookies: str = None, ssid: str = None):
         session = {
             "user_agent": user_agent,
-            "cookies": cookie,
+            "cookies": cookies,
+            "token": ssid
         }
         self.session_data = session
 
