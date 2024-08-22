@@ -91,6 +91,7 @@ class Quotex(object):
             "cookies": cookies,
             "token": ssid
         }
+
         self.session_data = session
 
     async def re_subscribe_stream(self):
