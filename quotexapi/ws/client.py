@@ -110,14 +110,17 @@ class WebsocketClient(object):
                 self.api.settings_list = message
                 self.api._temp_status = ""
             elif self.api._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
-                self.api.candle_v2_data[message["asset"]] = message
-                self.api.candle_v2_data[message["asset"]]["candles"] = [{
-                    "time": candle[0],
-                    "open": candle[1],
-                    "close": candle[2],
-                    "high": candle[3],
-                    "low": candle[4]
-                } for candle in message["candles"]]
+                if message.get("asset") == self.api.current_asset:
+                    # self.api.candles.candles_data = message["history"]
+                    self.api.candle_v2_data[message["asset"]] = message
+                    self.api.candle_v2_data[message["asset"]]["candles"] = [{
+                        "time": candle[0],
+                        "open": candle[1],
+                        "close": candle[2],
+                        "high": candle[3],
+                        "low": candle[4],
+                        "ticks": candle[5]
+                    } for candle in message["candles"]]
             elif len(message[0]) == 4:
                 result = {
                     "time": message[0][1],
@@ -125,13 +128,14 @@ class WebsocketClient(object):
                 }
                 self.api.realtime_price[message[0][0]].append(result)
             elif len(message[0]) == 2:
-                result = {
-                    "sentiment": {
-                        "sell": 100 - int(message[0][1]),
-                        "buy": int(message[0][1])
+                for i in message:
+                    result = {
+                        "sentiment": {
+                            "sell": 100 - int(i[1]),
+                            "buy": int(i[1])
+                        }
                     }
-                }
-                self.api.realtime_sentiment[message[0][0]] = result
+                    self.api.realtime_sentiment[i[0]] = result
         except:
             pass
         global_value.ssl_Mutual_exclusion = False

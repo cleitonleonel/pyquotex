@@ -114,7 +114,7 @@ async def buy_simple():
     if check_connect:
         # client.change_account("REAL")
         amount = 50
-        asset = "EURUSD_otc"  # "EURUSD_otc"
+        asset = "AUDCAD"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
@@ -243,13 +243,20 @@ async def sell_option():
     client.close()
 
 
+def asset_parse(asset: str):
+    new_asset = f"{asset[:3]}/{asset[3:]}"
+    if "_otc" in asset:
+        return new_asset.replace("_otc", " (OTC)")
+    return new_asset
+
+
 async def assets_open():
-    check_connect, message = await client.connect()
+    check_connect, reason = await client.connect()
     if check_connect:
         print("Check Asset Open")
         for i in client.get_all_asset_name():
-            print(i)
-            print(i, client.check_asset_open(i))
+            print(i[1])
+            print(i[1], await client.check_asset_open(i[0]))
     print("Saindo...")
     client.close()
 
@@ -272,14 +279,17 @@ async def get_candle_progressive():
     check_connect, reason = await client.connect()
     if check_connect:
         asset = "EURJPY_otc"
-        offset = 86400  # in seconds
-        period = 15  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        offset = 3600  # in seconds
+        period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
         end_from_time = time.time()
         list_candles = []
-        for i in range(5):
+        size = 10
+        for i in range(size):
+            # print(i)
             candles = await client.get_candles(asset, end_from_time, offset, period)
-            end_from_time = int(candles["data"][0]["time"]) - 1
-            list_candles.append(candles["data"])
+            if len(candles) > 0:
+                end_from_time = int(candles["data"][0]["time"]) - 1
+                list_candles.append(candles["data"])
         print(list_candles)
     print("Saindo...")
     client.close()
@@ -291,7 +301,10 @@ async def get_payment():
         all_data = client.get_payment()
         for asset_name in all_data:
             asset_data = all_data[asset_name]
-            print(asset_name, asset_data["payment"], asset_data["open"])
+            profit = f'\nLucro 1+ : {asset_data["profit"]["1M"]} | Lucro 5+ : {asset_data["profit"]["5M"]}'
+            status = " ==> Opened" if asset_data["open"] else " ==> Closed"
+            print(asset_name, status, profit)
+            print("-" * 35)
     print("Saindo...")
     client.close()
 
@@ -316,7 +329,7 @@ async def get_candle_v2():
 async def get_realtime_candle():
     check_connect, message = await client.connect()
     if check_connect:
-        list_size = 100
+        list_size = 10
         asset = "USDJPY_otc"
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -337,14 +350,13 @@ async def get_realtime_candle():
 async def get_realtime_sentiment():
     check_connect, message = await client.connect()
     if check_connect:
-        asset = "EURUSD_otc"
+        asset = "EURUSD"
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
-        print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset está aberto.")
-            client.start_candles_stream(asset)
+            client.start_candles_stream(asset, 60)
             while True:
-                print(client.get_realtime_sentiment(asset), end="\r")
+                print(await client.get_realtime_sentiment(asset), end="\r")
                 await asyncio.sleep(0.5)
         else:
             print("ERRO: Asset está fechado.")
@@ -407,9 +419,9 @@ async def execute(argument):
 async def main():
     if len(sys.argv) != 2:
         # await test_connection()
-        await get_balance()
+        # await get_balance()
         # await get_profile()
-        # await buy_simple()
+        await buy_simple()
         # await get_candle()
         return
 

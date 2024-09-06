@@ -408,9 +408,9 @@ async def get_realtime_sentiment():
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset está aberto.")
-            client.start_candles_stream(asset)
+            client.start_candles_stream(asset, 60)
             while True:
-                print(client.get_realtime_sentiment(asset), end="\r")
+                print(await client.get_realtime_sentiment(asset), end="\r")
                 await asyncio.sleep(0.5)
         else:
             print("ERRO: Asset está fechado.")

@@ -117,7 +117,7 @@ class Quotex(object):
 
     def get_all_asset_name(self):
         if self.api.instruments:
-            return [instrument[2].replace("\n", "") for instrument in self.api.instruments]
+            return [[i[1], i[2].replace("\n", "")] for i in self.api.instruments]
 
     async def get_available_asset(self, asset_name: str, force_open: bool = False):
         asset_open = await self.check_asset_open(asset_name)
@@ -133,7 +133,7 @@ class Quotex(object):
         for i in instruments:
             if asset_name == i[1]:
                 self.api.current_asset = asset_name
-                return i[0], i[2], i[14]
+                return i[0], i[2].replace("\n", ""), i[14]
 
     async def get_candles(self, asset, end_from_time, offset, period):
         index = expiration.get_timestamp()
@@ -154,8 +154,8 @@ class Quotex(object):
 
     async def get_candle_v2(self, asset, period):
         self.api.candle_v2_data[asset] = None
-        self.stop_candles_stream(asset)
-        self.api.subscribe_realtime_candle(asset, period)
+        # self.stop_candles_stream(asset)
+        self.start_candles_stream(asset, period)
         while self.api.candle_v2_data[asset] is None:
             await asyncio.sleep(0.1)
         return self.api.candle_v2_data[asset]
@@ -222,7 +222,7 @@ class Quotex(object):
         self.api.buy_id = None
         self.api.current_asset = asset
         self.api.timesync.server_timestamp = time.time()
-        self.api.subscribe_realtime_candle(asset, duration)
+        self.start_candles_stream(asset, duration)
         self.api.buy(amount, asset, direction, duration, request_id)
         count = 0.1
         while self.api.buy_id is None:
@@ -249,9 +249,14 @@ class Quotex(object):
         """Payment Quotex server"""
         assets_data = {}
         for i in self.api.instruments:
-            assets_data[i[2]] = {
+            # print(i)
+            assets_data[i[2].replace("\n", "")] = {
                 "turbo_payment": i[18],
                 "payment": i[5],
+                "profit": {
+                    "1M": i[-9],
+                    "5M": i[-8]
+                },
                 "open": i[14]
             }
         return assets_data
@@ -280,12 +285,12 @@ class Quotex(object):
         return listinfodata_dict["win"]
 
     def start_candles_stream(self, asset, period=0):
-        self.api.follow_candle(asset)
         self.api.subscribe_realtime_candle(asset, period)
+        self.api.follow_candle(asset)
 
     def stop_candles_stream(self, asset):
-        self.api.unfollow_candle(asset)
         self.api.unsubscribe_realtime_candle(asset)
+        self.api.unfollow_candle(asset)
 
     def start_signals_data(self):
         self.api.signals_subscribe()
@@ -296,11 +301,25 @@ class Quotex(object):
                 return self.api.realtime_price
             time.sleep(0.1)
 
-    def get_realtime_sentiment(self, asset):
+    async def start_realtime_price(self,  asset: str, period: int = 0):
+        self.start_candles_stream(asset, period)
+        while True:
+            if self.api.realtime_price.get(asset):
+                return self.api.realtime_price
+            await asyncio.sleep(0.5)
+
+    async def get_realtime_price(self, asset: str):
+        return self.api.realtime_price.get(asset, {})
+
+    async def start_realtime_sentiment(self, asset: str, period: int = 0):
+        self.start_candles_stream(asset, period)
         while True:
             if self.api.realtime_sentiment.get(asset):
-                return self.api.realtime_sentiment
-            time.sleep(0.1)
+                return self.api.realtime_sentiment[asset]
+            await asyncio.sleep(0.5)
+
+    async def get_realtime_sentiment(self, asset: str):
+        return self.api.realtime_sentiment.get(asset, {})
 
     def get_signal_data(self):
         return self.api.signal_data
