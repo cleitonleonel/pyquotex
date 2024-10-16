@@ -155,6 +155,7 @@ class Quotex(object):
     async def get_candle_v2(self, asset, period):
         self.api.candle_v2_data[asset] = None
         # self.stop_candles_stream(asset)
+        self.api.current_asset = asset
         self.start_candles_stream(asset, period)
         while self.api.candle_v2_data[asset] is None:
             await asyncio.sleep(0.1)
