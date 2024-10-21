@@ -34,14 +34,14 @@ class WebsocketClient(object):
             on_ping=self.on_ping,
             on_pong=self.on_pong,
             header=self.headers,
-            cookie=self.api.session_data.get("cookies")
+            # cookie=self.api.cookies
         )
 
     def on_message(self, wss, message):
         """Method to process websocket messages."""
         global_value.ssl_Mutual_exclusion = True
         current_time = time.localtime()
-        if current_time.tm_sec in [0, 20, 40]:
+        if current_time.tm_sec in [0, 5, 10, 15, 20, 30, 40, 50]:
             self.wss.send('42["tick"]')
         try:
             if "authorization/reject" in str(message):
@@ -74,12 +74,17 @@ class WebsocketClient(object):
                             self.api.signal_data[i[0]][time_in]["duration"] = i[1][0][0]
                 elif message.get("liveBalance") or message.get("demoBalance"):
                     self.api.account_balance = message
+                elif message.get("position"):
+                    self.api.top_list_leader = message
+                elif len(message) == 1 and message.get("profit") > -1:
+                    self.api.profit_today = message
                 elif message.get("index"):
-                    self.api.candles.candles_data = message
+                    # self.api.candles.candles_data = message
+                    self.api.candle_close_timestamp = message.get("closeTimestamp")
                 elif message.get("id"):
                     self.api.buy_successful = message
                     self.api.buy_id = message["id"]
-                    self.api.timesync.server_timestamp = message["closeTimestamp"]
+                    self.api.candle_close_timestamp = message.get("closeTimestamp")
                 elif message.get("ticket"):
                     self.api.sold_options_respond = message
                 elif message.get("deals"):
@@ -88,7 +93,9 @@ class WebsocketClient(object):
                         get_m["win"] = True if message["profit"] > 0 else False
                         get_m["game_state"] = 1
                         self.api.listinfodata.set(
-                            get_m["win"], get_m["game_state"], get_m["id"]
+                            get_m["win"],
+                            get_m["game_state"],
+                            get_m["id"]
                         )
                 elif message.get("isDemo") and message.get("balance"):
                     self.api.training_balance_edit_request = message
@@ -101,6 +108,7 @@ class WebsocketClient(object):
                     self.api.wss_message = message
             except:
                 pass
+
             if str(message) == "41":
                 logger.info("Evento de desconexão disparado pela plataforma, fazendo reconexão automática.")
                 global_value.check_websocket_if_connect = 0
@@ -111,7 +119,8 @@ class WebsocketClient(object):
                 self.api._temp_status = ""
             elif self.api._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
                 if message.get("asset") == self.api.current_asset:
-                    # self.api.candles.candles_data = message["history"]
+                    self.api.candles.candles_data = message["history"]
+
                     self.api.candle_v2_data[message["asset"]] = message
                     self.api.candle_v2_data[message["asset"]]["candles"] = [{
                         "time": candle[0],

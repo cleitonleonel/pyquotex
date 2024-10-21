@@ -14,7 +14,8 @@ class Settings(Browser):
         self.headers["Referer"] = f"https://qxbroker.com/{self.api.lang}/trade"
         self.headers["cookie"] = self.api.session_data["cookies"]
         self.headers["User-Agent"] = self.api.session_data["user_agent"]
-        response = self.send_request("GET",
-                                     "https://qxbroker.com/api/v1/cabinets/digest"
-                                     )
+        response = self.send_request(
+            "GET",
+            "https://qxbroker.com/api/v1/cabinets/digest"
+        )
         return response.json()

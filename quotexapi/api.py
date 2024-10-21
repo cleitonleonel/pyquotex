@@ -112,7 +112,9 @@ class QuotexAPI(object):
         self.get_candle_data = {}
         self.candle_v2_data = {}
         self.realtime_price = {}
+        self.real_time_candles = {}
         self.realtime_sentiment = {}
+        self.top_list_leader = {}
         self.session_data = {}
         self.browser = Browser()
         self.browser.set_headers()
@@ -287,8 +289,8 @@ class QuotexAPI(object):
         logger.debug(data)
         global_value.ssl_Mutual_exclusion_write = False
 
-    async def autenticate(self):
-        print("Autenticando usuário...")
+    async def authenticate(self):
+        print("Quotex Connecting...")
         status, message = await self.login(
             self.username,
             self.password,
@@ -306,7 +308,7 @@ class QuotexAPI(object):
         global_value.check_websocket_if_error = False
         global_value.websocket_error_reason = None
         if not global_value.SSID:
-            await self.autenticate()
+            await self.authenticate()
         self.websocket_client = WebsocketClient(self)
         payload = {
             "ping_interval": 24,
@@ -368,7 +370,7 @@ class QuotexAPI(object):
             return check_websocket, websocket_reason
         check_ssid = self.send_ssid()
         if not check_ssid:
-            await self.autenticate()
+            await self.authenticate()
             if self.is_logged:
                 self.send_ssid()
         return check_websocket, websocket_reason

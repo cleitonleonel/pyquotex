@@ -7,6 +7,11 @@ from . import global_value
 from .api import QuotexAPI
 from .constants import codes_asset
 from .utils.services import truncate
+from .utils.processor import (
+    calculate_candles,
+    process_candles_v2,
+    merge_candles
+)
 from .config import (
     load_session,
     update_session,
@@ -112,7 +117,7 @@ class Quotex(object):
 
     async def get_instruments(self):
         while self.check_connect and self.api.instruments is None:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
         return self.api.instruments or []
 
     def get_all_asset_name(self):
@@ -136,30 +141,44 @@ class Quotex(object):
                 return i[0], i[2].replace("\n", ""), i[14]
 
     async def get_candles(self, asset, end_from_time, offset, period):
+        if end_from_time is None:
+            end_from_time = time.time()
         index = expiration.get_timestamp()
-        self.api.current_asset = asset
         self.api.candles.candles_data = None
         self.start_candles_stream(asset, period)
         while True:
-            try:
-                self.api.get_candles(asset, index, end_from_time, offset, period)
-                while self.check_connect and self.api.candles.candles_data is None:
-                    await asyncio.sleep(0.1)
-                if self.api.candles.candles_data is not None:
-                    break
-            except:
-                logger.error('**error** get_candles need reconnect')
-                await self.connect()
-        return self.api.candles.candles_data
+            self.api.get_candles(asset, index, end_from_time, offset, period)
+            while self.check_connect and self.api.candles.candles_data is None:
+                await asyncio.sleep(0.5)
+            if self.api.candles.candles_data is not None:
+                break
+        candles = self.prepare_candles(asset, period)
+        return candles
 
     async def get_candle_v2(self, asset, period):
         self.api.candle_v2_data[asset] = None
-        # self.stop_candles_stream(asset)
-        self.api.current_asset = asset
         self.start_candles_stream(asset, period)
         while self.api.candle_v2_data[asset] is None:
-            await asyncio.sleep(0.1)
-        return self.api.candle_v2_data[asset]
+            await asyncio.sleep(0.5)
+        candles = self.prepare_candles(asset, period)
+        return candles
+
+    def prepare_candles(self, asset: str, period: int):
+        """
+        Prepare candles data for a specified asset.
+
+        Args:
+            asset (str): Asset name.
+            period (int): Period for fetching candles.
+
+        Returns:
+            list: List of prepared candles data.
+        """
+        candles_data = calculate_candles(self.api.candles.candles_data, period)
+        candles_v2_data = process_candles_v2(self.api.candle_v2_data, asset, candles_data)
+        new_candles = merge_candles(candles_v2_data)
+
+        return new_candles
 
     async def connect(self):
         self.api = QuotexAPI(
@@ -171,7 +190,6 @@ class Quotex(object):
             resource_path=self.resource_path,
             user_data_dir=self.user_data_dir
         )
-        await self.api.logout()
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
         self.api.current_asset = self.asset_default
@@ -204,12 +222,12 @@ class Quotex(object):
         self.api.training_balance_edit_request = None
         self.api.edit_training_balance(amount)
         while self.api.training_balance_edit_request is None:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
         return self.api.training_balance_edit_request
 
     async def get_balance(self):
         while self.api.account_balance is None:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
         balance = self.api.account_balance.get("demoBalance") \
             if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
         return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
@@ -221,7 +239,6 @@ class Quotex(object):
         """Buy Binary option"""
         request_id = expiration.get_timestamp()
         self.api.buy_id = None
-        self.api.current_asset = asset
         self.api.timesync.server_timestamp = time.time()
         self.start_candles_stream(asset, duration)
         self.api.buy(amount, asset, direction, duration, request_id)
@@ -231,7 +248,7 @@ class Quotex(object):
             if count > duration:
                 status_buy = False
                 break
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
             if global_value.check_websocket_if_error:
                 return False, global_value.websocket_error_reason
         else:
@@ -243,7 +260,7 @@ class Quotex(object):
         self.api.sell_option(options_ids)
         self.api.sold_options_respond = None
         while self.api.sold_options_respond is None:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
         return self.api.sold_options_respond
 
     def get_payment(self):
@@ -286,6 +303,7 @@ class Quotex(object):
         return listinfodata_dict["win"]
 
     def start_candles_stream(self, asset, period=0):
+        self.api.current_asset = asset
         self.api.subscribe_realtime_candle(asset, period)
         self.api.follow_candle(asset)
 
@@ -296,18 +314,19 @@ class Quotex(object):
     def start_signals_data(self):
         self.api.signals_subscribe()
 
-    def get_realtime_candles(self, asset):
-        while True:
-            if self.api.realtime_price.get(asset):
-                return self.api.realtime_price
-            time.sleep(0.1)
-
-    async def start_realtime_price(self,  asset: str, period: int = 0):
+    async def get_realtime_candles(self, asset: str, period: int = 0):
         self.start_candles_stream(asset, period)
         while True:
-            if self.api.realtime_price.get(asset):
-                return self.api.realtime_price
+            if self.api.candle_v2_data.get(asset):
+                candles = self.prepare_candles(asset, period)
+                for candle in candles:
+                    self.api.real_time_candles[candle["time"]] = candle
+                return self.api.real_time_candles
             await asyncio.sleep(0.5)
+
+    async def start_realtime_price(self,  asset: str, period: int = 0):
+        self.api.subscribe_realtime_candle(asset, period)
+        self.api.follow_candle(asset)
 
     async def get_realtime_price(self, asset: str):
         return self.api.realtime_price.get(asset, {})
@@ -348,7 +367,7 @@ class Quotex(object):
             except:
                 logger.error('**error** start_candles_stream reconnect')
                 await self.connect()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
 
     async def start_candles_all_size_stream(self, asset):
         self.api.candle_generated_all_size_check[str(asset)] = {}
@@ -370,7 +389,7 @@ class Quotex(object):
                 logger.error(
                     '**error** start_candles_all_size_stream reconnect')
                 await self.connect()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
 
     async def start_mood_stream(self, asset, instrument="turbo-option"):
         if asset not in self.subscribe_mood:
@@ -382,7 +401,7 @@ class Quotex(object):
                 self.api.traders_mood[codes_asset[asset]] = codes_asset[asset]
                 break
             finally:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.5)
 
     def close(self):
         return self.api.close()
