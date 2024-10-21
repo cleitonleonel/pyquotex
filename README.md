@@ -92,6 +92,7 @@ import random
 import asyncio
 from pathlib import Path
 from quotexapi.stable_api import Quotex
+from quotexapi.utils.processor import process_candles, get_color
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
@@ -321,16 +322,32 @@ async def assets_open():
 
 
 async def get_candle():
+    candles_color = []
     check_connect, message = await client.connect()
     if check_connect:
-        asset = "AUDCAD_otc"
-        offset = 86400  # in seconds
-        period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        asset = "EURUSD_otc"
+        offset = 3600  # in seconds
+        period = 5  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
         end_from_time = time.time()
         candles = await client.get_candles(asset, end_from_time, offset, period)
-        for candle in candles["data"]:
-            print(candle)
-    print("Saindo...")
+        candles_data = candles
+        if len(candles_data) > 0:
+
+            if not candles_data[0].get("open"):
+                candles = process_candles(candles_data, period)
+                candles_data = candles
+
+            print(asset, candles_data)
+
+            for candle in candles_data:
+                color = get_color(candle)
+                candles_color.append(color)
+
+            # print(candles)
+            print(candles_color if len(candles_color) > 0 else "")
+        else:
+            print("No candles.")
+    print("Exiting...")
     client.close()
 
 
@@ -338,14 +355,17 @@ async def get_candle_progressive():
     check_connect, reason = await client.connect()
     if check_connect:
         asset = "EURJPY_otc"
-        offset = 86400  # in seconds
-        period = 15  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        offset = 3600  # in seconds
+        period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
         end_from_time = time.time()
         list_candles = []
-        for i in range(5):
+        size = 10
+        for i in range(size):
+            # print(i)
             candles = await client.get_candles(asset, end_from_time, offset, period)
-            end_from_time = int(candles["data"][0]["time"]) - 1
-            list_candles.append(candles["data"])
+            if len(candles) > 0:
+                end_from_time = int(candles[0]["time"]) - 1
+                list_candles.append(candles)
         print(list_candles)
     print("Saindo...")
     client.close()
@@ -371,7 +391,7 @@ async def get_candle_v2():
         if asset_data[2]:
             print("OK: Asset está aberto.")
             # 60 at 180 seconds
-            candles = await client.get_candle_v2(asset, 60)
+            candles = await client.get_candle_v2(asset_name, 60)
             print(candles)
         else:
             print("ERRO: Asset está fechado.")
@@ -382,18 +402,16 @@ async def get_candle_v2():
 async def get_realtime_candle():
     check_connect, message = await client.connect()
     if check_connect:
-        list_size = 100
-        asset = "USDJPY_otc"
+        period = 5  # in seconds [60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        asset = "EURUSD_otc"
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
-            print("OK: Asset está aberto.")
-            client.start_candles_stream(asset)
+            print("Check Asset Open")
             while True:
-                prices = client.get_realtime_candles(asset)
-                if len(prices[asset]) == list_size:
-                    break
-            print(prices)
+                candles = await client.get_realtime_candles(asset_name, period)
+                print(candles)
+                await asyncio.sleep(1)
         else:
             print("ERRO: Asset está fechado.")
     print("Saindo...")
