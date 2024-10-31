@@ -152,8 +152,27 @@ class Quotex(object):
                 await asyncio.sleep(0.5)
             if self.api.candles.candles_data is not None:
                 break
+
         candles = self.prepare_candles(asset, period)
+        if not isinstance(candles, list):
+            return self.api.historical_candles.get("data", {})
+
         return candles
+
+    async def get_history_line(self, asset, end_from_time, offset):
+        if end_from_time is None:
+            end_from_time = time.time()
+        index = expiration.get_timestamp()
+        self.api.current_asset = asset
+        self.api.historical_candles = None
+        self.start_candles_stream(asset)
+        while True:
+            self.api.get_history_line(codes_asset[asset], index, end_from_time, offset)
+            while self.check_connect and self.api.historical_candles is None:
+                await asyncio.sleep(0.5)
+            if self.api.historical_candles is not None:
+                break
+        return self.api.historical_candles
 
     async def get_candle_v2(self, asset, period):
         self.api.candle_v2_data[asset] = None
@@ -234,6 +253,15 @@ class Quotex(object):
 
     async def get_profile(self):
         return await self.api.get_profile()
+
+    async def get_history(self):
+        """Get the trader's history based on account type.
+
+        Returns:
+            The trading history from the API.
+        """
+        account_type = "demo" if self.account_is_demo else "live"
+        return await self.api.get_trader_history(account_type, page_number=1)
 
     async def buy(self, amount: float, asset: str, direction: str, duration: int):
         """Buy Binary option"""
@@ -346,6 +374,24 @@ class Quotex(object):
 
     def get_profit(self):
         return self.api.profit_in_operation or 0
+
+    async def get_result(self, operation_id: str):
+        """Check if the trade is a win based on its ID.
+
+        Args:
+            operation_id (str): The ID of the trade to check.
+        Returns:
+            str: win if the trade is a win, loss otherwise.
+            float: The profit from operations; returns 0 if no profit is recorded.
+        """
+        data_history = await self.get_history()
+        for item in data_history:
+            if item.get("ticket") == operation_id:
+                profit = float(item.get("profitAmount", 0))
+                status = "win" if profit > 0 else "loss"
+                return status, item
+
+        return None, "OperationID Not Found."
 
     async def start_candles_one_stream(self, asset, size):
         if not (str(asset + "," + str(size)) in self.subscribe_candle):

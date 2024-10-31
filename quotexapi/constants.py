@@ -62,6 +62,7 @@ codes_asset = {
     "NZDCAD_otc": 87,
     "NZDCHF_otc": 88,
     "NZDJPY_otc": 89,
+    "NZDUSD_otc": 90,
     "PFE_otc": 297,
     "STXEUR": 325,
     "UKBrent_otc": 164,
@@ -84,8 +85,10 @@ codes_asset = {
     "USDPHP_otc": 351,
     "USDPKR_otc": 336,
     "USDTRY_otc": 201,
+    "USDZAR_otc": 157,
     "XAGUSD": 65,
     "XAGUSD_otc": 167,
     "XAUUSD": 2,
     "XAUUSD_otc": 169
 }
+

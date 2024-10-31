@@ -13,7 +13,7 @@ class GetCandles(Base):
         :param asset: The active/asset identifier.
         :param index: The index of candles.
         :param time: The time of candles.
-        :param offset: The number of candles you want to have
+        :param offset: Time interval in which you want to catalog the candles
         :param period: The candle duration (timeframe for the candles).
         """
         payload = {

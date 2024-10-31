@@ -79,6 +79,7 @@ class WebsocketClient(object):
                 elif len(message) == 1 and message.get("profit") > -1:
                     self.api.profit_today = message
                 elif message.get("index"):
+                    self.api.historical_candles = message
                     # self.api.candles.candles_data = message
                     self.api.candle_close_timestamp = message.get("closeTimestamp")
                 elif message.get("id"):
@@ -120,7 +121,6 @@ class WebsocketClient(object):
             elif self.api._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
                 if message.get("asset") == self.api.current_asset:
                     self.api.candles.candles_data = message["history"]
-
                     self.api.candle_v2_data[message["asset"]] = message
                     self.api.candle_v2_data[message["asset"]]["candles"] = [{
                         "time": candle[0],

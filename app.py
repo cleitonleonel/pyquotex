@@ -6,11 +6,13 @@ import random
 import asyncio
 import pyfiglet
 from pathlib import Path
+from quotexapi.expiration import (
+    timestamp_to_date,
+    get_timestamp_days_ago
+)
 from quotexapi.config import (
     email,
-    password,
-    email_pass,
-    user_data_dir
+    password
 )
 from quotexapi.stable_api import Quotex
 from quotexapi.utils.processor import process_candles, get_color
@@ -39,8 +41,6 @@ client = Quotex(
     email=email,
     password=password,
     lang="pt",  # Default pt -> Português.
-    email_pass=email_pass,  # If you use gmail and 2FA enabled.
-    user_data_dir=user_data_dir  # Path to the playwright's cache.
 )
 
 # client.debug_ws_enable = True
@@ -87,9 +87,13 @@ async def connect(attempts=5):
                 attempt += 1
             else:
                 break
+
             await asyncio.sleep(5)
+
         return check, reason
+
     print(reason)
+
     return check, reason
 
 
@@ -106,7 +110,9 @@ async def get_balance():
     if check_connect:
         # client.change_account("REAL")
         print("Saldo corrente: ", await client.get_balance())
+
     print("Saindo...")
+
     client.close()
 
 
@@ -126,8 +132,21 @@ async def buy_simple():
             print(status, buy_info)
         else:
             print("ERRO: Asset está fechado.")
+
         print("Saldo corrente: ", await client.get_balance())
+
     print("Saindo...")
+
+    client.close()
+
+
+async def get_result():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        status, operation_info  = await client.get_result('578da9eb-613d-4c4c-a345-2bab05ba3966')
+        print(status, operation_info)
+    print("Saindo...")
+
     client.close()
 
 
@@ -144,8 +163,11 @@ async def get_profile():
             f"Avatar: {profile.avatar}\n"
             f"País: {profile.country_name}\n"
         )
+
         print(description)
+
     print("Saindo...")
+
     client.close()
 
 
@@ -154,7 +176,9 @@ async def balance_refill():
     if check_connect:
         # client.change_account("REAL")
         result = await client.edit_practice_balance(5000)
+
         print(result)
+
     client.close()
 
 
@@ -183,8 +207,11 @@ async def buy_and_check_win():
                 print("Falha na operação!!!")
         else:
             print("ERRO: Asset está fechado.")
+
         print("Saldo Atual: ", await client.get_balance())
+
     print("Saindo...")
+
     client.close()
 
 
@@ -219,8 +246,11 @@ async def buy_multiple(orders=10):
                 print("ERRO: Asset está fechado.")
             print("Saldo corrente: ", await client.get_balance())
             await asyncio.sleep(2)
+
     print("\n/", 80 * "=", "/", end="\n")
+
     print("Saindo...")
+
     client.close()
 
 
@@ -239,8 +269,11 @@ async def sell_option():
             status, buy_info = await client.buy(amount, asset_name, direction, duration)
             print(status, buy_info)
             await client.sell_option(buy_info["id"])
+
         print("Saldo corrente: ", await client.get_balance())
+
     print("Saindo...")
+
     client.close()
 
 
@@ -248,16 +281,29 @@ def asset_parse(asset: str):
     new_asset = f"{asset[:3]}/{asset[3:]}"
     if "_otc" in asset:
         return new_asset.replace("_otc", " (OTC)")
+
     return new_asset
 
 
 async def assets_open():
     check_connect, reason = await client.connect()
     if check_connect:
-        print("Check Asset Open")
+        print("Asset Open")
         for i in client.get_all_asset_name():
             print(i[1])
             print(i[1], await client.check_asset_open(i[0]))
+
+    print("Saindo...")
+
+    client.close()
+
+
+async def get_payout():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        asset_data = await client.check_asset_open("EURUSD_otc")
+        print(asset_data)
+
     print("Saindo...")
     client.close()
 
@@ -266,9 +312,9 @@ async def get_candle():
     candles_color = []
     check_connect, message = await client.connect()
     if check_connect:
-        asset = "EURUSD_otc"
+        asset = "CHFJPY_otc"
         offset = 3600  # in seconds
-        period = 5  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
         end_from_time = time.time()
         candles = await client.get_candles(asset, end_from_time, offset, period)
         candles_data = candles
@@ -288,7 +334,9 @@ async def get_candle():
             print(candles_color if len(candles_color) > 0 else "")
         else:
             print("No candles.")
+
     print("Exiting...")
+
     client.close()
 
 
@@ -298,17 +346,23 @@ async def get_candle_progressive():
         asset = "EURJPY_otc"
         offset = 3600  # in seconds
         period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
-        end_from_time = time.time()
+        days_of_candle = 1
         list_candles = []
-        size = 10
+        size = days_of_candle * 24
+        timestamp = get_timestamp_days_ago(days_of_candle)
+        end_from_time = (int(timestamp) - int(timestamp) % period) + offset
         for i in range(size):
-            # print(i)
+            epoch_candle = timestamp_to_date(end_from_time)
+            print(epoch_candle)
             candles = await client.get_candles(asset, end_from_time, offset, period)
-            if len(candles) > 0:
-                end_from_time = int(candles[0]["time"]) - 1
+            if candles:
+                end_from_time = end_from_time + offset
                 list_candles.append(candles)
+
         print(list_candles)
+
     print("Saindo...")
+
     client.close()
 
 
@@ -322,7 +376,9 @@ async def get_payment():
             status = " ==> Opened" if asset_data["open"] else " ==> Closed"
             print(asset_name, status, profit)
             print("-" * 35)
+
     print("Saindo...")
+
     client.close()
 
 
@@ -339,7 +395,9 @@ async def get_candle_v2():
             print(candles)
         else:
             print("ERRO: Asset está fechado.")
+
     print("Saindo...")
+
     client.close()
 
 
@@ -351,14 +409,16 @@ async def get_realtime_candle():
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
-            print("Check Asset Open")
+            print("Asset Open")
             while True:
                 candles = await client.get_realtime_candles(asset_name, period)
                 print(candles)
                 await asyncio.sleep(1)
         else:
             print("ERRO: Asset está fechado.")
+
     print("Saindo...")
+
     client.close()
 
 
@@ -375,7 +435,9 @@ async def get_realtime_sentiment():
                 await asyncio.sleep(0.5)
         else:
             print("ERRO: Asset está fechado.")
+
     print("Saindo...")
+
     client.close()
 
 
@@ -388,7 +450,9 @@ async def get_signal_data():
             if signals:
                 print(json.dumps(signals, indent=4))
             await asyncio.sleep(1)
+
     print("Saindo...")
+
     client.close()
 
 
@@ -402,8 +466,12 @@ async def execute(argument):
             return await get_balance()
         case "get_signal_data":
             return await get_signal_data()
+        case "get_payout":
+            return await get_payout()
         case "get_payment":
             return await get_payment()
+        case "assets_open":
+            return await assets_open()
         case "get_candle":
             return await get_candle()
         case "get_candle_v2":
@@ -414,10 +482,10 @@ async def execute(argument):
             return await get_realtime_candle()
         case "get_realtime_sentiment":
             return await get_realtime_sentiment()
-        case "assets_open":
-            return await assets_open()
         case "buy_simple":
             return await buy_simple()
+        case "get_result":
+            return await get_result()
         case "buy_and_check_win":
             return await buy_and_check_win()
         case "buy_multiple":

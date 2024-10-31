@@ -25,13 +25,13 @@ config.read(config_path, encoding="utf-8")
 
 email = config.get("settings", "email")
 password = config.get("settings", "password")
-email_pass = config.get("settings", "email_pass")
-user_data_dir = config.get("settings", "user_data_dir")
+email_pass = config.get("settings", "email_pass", fallback=None)
+user_data_dir = config.get("settings", "user_data_dir", fallback=None)
 
-if not email.strip() or not password.strip():
+if not email or not password:
     print("E-mail e Senha não podem estar em branco...")
     sys.exit()
-if not user_data_dir.strip():
+if not user_data_dir:
     user_data_dir = "browser/instance/quotex.default"
 
 

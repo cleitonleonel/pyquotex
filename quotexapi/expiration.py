@@ -15,6 +15,13 @@ def timestamp_to_date(timestamp):
     return datetime.fromtimestamp(timestamp)
 
 
+def get_timestamp_days_ago(days):
+    current_time = int(time.time())
+    seconds_in_day = 86400
+    timestamp_days_ago = current_time - (days * seconds_in_day)
+    return timestamp_days_ago
+
+
 def get_expiration_time_quotex(timestamp, duration):
     now_date = datetime.fromtimestamp(timestamp)
     shift = 0

@@ -14,6 +14,7 @@ from . import global_value
 from .http.login import Login
 from .http.logout import Logout
 from .http.settings import Settings
+from .http.history import GetHistory
 from .http.navigator import Browser
 from .ws.channels.ssid import Ssid
 from .ws.channels.buy import Buy
@@ -110,6 +111,7 @@ class QuotexAPI(object):
         self.settings_list = {}
         self.signal_data = {}
         self.get_candle_data = {}
+        self.historical_candles = {}
         self.candle_v2_data = {}
         self.realtime_price = {}
         self.real_time_candles = {}
@@ -165,6 +167,16 @@ class QuotexAPI(object):
         data = f'42["account/change",{json.dumps(payload)}]'
         self.send_websocket_request(data)
 
+    def get_history_line(self, asset_id, index, end_from_time, offset):
+        payload = {
+            "id": asset_id,
+            "index": index,
+            "time": end_from_time,
+            "offset": offset,
+        }
+        data = f'42["history/load/line",{json.dumps(payload)}]'
+        self.send_websocket_request(data)
+
     def indicators(self):
         # 42["indicator/change",{"id":"Y5zYtYaUtjI6eUz06YlGF","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
         # 42["indicator/delete", {"id": "23507dc2-05ca-4aec-9aef-55939735b3e0"}]
@@ -214,6 +226,15 @@ class QuotexAPI(object):
             <quotexapi.ws.channels.candles.GetCandles>`.
         """
         return GetCandles(self)
+
+    @property
+    def get_history(self):
+        """Property for get Quotex http get history.
+
+        :returns: The instance of :class:`GetHistory
+            <quotexapi.http.history.GetHistory>`.
+        """
+        return GetHistory(self)
 
     def send_http_request_v1(self, resource, method, data=None, params=None, headers=None):
         """Send http request to Quotex server.
@@ -275,6 +296,10 @@ class QuotexAPI(object):
         self.profile.country_name = user_settings.get("data")["countryName"]
         self.profile.currency_symbol = user_settings.get("data")["currencySymbol"]
         return self.profile
+
+    async def get_trader_history(self, account_type, page_number):
+        history = await self.get_history(account_type, page_number)
+        return history.get("data", {})
 
     def send_websocket_request(self, data, no_force_send=True):
         """Send websocket request to Quotex server.
