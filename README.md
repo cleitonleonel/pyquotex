@@ -94,6 +94,7 @@ from quotexapi.expiration import (
     get_timestamp_days_ago
 )
 from quotexapi.stable_api import Quotex
+from quotexapi.constants import codes_asset
 from quotexapi.utils.processor import process_candles, get_color
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
@@ -121,6 +122,7 @@ def get_all_options():
     - get_candle_v2
     - get_candle_progressive
     - get_realtime_candle
+    - get_candles_all_asset
     - get_realtime_sentiment
     - assets_open
     - buy_simple
@@ -207,7 +209,7 @@ async def buy_simple():
 async def get_result():
     check_connect, reason = await client.connect()
     if check_connect:
-        status, operation_info  = await client.get_result('578da9eb-613d-4c4c-a345-2bab05ba3966')
+        status, operation_info  = await client.get_result('3ca7d99f-744e-4d5b-9780-27e50575290d')
         print(status, operation_info)
     print("Saindo...")
 
@@ -407,7 +409,7 @@ async def get_candle():
 async def get_candle_progressive():
     check_connect, reason = await client.connect()
     if check_connect:
-        asset = "EURJPY_otc"
+        asset = "EURUSD_otc"
         offset = 3600  # in seconds
         period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
         days_of_candle = 1
@@ -415,15 +417,20 @@ async def get_candle_progressive():
         size = days_of_candle * 24
         timestamp = get_timestamp_days_ago(days_of_candle)
         end_from_time = (int(timestamp) - int(timestamp) % period) + offset
+        epoch_candle = timestamp_to_date(end_from_time)
+        print(f"Searching for historical data from {epoch_candle} to now...")
         for i in range(size):
             epoch_candle = timestamp_to_date(end_from_time)
-            print(epoch_candle)
-            candles = await client.get_candles(asset, end_from_time, offset, period)
+            # print(epoch_candle)
+            candles = await client.get_candles(asset, end_from_time, offset, period, progressive=True)
             if candles:
-                end_from_time = end_from_time + offset
-                list_candles.append(candles)
+                list_candles += candles
+            if i >= size:
+                offset *= 2
+            end_from_time = end_from_time + offset
 
-        print(list_candles)
+        lista_limpa = list({frozenset(d.items()): d for d in list_candles}.values())
+        print(lista_limpa, len(lista_limpa))
 
     print("Saindo...")
 
@@ -464,6 +471,25 @@ async def get_candle_v2():
 
     client.close()
 
+
+async def get_candles_all_asset():
+    check_connect, message = await client.connect()
+    if check_connect:
+        offset = 3600  # in seconds
+        period = 60    # in seconds
+        for asset in codes_asset.keys():
+            asset_name, asset_data = await client.get_available_asset(asset)
+            if asset_data[2]:
+                print(asset_name, asset_data)
+                print("OK: Asset está aberto.")
+                end_from_time = time.time()
+                candles = await client.get_candles(asset, end_from_time, offset, period)
+                print(candles)
+            await asyncio.sleep(1)
+
+    print("Saindo...")
+
+    client.close()
 
 async def get_realtime_candle():
     check_connect, message = await client.connect()
@@ -540,6 +566,8 @@ async def execute(argument):
             return await get_candle()
         case "get_candle_v2":
             return await get_candle_v2()
+        case "get_candles_all_asset":
+            return await get_candles_all_asset()
         case "get_candle_progressive":
             return await get_candle_progressive()
         case "get_realtime_candle":
@@ -565,11 +593,12 @@ async def execute(argument):
 
 async def main():
     if len(sys.argv) != 2:
-        # await test_connection()
+        await test_connection()
         # await get_balance()
         # await get_profile()
-        await buy_simple()
+        # await buy_simple()
         # await get_candle()
+        # await get_candles_all_asset()
         return
 
     option = sys.argv[1]
@@ -584,6 +613,5 @@ if __name__ == "__main__":
         print("Encerrando o programa.")
     finally:
         loop.close()
-
 
 ```

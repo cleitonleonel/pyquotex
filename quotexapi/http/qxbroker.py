@@ -72,6 +72,7 @@ class Browser(object):
         self.html = None
 
     async def run(self, playwright: Playwright) -> None:
+        token = None
         if self.user_data_dir:
             browser = playwright.firefox
             context = await browser.launch_persistent_context(
@@ -136,8 +137,9 @@ class Browser(object):
             return
         settings = script[1].get_text().strip().replace(";", "")
         match = re.sub("window.settings = ", "", settings)
-        token = json.loads(match).get("token")
-        self.api.session_data["token"] = token
+        if match:
+            token = json.loads(match).get("token")
+            self.api.session_data["token"] = token
         output_file = Path(os.path.join(self.api.resource_path, "session.json"))
         output_file.parent.mkdir(exist_ok=True, parents=True)
         cookiejar = requests.utils.cookiejar_from_dict({c['name']: c['value'] for c in cookies})

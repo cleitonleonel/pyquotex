@@ -140,7 +140,7 @@ class Quotex(object):
                 self.api.current_asset = asset_name
                 return i[0], i[2].replace("\n", ""), i[14]
 
-    async def get_candles(self, asset, end_from_time, offset, period):
+    async def get_candles(self, asset, end_from_time, offset, period, progressive=False):
         if end_from_time is None:
             end_from_time = time.time()
         index = expiration.get_timestamp()
@@ -154,7 +154,7 @@ class Quotex(object):
                 break
 
         candles = self.prepare_candles(asset, period)
-        if not isinstance(candles, list):
+        if progressive:
             return self.api.historical_candles.get("data", {})
 
         return candles
