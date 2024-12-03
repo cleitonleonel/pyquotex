@@ -20,6 +20,7 @@ setup(
     # download_url='https://github.com/cleitonleonel/pyquotex/archive/v_1.0.0.tar.gz',
     keywords=['SOME', 'MEANINGFULL', 'KEYWORDS'],
     install_requires=[
+        'setuptools',
         "certifi",
         "greenlet",
         "pyOpenSSL",

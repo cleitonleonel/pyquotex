@@ -44,6 +44,9 @@ class Browser(object):
     password = None
     email_pass = None
     args = [
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
         '--disable-web-security',
         '--no-sandbox',
         '--aggressive-cache-discard',
@@ -73,6 +76,7 @@ class Browser(object):
 
     async def run(self, playwright: Playwright) -> None:
         token = None
+        settings = None
         if self.user_data_dir:
             browser = playwright.firefox
             context = await browser.launch_persistent_context(
@@ -81,8 +85,8 @@ class Browser(object):
                 user_agent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0",
                 headless=True,
                 viewport={
-                    "width": 1280,
-                    "height": 720,
+                    "width": 1920,
+                    "height": 1080,
                 }
             )
             page = context.pages[0]
@@ -93,8 +97,8 @@ class Browser(object):
             )
             context = await browser.new_context(
                 viewport={
-                    "width": 1280,
-                    "height": 720
+                    "width": 1920,
+                    "height": 1080,
                 },
                 user_agent='Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0',
             )
@@ -124,22 +128,30 @@ class Browser(object):
                         pin_code = await get_pin(self.email, self.email_pass)
                     code = pin_code or input(input_message)
                     await fill_code_form(page, code)
+
         await page.wait_for_timeout(5000)
         cookies = await context.cookies()
         source = await page.content()
         self.html = BeautifulSoup(source, "html.parser")
         user_agent = await page.evaluate("() => navigator.userAgent;")
         self.api.session_data["user_agent"] = user_agent
-        script = self.html.find_all("script", {"type": "text/javascript"})
+
         status, message = self.success_login()
         if not status:
             await context.close() if self.user_data_dir else await browser.close()
             return
-        settings = script[1].get_text().strip().replace(";", "")
+
+        script = self.html.find_all("script", {"type": "text/javascript"})
+        for tag in script:
+            if 'window.settings' in tag.string:
+                settings = tag.get_text().strip().replace(";", "")
+                break
+
         match = re.sub("window.settings = ", "", settings)
         if match:
             token = json.loads(match).get("token")
             self.api.session_data["token"] = token
+
         output_file = Path(os.path.join(self.api.resource_path, "session.json"))
         output_file.parent.mkdir(exist_ok=True, parents=True)
         cookiejar = requests.utils.cookiejar_from_dict({c['name']: c['value'] for c in cookies})
@@ -148,6 +160,7 @@ class Browser(object):
         output_file.write_text(
             json.dumps({"cookies": cookies_string, "token": token, "user_agent": user_agent}, indent=4)
         )
+
         await context.close() if self.user_data_dir else await browser.close()
 
     def success_login(self):
