@@ -9,7 +9,7 @@ on:
 
 jobs:
   notify-telegram:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Enviar notificação para o Telegram
