@@ -1,0 +1,31 @@
+name: Notify Telegram
+
+on:
+  push:
+    branches:
+      - master  # Notifica commits ou pushes na branch "master"
+  pull_request:
+    types: [opened, closed]
+
+jobs:
+  notify-telegram:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enviar notificação para o Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            MESSAGE="📦 *New Push on Repository*\n\n🔧 Repository: ${{ github.repository }}\n👤 Actor: ${{ github.actor }}\n📝 Message Commit:\n$(git log -1 --pretty=%B)"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            ACTION="${{ github.event.action }}"
+            PR_URL="${{ github.event.pull_request.html_url }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            MESSAGE="📌 *Pull Request ${ACTION}:*\n\n🔧 Repository: ${{ github.repository }}\n👤 Actor: ${{ github.actor }}\n📝 Title: ${PR_TITLE}\n🔗 [View PR](${PR_URL})"
+          fi
+
+          curl -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"$TELEGRAM_CHAT_ID\", \"text\": \"$MESSAGE\", \"parse_mode\": \"Markdown\"}"
