@@ -44,6 +44,25 @@ just run ```sudo apt install openssl```.
 ## Let`s Go to the Private Repository
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cleiton.leonel)
 
+## Support with Cryptocurrency
+
+You can support this project by sending cryptocurrency to the addresses below. Every contribution is appreciated!
+
+### Dogecoin (DOGE) <img src="https://cryptologos.cc/logos/dogecoin-doge-logo.png?v=024" alt="Dogecoin" width="20"/>
+`DMwSPQMk61hq49ChmTMkgyvUGZbVbWZekJ`  
+
+### Bitcoin (BTC) <img src="https://cryptologos.cc/logos/bitcoin-btc-logo.png?v=024" alt="Bitcoin" width="20"/>  
+`bc1qtea29xkpyx9jxtp2kc74m83rwh93vjp7nhpgkm`  
+
+### Ethereum (ETH) <img src="https://cryptologos.cc/logos/ethereum-eth-logo.png?v=024" alt="Ethereum" width="20"/>  
+`0x20d1AD19277CaFddeE4B8f276ae9f3E761523223`
+
+### Solana (SOL) <img src="https://cryptologos.cc/logos/solana-sol-logo.png?v=024" alt="Solana" width="20"/>
+`4wbE2FVU9x4gVErVSsWwhcdXQnDBrBVQFvbMqaaykcqo`  
+
+Thank you for your support! 🚀
+
+
 
 
 https://github.com/user-attachments/assets/acaa0cbb-80c2-450c-9c8f-83fdbfedf0fa
