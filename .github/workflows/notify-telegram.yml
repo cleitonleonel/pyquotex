@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Checkout do repositório
+      - uses: actions/checkout@v3
+
       - name: Enviar notificação para o Telegram
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
