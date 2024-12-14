@@ -21,4 +21,4 @@ class ListInfoData(Base):
         del self.listinfodata_dict[id_number]
 
     def get(self, id_number):
-        return self.listinfodata_dict[id_number]
+        return self.listinfodata_dict.get(id_number)

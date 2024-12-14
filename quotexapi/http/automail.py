@@ -2,6 +2,9 @@ import re
 import imaplib
 import email
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def get_pin(email_address, email_pass, quotex_email="noreply@qxbroker.com", attempts=5):
@@ -11,7 +14,7 @@ async def get_pin(email_address, email_pass, quotex_email="noreply@qxbroker.com"
         mail.login(email_address, email_pass)
         mail.select("inbox")
     except imaplib.IMAP4.error as e:
-        print(f"Erro ao conectar: {e}")
+        logger.debug(f"Error connect on IMAP: {e}")
         return None
 
     while attempts > 0:
@@ -19,7 +22,7 @@ async def get_pin(email_address, email_pass, quotex_email="noreply@qxbroker.com"
         email_id_list = email_ids[0].split()
 
         if not email_id_list:
-            print("Nenhum e-mail encontrado")
+            logger.debug("Unknown email address")
             mail.logout()
             return None
 
@@ -49,6 +52,6 @@ async def get_pin(email_address, email_pass, quotex_email="noreply@qxbroker.com"
         attempts -= 1
         await asyncio.sleep(1)
 
-    print("Nenhum e-mail da Quotex...")
+    logger.debug("Any email by Quotex...")
     mail.logout()
     return pin_code

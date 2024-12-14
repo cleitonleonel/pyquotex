@@ -11,8 +11,6 @@ class QuotexExchange:
             email=kwargs.get('email'),
             password=kwargs.get('password'),
             lang=kwargs.get('lang', 'pt'),  # Language default set to Portuguese
-            email_pass=kwargs.get('email_pass', None),  # Optional email pass
-            user_data_dir=kwargs.get('user_data_dir', None)  # Optional browser profile path
         )
         self.client.set_session(user_agent=USER_AGENT)
         self.client.debug_ws_enable = True

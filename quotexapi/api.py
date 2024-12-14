@@ -55,11 +55,13 @@ class QuotexAPI(object):
     """Class for communication with Quotex API."""
     socket_option_opened = {}
     buy_id = None
+    pending_id = None
     trace_ws = False
     buy_expiration = None
     current_asset = None
     current_period = None
     buy_successful = None
+    pending_successful = None
     account_balance = None
     account_type = None
     instruments = None
@@ -72,21 +74,21 @@ class QuotexAPI(object):
     candles = Candles()
     profile = Profile()
 
-    def __init__(self,
-                 host,
-                 username,
-                 password,
-                 lang,
-                 email_pass=None,
-                 proxies=None,
-                 resource_path=None,
-                 user_data_dir="."):
+    def __init__(
+            self,
+            host,
+            username,
+            password,
+            lang,
+            proxies=None,
+            resource_path=None,
+            user_data_dir="."
+    ):
         """
         :param str host: The hostname or ip address of a Quotex server.
         :param str username: The username of a Quotex server.
         :param str password: The password of a Quotex server.
         :param str lang: The lang of a Quotex platform.
-        :param str email_pass: The password of a Email.
         :param proxies: The proxies of a Quotex server.
         :param user_data_dir: The path browser user data dir.
         """
@@ -103,7 +105,6 @@ class QuotexAPI(object):
         self._temp_status = ""
         self.username = username
         self.password = password
-        self.email_pass = email_pass
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
         self.proxies = proxies
@@ -175,6 +176,34 @@ class QuotexAPI(object):
             "offset": offset,
         }
         data = f'42["history/load/line",{json.dumps(payload)}]'
+        self.send_websocket_request(data)
+
+    def open_pending(self, amount, asset, direction, duration, open_time):
+        payload = {
+            "openType": 0,
+            "asset": asset,
+            "openTime": open_time,
+            "timeframe": duration,
+            "command": direction,
+            "amount": amount
+        }
+        data = f'42["pending/create",{json.dumps(payload)}]'
+        self.send_websocket_request(data)
+
+    def instruments_follow(self, amount, asset, direction, duration, open_time):
+        payload = {
+            "amount": amount,
+            "command": 0 if direction == "call" else 1,
+            "currency": self.profile.currency_code,
+            "min_payout": 0,
+            "open_time": open_time,
+            "open_type": 0,
+            "symbol": asset,
+            "ticket": self.pending_id,
+            "timeframe": duration,
+            "uid": self.profile.profile_id
+        }
+        data = f'42["instruments/follow",{json.dumps(payload)}]'
         self.send_websocket_request(data)
 
     def indicators(self):
@@ -295,6 +324,7 @@ class QuotexAPI(object):
         self.profile.country = user_settings.get("data")["country"]
         self.profile.country_name = user_settings.get("data")["countryName"]
         self.profile.currency_symbol = user_settings.get("data")["currencySymbol"]
+        self.profile.offset = user_settings.get("data").get("timeOffset")
         return self.profile
 
     async def get_trader_history(self, account_type, page_number):
@@ -315,11 +345,11 @@ class QuotexAPI(object):
         global_value.ssl_Mutual_exclusion_write = False
 
     async def authenticate(self):
-        print("Quotex Connecting...")
+        print("Connecting User Account ...")
+        logger.debug("Login Account User...")
         status, message = await self.login(
             self.username,
             self.password,
-            self.email_pass,
             self.user_data_dir
         )
         print(message)

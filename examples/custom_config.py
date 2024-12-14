@@ -16,8 +16,7 @@ email_pass = "gmail_app_key"
 
 client = Quotex(
     email=email,
-    password=password,
-    email_pass=email_pass  # If you use gmail and 2FA enabled.
+    password=password
 )
 
 # client.set_session(user_agent=USER_AGENT)

@@ -1,6 +1,9 @@
 import time
 import calendar
-from datetime import datetime, timedelta
+from datetime import (
+    datetime,
+    timedelta
+)
 
 
 def get_timestamp():
@@ -30,6 +33,28 @@ def get_expiration_time_quotex(timestamp, duration):
     exp_date = now_date.replace(second=0, microsecond=0)
     exp_date = exp_date + timedelta(minutes=int(duration / 60) + shift)
     return date_to_timestamp(exp_date)
+
+
+def get_next_timeframe(timestamp, time_zone, timeframe: int) -> str:
+    """
+    Calculate the next timestamp based on the given timeframe in seconds.
+    The timestamp will be rounded up to the nearest multiple of the timeframe.
+
+    Args:
+        timestamp: timestamp in seconds.
+        time_zone (int): The timezone of the timestamp.
+        timeframe (int): The timeframe in seconds to round to.
+
+    Returns:
+        str: The next rounded date based on the timeframe.
+    """
+    now_date = datetime.fromtimestamp(timestamp)
+    seconds_passed = now_date.second + now_date.minute * 60
+    next_timeframe_seconds = ((seconds_passed // timeframe) + 2) * timeframe
+    next_time = now_date + timedelta(seconds=next_timeframe_seconds - seconds_passed)
+    next_time = next_time.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
+
+    return next_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
 def get_expiration_time(timestamp, duration):

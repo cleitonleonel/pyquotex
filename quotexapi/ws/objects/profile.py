@@ -19,6 +19,7 @@ class Profile(Base):
         self.__currency_symbol = None
         self.__profile_level = None
         self.__minimum_amount = None
+        self.__offset = None
 
     @property
     def nick_name(self):
@@ -108,6 +109,14 @@ class Profile(Base):
     @country.setter
     def country(self, country):
         self.__country = country
+
+    @property
+    def offset(self):
+        return self.__offset
+
+    @offset.setter
+    def offset(self, offset):
+        self.__offset = offset
 
     @property
     def country_name(self):

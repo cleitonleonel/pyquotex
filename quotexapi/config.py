@@ -13,26 +13,22 @@ if not config_path.exists():
     config_path.parent.mkdir(exist_ok=True, parents=True)
     text_settings = (
         f"[settings]\n"
-        f"email={input('Insira o e-mail da conta: ')}\n"
-        f"password={input('Insira a senha da conta: ')}\n"
-        f"email_pass={input('Insira a senha da conta de e-mail: ')}\n"
-        f"user_data_dir={input('Insira um caminho para o profile do browser: ')}\n"
+        f"email={input('Enter your account email: ')}\n"
+        f"password={input('Enter your account password: ')}\n"
     )
     config_path.write_text(text_settings)
 
-config = configparser.ConfigParser()
+config = configparser.ConfigParser(interpolation=None)
 config.read(config_path, encoding="utf-8")
 
 email = config.get("settings", "email")
 password = config.get("settings", "password")
-email_pass = config.get("settings", "email_pass", fallback=None)
-user_data_dir = config.get("settings", "user_data_dir", fallback=None)
 
 if not email or not password:
-    print("E-mail e Senha não podem estar em branco...")
+    print("Email and password cannot be left blank...")
     sys.exit()
-if not user_data_dir:
-    user_data_dir = "browser/instance/quotex.default"
+
+user_data_dir = "browser/instance/quotex.default"
 
 
 def load_session(user_agent):

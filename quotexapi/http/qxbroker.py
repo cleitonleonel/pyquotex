@@ -1,10 +1,10 @@
 import os
 import re
 import json
+import platform
 import requests
 from pathlib import Path
 from bs4 import BeautifulSoup
-from ..http.automail import get_pin
 from playwright_stealth import stealth_async
 from ..utils.playwright_install import install
 from playwright.async_api import Playwright, async_playwright, expect
@@ -77,6 +77,10 @@ class Browser(object):
     async def run(self, playwright: Playwright) -> None:
         token = None
         settings = None
+
+        if platform.system() == 'Windows':
+            self.args = []
+
         if self.user_data_dir:
             browser = playwright.firefox
             context = await browser.launch_persistent_context(
@@ -123,10 +127,7 @@ class Browser(object):
                         f'{auth_body.find("p").text}: ' if auth_body.find("p")
                         else "Insira o código PIN que acabamos de enviar para o seu e-mail: "
                     )
-                    pin_code = None
-                    if self.email_pass:
-                        pin_code = await get_pin(self.email, self.email_pass)
-                    code = pin_code or input(input_message)
+                    code = input(input_message)
                     await fill_code_form(page, code)
 
         await page.wait_for_timeout(5000)

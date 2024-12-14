@@ -52,6 +52,7 @@ class WebsocketClient(object):
                 global_value.check_rejected_connection = 0
             elif "instruments/list" in str(message):
                 global_value.started_listen_instruments = True
+
             try:
                 message = message[1:].decode()
                 logger.debug(message)
@@ -59,54 +60,57 @@ class WebsocketClient(object):
                 self.api.wss_message = message
                 if "call" in str(message) or 'put' in str(message):
                     self.api.instruments = message
-                if message.get("signals"):
-                    time_in = message.get("time")
-                    for i in message["signals"]:
-                        try:
-                            self.api.signal_data[i[0]] = {}
-                            self.api.signal_data[i[0]][i[2]] = {}
-                            self.api.signal_data[i[0]][i[2]]["dir"] = i[1][0]["signal"]
-                            self.api.signal_data[i[0]][i[2]]["duration"] = i[1][0]["timeFrame"]
-                        except:
-                            self.api.signal_data[i[0]] = {}
-                            self.api.signal_data[i[0]][time_in] = {}
-                            self.api.signal_data[i[0]][time_in]["dir"] = i[1][0][1]
-                            self.api.signal_data[i[0]][time_in]["duration"] = i[1][0][0]
-                elif message.get("liveBalance") or message.get("demoBalance"):
-                    self.api.account_balance = message
-                elif message.get("position"):
-                    self.api.top_list_leader = message
-                elif len(message) == 1 and message.get("profit") > -1:
-                    self.api.profit_today = message
-                elif message.get("index"):
-                    self.api.historical_candles = message
-                    # self.api.candles.candles_data = message
-                    self.api.candle_close_timestamp = message.get("closeTimestamp")
-                elif message.get("id"):
-                    self.api.buy_successful = message
-                    self.api.buy_id = message["id"]
-                    self.api.candle_close_timestamp = message.get("closeTimestamp")
-                elif message.get("ticket"):
-                    self.api.sold_options_respond = message
-                elif message.get("deals"):
-                    for get_m in message["deals"]:
-                        self.api.profit_in_operation = get_m["profit"]
-                        get_m["win"] = True if message["profit"] > 0 else False
-                        get_m["game_state"] = 1
-                        self.api.listinfodata.set(
-                            get_m["win"],
-                            get_m["game_state"],
-                            get_m["id"]
-                        )
-                elif message.get("isDemo") and message.get("balance"):
-                    self.api.training_balance_edit_request = message
-                elif message.get("error"):
-                    global_value.websocket_error_reason = message.get("error")
-                    global_value.check_websocket_if_error = True
-                    if global_value.websocket_error_reason == "not_money":
-                        self.api.account_balance = {"liveBalance": 0}
-                elif not message.get("list") == []:
-                    self.api.wss_message = message
+                if isinstance(message, dict):
+                    if message.get("signals"):
+                        time_in = message.get("time")
+                        for i in message["signals"]:
+                            try:
+                                self.api.signal_data[i[0]] = {}
+                                self.api.signal_data[i[0]][i[2]] = {}
+                                self.api.signal_data[i[0]][i[2]]["dir"] = i[1][0]["signal"]
+                                self.api.signal_data[i[0]][i[2]]["duration"] = i[1][0]["timeFrame"]
+                            except:
+                                self.api.signal_data[i[0]] = {}
+                                self.api.signal_data[i[0]][time_in] = {}
+                                self.api.signal_data[i[0]][time_in]["dir"] = i[1][0][1]
+                                self.api.signal_data[i[0]][time_in]["duration"] = i[1][0][0]
+                    elif message.get("liveBalance") or message.get("demoBalance"):
+                        self.api.account_balance = message
+                    elif message.get("position"):
+                        self.api.top_list_leader = message
+                    elif len(message) == 1 and message.get("profit", -1) > -1:
+                        self.api.profit_today = message
+                    elif message.get("index"):
+                        self.api.historical_candles = message
+                        self.api.timesync.server_timestamp = message.get("closeTimestamp")
+                    if message.get("pending"):
+                        self.api.pending_successful = message
+                        self.api.pending_id = message["pending"]["ticket"]
+                    elif message.get("id") and not message.get("ticket"):
+                        self.api.buy_successful = message
+                        self.api.buy_id = message["id"]
+                        self.api.timesync.server_timestamp = message.get("closeTimestamp")
+                    elif message.get("ticket") and not message.get("id"):
+                        self.api.sold_options_respond = message
+                    elif message.get("deals"):
+                        for get_m in message["deals"]:
+                            self.api.profit_in_operation = get_m["profit"]
+                            get_m["win"] = True if message["profit"] > 0 else False
+                            get_m["game_state"] = 1
+                            self.api.listinfodata.set(
+                                get_m["win"],
+                                get_m["game_state"],
+                                get_m["id"]
+                            )
+                    elif message.get("isDemo") and message.get("balance"):
+                        self.api.training_balance_edit_request = message
+                    elif message.get("error"):
+                        global_value.websocket_error_reason = message.get("error")
+                        global_value.check_websocket_if_error = True
+                        if global_value.websocket_error_reason == "not_money":
+                            self.api.account_balance = {"liveBalance": 0}
+                    elif not message.get("list") == []:
+                        self.api.wss_message = message
             except:
                 pass
 
