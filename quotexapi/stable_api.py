@@ -322,7 +322,6 @@ class Quotex(object):
         """Payment Quotex server"""
         assets_data = {}
         for i in self.api.instruments:
-            # print(i)
             assets_data[i[2].replace("\n", "")] = {
                 "turbo_payment": i[18],
                 "payment": i[5],
@@ -332,7 +331,31 @@ class Quotex(object):
                 },
                 "open": i[14]
             }
+
         return assets_data
+
+    # Function suggested by https://t.me/Suppor_Mk in the message https://t.me/c/2215782682/1/2990
+    def get_payout_by_asset(self, asset_name, timeframe="1"):
+        """Payout Quotex server"""
+        assets_data = {}
+        for i in self.api.instruments:
+            if asset_name == i[1]:
+                assets_data[i[1].replace("\n", "")] = {
+                    "turbo_payment": i[18],
+                    "payment": i[5],
+                    "profit": {
+                        "1M": i[-9],
+                        "5M": i[-8]
+                    },
+                    "open": i[14]
+                }
+                break
+
+        data = assets_data.get(asset_name)
+        if timeframe == "all":
+            return data.get("profit")
+
+        return data.get("profit").get(f"{timeframe}M")
 
     async def start_remaing_time(self):
         now_stamp = datetime.fromtimestamp(expiration.get_timestamp())

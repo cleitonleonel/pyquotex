@@ -44,6 +44,7 @@ client = Quotex(
     lang="pt",  # Default pt -> Português.
 )
 
+
 # client.debug_ws_enable = True
 
 
@@ -146,7 +147,7 @@ async def buy_simple():
 async def get_result():
     check_connect, reason = await client.connect()
     if check_connect:
-        status, operation_info  = await client.get_result('3ca7d99f-744e-4d5b-9780-27e50575290d')
+        status, operation_info = await client.get_result('3ca7d99f-744e-4d5b-9780-27e50575290d')
         print(status, operation_info)
     print("Exiting...")
 
@@ -192,7 +193,7 @@ async def buy_and_check_win():
         print("Current Balance: ", await client.get_balance())
         amount = 50
         asset = "EURUSD_otc"  # "EURUSD_otc"
-        direction = "call"
+        direction = "put"
         duration = 60  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -215,6 +216,62 @@ async def buy_and_check_win():
 
     print("Exiting...")
 
+    client.close()
+
+
+async def trade_and_monitor():
+    check_connect, message = await client.connect()
+    if check_connect:
+        amount = 50
+        asset = "AUDCAD"
+        direction = "call"
+        duration = 60  # in seconds
+
+        asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
+        print(asset_name, asset_data)
+
+        if asset_data[2]:
+            print("OK: Asset está aberto.")
+            status, buy_info = await client.buy(amount, asset_name, direction, duration)
+            print("Status:", status)
+            print("Buy Info:", buy_info)
+
+            if status:
+                open_price = buy_info.get('openPrice')
+                close_timestamp = buy_info.get('closeTimestamp')
+                print("Open Price:", open_price)
+
+                while True:
+                    prices = await client.get_realtime_price(asset_name)
+                    if not prices:
+                        continue
+
+                    current_price = prices[-1]['price']
+                    current_timestamp = prices[-1]['time']
+                    print(f"Current Time: {int(current_timestamp)}, Close Time: {close_timestamp}")
+                    print(f"Current Price: {current_price}, Open Price: {open_price}")
+                    if int(current_timestamp) > close_timestamp:
+
+                        if current_price > open_price:
+                            print("Resultado: WIN ")
+                        elif current_price < open_price:
+                            print("Resultado: LOSS ")
+
+                        else:
+                            print("Resultado: NEUTRAL ")
+
+                        break
+
+                    await asyncio.sleep(0.2)
+            else:
+                print("Operation failed!!!")
+        else:
+            print("ERRO: Asset is closed.")
+
+    else:
+        print("Unable to connect to client.")
+
+    print("Saindo...")
     client.close()
 
 
@@ -325,16 +382,6 @@ async def assets_open():
     client.close()
 
 
-async def get_payout():
-    check_connect, reason = await client.connect()
-    if check_connect:
-        asset_data = await client.check_asset_open("EURUSD_otc")
-        print(asset_data)
-
-    print("Exiting...")
-    client.close()
-
-
 async def get_candle():
     candles_color = []
     check_connect, message = await client.connect()
@@ -398,6 +445,27 @@ async def get_candle_progressive():
     client.close()
 
 
+async def get_payout():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        asset_data = await client.check_asset_open("EURUSD_otc")
+        print(asset_data)
+
+    print("Exiting...")
+    client.close()
+
+
+# Function suggested by https://t.me/Suppor_Mk in the message https://t.me/c/2215782682/1/2990
+async def get_payout_by_asset():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        asset_data = client.get_payout_by_asset("AUDCAD_otc")
+        print(asset_data)
+
+    print("Exiting...")
+    client.close()
+
+
 async def get_payment():
     check_connect, message = await client.connect()
     if check_connect:
@@ -437,7 +505,7 @@ async def get_candles_all_asset():
     check_connect, message = await client.connect()
     if check_connect:
         offset = 3600  # in seconds
-        period = 60    # in seconds
+        period = 60  # in seconds
         for asset in codes_asset.keys():
             asset_name, asset_data = await client.get_available_asset(asset)
             if asset_data[2]:
@@ -451,6 +519,7 @@ async def get_candles_all_asset():
     print("Exiting...")
 
     client.close()
+
 
 async def get_realtime_candle():
     check_connect, message = await client.connect()
@@ -556,7 +625,8 @@ async def execute(argument):
 
 async def main():
     if len(sys.argv) != 2:
-        await test_connection()
+        await trade_and_monitor()
+        # await test_connection()
         # await get_balance()
         # await get_profile()
         # await buy_simple()
