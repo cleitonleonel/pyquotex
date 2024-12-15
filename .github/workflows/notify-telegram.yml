@@ -20,10 +20,16 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          escape_markdown() {
+            local input="$1"
+            echo "$input" | sed 's/[][\.*^$(){}?+|&]/\\&/g'
+          }
+
           if [ "${{ github.event_name }}" = "push" ]; then
             COMMIT_MESSAGE=$(git log -1 --pretty=%B)
             CLEAN_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/:[a-z_]*://g')
-            MESSAGE="📦 *New Push on Repository*\n\n🔧 Repository: ${{ github.repository }}\n👤 Actor: ${{ github.actor }}\n📝 Message Commit:\n${CLEAN_MESSAGE}"
+            ESCAPED_MESSAGE=$(escape_markdown "$CLEAN_MESSAGE")
+            MESSAGE="📦 *New Push on Repository*\n\n🔧 Repository: ${{ github.repository }}\n👤 Actor: ${{ github.actor }}\n📝 Message Commit:\n${ESCAPED_MESSAGE}"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             ACTION="${{ github.event.action }}"
             PR_URL="${{ github.event.pull_request.html_url }}"
