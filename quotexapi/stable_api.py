@@ -334,7 +334,7 @@ class Quotex(object):
 
         return assets_data
 
-    # Function suggested by https://t.me/Suppor_Mk in the message https://t.me/c/2215782682/1/2990
+    # Function suggested by https://t.me/Suppor_Mk in the message on telegram https://t.me/c/2215782682/1/2990
     def get_payout_by_asset(self, asset_name: str, timeframe: str = "1"):
         """Payout Quotex server"""
         assets_data = {}

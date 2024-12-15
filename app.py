@@ -234,9 +234,6 @@ async def trade_and_monitor():
         if asset_data[2]:
             print("OK: Asset is open.")
             status, buy_info = await client.buy(amount, asset_name, direction, duration)
-            print("Status:", status)
-            print("Buy Info:", buy_info)
-
             if status:
                 open_price = buy_info.get('openPrice')
                 close_timestamp = buy_info.get('closeTimestamp')
