@@ -54,6 +54,7 @@ def get_all_options():
     - get_profile
     - get_balance
     - get_signal_data
+    - trade_and_monitor
     - get_payment
     - get_candle
     - get_candle_v2
@@ -231,7 +232,7 @@ async def trade_and_monitor():
         print(asset_name, asset_data)
 
         if asset_data[2]:
-            print("OK: Asset está aberto.")
+            print("OK: Asset is open.")
             status, buy_info = await client.buy(amount, asset_name, direction, duration)
             print("Status:", status)
             print("Buy Info:", buy_info)
@@ -241,28 +242,28 @@ async def trade_and_monitor():
                 close_timestamp = buy_info.get('closeTimestamp')
                 print("Open Price:", open_price)
 
-                while True:
-                    prices = await client.get_realtime_price(asset_name)
-                    if not prices:
-                        continue
+                await asyncio.sleep(duration)
 
+                prices = await client.get_realtime_price(asset_name)
+                if prices:
                     current_price = prices[-1]['price']
                     current_timestamp = prices[-1]['time']
                     print(f"Current Time: {int(current_timestamp)}, Close Time: {close_timestamp}")
                     print(f"Current Price: {current_price}, Open Price: {open_price}")
-                    if int(current_timestamp) > close_timestamp:
 
-                        if current_price > open_price:
-                            print("Resultado: WIN ")
-                        elif current_price < open_price:
-                            print("Resultado: LOSS ")
-
-                        else:
-                            print("Resultado: NEUTRAL ")
-
-                        break
-
-                    await asyncio.sleep(0.2)
+                    if (direction == "call" and current_price > open_price) or (
+                            direction == "put" and current_price < open_price):
+                        print("Result: WIN")
+                        return 'Win'
+                    elif (direction == "call" and current_price <= open_price) or (
+                            direction == "put" and current_price >= open_price):
+                        print("Result: LOSS")
+                        return 'Loss'
+                    else:
+                        print("Result: DOJI")
+                        return 'Doji'
+                else:
+                    print("Not a price direction.")
             else:
                 print("Operation failed!!!")
         else:
@@ -452,6 +453,7 @@ async def get_payout():
         print(asset_data)
 
     print("Exiting...")
+
     client.close()
 
 
@@ -463,6 +465,7 @@ async def get_payout_by_asset():
         print(asset_data)
 
     print("Exiting...")
+
     client.close()
 
 
@@ -586,6 +589,8 @@ async def execute(argument):
             return await get_balance()
         case "get_signal_data":
             return await get_signal_data()
+        case "trade_and_monitor":
+            return await trade_and_monitor()
         case "get_payout":
             return await get_payout()
         case "get_payment":
@@ -625,7 +630,6 @@ async def execute(argument):
 
 async def main():
     if len(sys.argv) != 2:
-        await trade_and_monitor()
         # await test_connection()
         # await get_balance()
         # await get_profile()
