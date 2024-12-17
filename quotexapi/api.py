@@ -115,6 +115,7 @@ class QuotexAPI(object):
         self.historical_candles = {}
         self.candle_v2_data = {}
         self.realtime_price = {}
+        self.realtime_price_data = {}
         self.real_time_candles = {}
         self.realtime_sentiment = {}
         self.top_list_leader = {}
@@ -132,6 +133,7 @@ class QuotexAPI(object):
 
     def subscribe_realtime_candle(self, asset, period):
         self.realtime_price[asset] = []
+        self.realtime_price_data[asset] = []
         payload = {
             "asset": asset,
             "period": period
@@ -188,6 +190,7 @@ class QuotexAPI(object):
             "amount": amount
         }
         data = f'42["pending/create",{json.dumps(payload)}]'
+
         self.send_websocket_request(data)
 
     def instruments_follow(self, amount, asset, direction, duration, open_time):

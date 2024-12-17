@@ -1,3 +1,4 @@
+import time
 from quotexapi.utils.services import group_by_period
 
 
@@ -8,6 +9,56 @@ def get_color(candle):
         return 'red'
     else:
         return 'gray'
+
+
+def process_tick(tick, candles, period=60):
+    pair, timestamp, price, direction = tick
+    timestamp = int(timestamp)
+
+    start_time = (timestamp // period) * period
+
+    if pair not in candles:
+        candles[pair] = {}
+
+    if start_time not in candles[pair]:
+        candles[pair][start_time] = {
+            "open": price,
+            "close": price,
+            "high": price,
+            "low": price,
+            "ticks": [],
+        }
+
+    current_candle = candles[pair][start_time]
+    current_candle["close"] = price
+    current_candle["high"] = max(current_candle["high"], price)
+    current_candle["low"] = min(current_candle["low"], price)
+    current_candle["ticks"].append(tick)  # Armazena o tick para análises futuras
+
+    current_time = int(time.time())
+    candles[pair] = {k: v for k, v in candles[pair].items() if k > current_time - period * 10}
+
+    return candles
+
+
+def get_last_n_candles(pair, candles, n=3):
+    if pair not in candles:
+        return []
+
+    sorted_periods = sorted(candles[pair].keys(), reverse=True)
+
+    last_n_candles = []
+    for period in sorted_periods[:n]:
+        candle = candles[pair][period]
+        last_n_candles.append({
+            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(period)),
+            "open": candle["open"],
+            "close": candle["close"],
+            "high": candle["high"],
+            "low": candle["low"],
+        })
+
+    return last_n_candles
 
 
 def process_candles(history, period):

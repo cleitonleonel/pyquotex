@@ -35,7 +35,7 @@ def get_expiration_time_quotex(timestamp, duration):
     return date_to_timestamp(exp_date)
 
 
-def get_next_timeframe(timestamp, time_zone, timeframe: int) -> str:
+def get_next_timeframe(timestamp, time_zone, timeframe: int, open_time: str = None) -> str:
     """
     Calculate the next timestamp based on the given timeframe in seconds.
     The timestamp will be rounded up to the nearest multiple of the timeframe.
@@ -44,15 +44,22 @@ def get_next_timeframe(timestamp, time_zone, timeframe: int) -> str:
         timestamp: timestamp in seconds.
         time_zone (int): The timezone of the timestamp.
         timeframe (int): The timeframe in seconds to round to.
+        open_time (str): The opening time of the timestamp.
 
     Returns:
         str: The next rounded date based on the timeframe.
     """
     now_date = datetime.fromtimestamp(timestamp)
-    seconds_passed = now_date.second + now_date.minute * 60
-    next_timeframe_seconds = ((seconds_passed // timeframe) + 2) * timeframe
-    next_time = now_date + timedelta(seconds=next_timeframe_seconds - seconds_passed)
-    next_time = next_time.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
+    if open_time:
+        current_year = now_date.year
+        full_date_time = f"{current_year}/{open_time}"
+        date_time_obj = datetime.strptime(full_date_time, "%Y/%d/%m %H:%M:%S")
+        next_time = date_time_obj.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
+    else:
+        seconds_passed = now_date.second + now_date.minute * 60
+        next_timeframe_seconds = ((seconds_passed // timeframe) + 2) * timeframe
+        next_time = now_date + timedelta(seconds=next_timeframe_seconds - seconds_passed)
+        next_time = next_time.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
 
     return next_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 

@@ -140,6 +140,7 @@ class WebsocketClient(object):
                     "price": message[0][2]
                 }
                 self.api.realtime_price[message[0][0]].append(result)
+                self.api.realtime_price_data[message[0][0]] = message[0]
             elif len(message[0]) == 2:
                 for i in message:
                     result = {

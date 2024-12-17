@@ -285,14 +285,15 @@ class Quotex(object):
             status_buy = True
         return status_buy, self.api.buy_successful
 
-    async def open_pending(self, amount: float, asset: str, direction: str, duration: int):
+    async def open_pending(self, amount: float, asset: str, direction: str, duration: int, open_time: str = None):
         self.api.pending_id = None
         user_settings = await self.get_profile()
         offset_zone = user_settings.offset
         open_time = expiration.get_next_timeframe(
             int(self.api.timesync.server_timestamp),
             offset_zone,
-            duration
+            duration,
+            open_time
         )
         self.api.open_pending(amount, asset, direction, duration, open_time)
         count = 0.1
@@ -393,7 +394,6 @@ class Quotex(object):
         self.api.signals_subscribe()
 
     async def get_realtime_candles(self, asset: str, period: int = 0):
-        self.start_candles_stream(asset, period)
         while True:
             if self.api.candle_v2_data.get(asset):
                 candles = self.prepare_candles(asset, period)
@@ -402,9 +402,12 @@ class Quotex(object):
                 return self.api.real_time_candles
             await asyncio.sleep(0.2)
 
-    async def start_realtime_price(self,  asset: str, period: int = 0):
-        self.api.subscribe_realtime_candle(asset, period)
-        self.api.follow_candle(asset)
+    async def start_realtime_price(self, asset: str, period: int = 0):
+        self.start_candles_stream(asset, period)
+        while True:
+            if self.api.realtime_price.get(asset):
+                return self.api.realtime_price
+            await asyncio.sleep(0.2)
 
     async def get_realtime_price(self, asset: str):
         return self.api.realtime_price.get(asset, {})

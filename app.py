@@ -62,6 +62,7 @@ def get_all_options():
     - get_realtime_candle
     - get_candles_all_asset
     - get_realtime_sentiment
+    - get_realtime_price
     - assets_open
     - buy_simple
     - buy_and_check_win
@@ -241,7 +242,10 @@ async def trade_and_monitor():
 
                 await asyncio.sleep(duration)
 
+                await client.start_realtime_price(asset, 60)
+
                 prices = await client.get_realtime_price(asset_name)
+
                 if prices:
                     current_price = prices[-1]['price']
                     current_timestamp = prices[-1]['time']
@@ -269,7 +273,8 @@ async def trade_and_monitor():
     else:
         print("Unable to connect to client.")
 
-    print("Saindo...")
+    print("Exiting...")
+
     client.close()
 
 
@@ -320,11 +325,15 @@ async def buy_pending():
         asset = "AUDCAD"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
+
+        # Format d/m h:m
+        open_time = "16/12 15:51" # If None, then this will be set to the equivalent of one minute in duration
+
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset is open.")
-            status, buy_info = await client.open_pending(amount, asset_name, direction, duration)
+            status, buy_info = await client.open_pending(amount, asset_name, direction, duration, open_time)
             print(status, buy_info)
         else:
             print("ERRO: Asset is closed.")
@@ -533,6 +542,10 @@ async def get_realtime_candle():
             while True:
                 candles = await client.get_realtime_candles(asset_name, period)
                 print(candles)
+                """for _, candle in candles.items():
+                    open_price = candle["open"]
+                    print(f"Vela atual ({asset_name}): abertura = {open_price}", end="\r")
+                """
                 await asyncio.sleep(1)
         else:
             print("ERRO: Asset is closed.")
@@ -553,6 +566,31 @@ async def get_realtime_sentiment():
             while True:
                 print(await client.get_realtime_sentiment(asset_name), end="\r")
                 await asyncio.sleep(0.5)
+        else:
+            print("ERRO: Asset is closed.")
+
+    print("Exiting...")
+
+    client.close()
+
+
+async def get_realtime_price():
+    check_connect, message = await client.connect()
+    if check_connect:
+        asset = "EURJPY_otc"
+        asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
+        if asset_data[2]:
+            print("OK: Asset is open.")
+            await client.start_realtime_price(asset, 60)
+            while True:
+                candle_price = await client.get_realtime_price(asset_name)
+                print(
+                    f"Asset: {asset} "
+                    f"Time: {candle_price[-1]['time']} "
+                    f"Price: {candle_price[-1]['price']}",
+                    end="\r"
+                )
+                await asyncio.sleep(0.1)
         else:
             print("ERRO: Asset is closed.")
 
@@ -606,6 +644,8 @@ async def execute(argument):
             return await get_realtime_candle()
         case "get_realtime_sentiment":
             return await get_realtime_sentiment()
+        case "get_realtime_price":
+            return await get_realtime_price()
         case "buy_simple":
             return await buy_simple()
         case "get_result":
