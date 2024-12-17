@@ -52,7 +52,13 @@ def get_next_timeframe(timestamp, time_zone, timeframe: int, open_time: str = No
     now_date = datetime.fromtimestamp(timestamp)
     if open_time:
         current_year = now_date.year
-        full_date_time = f"{current_year}/{open_time}"
+        if len(open_time.split()[-1]) == 5:
+            open_time = f"{open_time}:00"
+
+        full_date_time = open_time
+        if len(open_time.split('/')[0]) != 4:
+            full_date_time = f"{current_year}/{open_time}"
+
         date_time_obj = datetime.strptime(full_date_time, "%Y/%d/%m %H:%M:%S")
         next_time = date_time_obj.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
     else:
