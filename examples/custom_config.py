@@ -1,3 +1,5 @@
+# examples/custom_config.py
+
 import asyncio
 import logging
 from quotexapi.stable_api import Quotex

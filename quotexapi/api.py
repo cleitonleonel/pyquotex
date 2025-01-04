@@ -1,3 +1,5 @@
+# quotexapi/api.py
+
 """Module for Quotex websocket."""
 import os
 import sys

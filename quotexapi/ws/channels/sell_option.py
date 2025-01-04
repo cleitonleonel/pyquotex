@@ -1,3 +1,5 @@
+# quotexapi/ws/channels/sell_option.py
+
 import json
 from quotexapi.ws.channels.base import Base
 
