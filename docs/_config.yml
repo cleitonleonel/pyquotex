@@ -1,0 +1,10 @@
+theme: jekyll-theme-minimal
+title: PyQuotex Documentation | Documentação | Documentación
+description: >
+  pyquotex is a Python library designed to easily integrate with the Quotex API, enabling
+  automated trading operations. Fully open-source and licensed under MIT, the library
+  provides features like order execution, balance checking, real-time market data collection,
+  and more. Perfect for traders and developers looking to build efficient and customized solutions.
+author: Cleiton Leonel Creton
+repository: https://github.com/cleitonleonel/pyquotex
+license: MIT

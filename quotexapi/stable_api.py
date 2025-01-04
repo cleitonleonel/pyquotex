@@ -7,7 +7,6 @@ from datetime import datetime
 from . import expiration
 from . import global_value
 from .api import QuotexAPI
-from .constants import codes_asset
 from .utils.services import truncate
 from .utils.processor import (
     calculate_candles,
@@ -24,7 +23,7 @@ __version__ = "1.0.0"
 logger = logging.getLogger(__name__)
 
 
-class Quotex(object):
+class Quotex:
 
     def __init__(
             self,
@@ -66,6 +65,7 @@ class Quotex(object):
         self.subscribe_mood = []
         self.account_is_demo = 1
         self.suspend = 0.2
+        self.codes_asset = {}
         self.api = None
         self.duration = None
         self.websocket_client = None
@@ -141,6 +141,14 @@ class Quotex(object):
                 self.api.current_asset = asset_name
                 return i[0], i[2].replace("\n", ""), i[14]
 
+    async def get_all_assets(self):
+        instruments = await self.get_instruments()
+        for i in instruments:
+            if i[0] != "":
+                self.codes_asset[i[1]] = i[0]
+
+        return self.codes_asset
+
     async def get_candles(self, asset, end_from_time, offset, period, progressive=False):
         if end_from_time is None:
             end_from_time = time.time()
@@ -167,7 +175,7 @@ class Quotex(object):
         self.api.current_asset = asset
         self.api.historical_candles = None
         self.start_candles_stream(asset)
-        self.api.get_history_line(codes_asset[asset], index, end_from_time, offset)
+        self.api.get_history_line(self.codes_asset[asset], index, end_from_time, offset)
         while True:
             while self.check_connect and self.api.historical_candles is None:
                 await asyncio.sleep(0.2)
@@ -226,6 +234,9 @@ class Quotex(object):
             return await self.connect()
 
         return check, reason
+
+    async def reconnect(self):
+        await self.api.authenticate()
 
     def set_account_mode(self, balance_mode="PRACTICE"):
         """Set active account `real` or `practice`"""
@@ -347,6 +358,7 @@ class Quotex(object):
                     "turbo_payment": i[18],
                     "payment": i[5],
                     "profit": {
+                        "24H": i[-10],
                         "1M": i[-9],
                         "5M": i[-8]
                     },
@@ -464,7 +476,7 @@ class Quotex(object):
             except:
                 pass
             try:
-                self.api.follow_candle(codes_asset[asset])
+                self.api.follow_candle(self.codes_asset[asset])
             except:
                 logger.error('**error** start_candles_stream reconnect')
                 await self.connect()
@@ -485,7 +497,7 @@ class Quotex(object):
             except:
                 pass
             try:
-                self.api.subscribe_all_size(codes_asset[asset])
+                self.api.subscribe_all_size(self.codes_asset[asset])
             except:
                 logger.error(
                     '**error** start_candles_all_size_stream reconnect')
@@ -499,7 +511,7 @@ class Quotex(object):
             self.api.subscribe_Traders_mood(
                 asset[asset], instrument)
             try:
-                self.api.traders_mood[codes_asset[asset]] = codes_asset[asset]
+                self.api.traders_mood[self.codes_asset[asset]] = self.codes_asset[asset]
                 break
             finally:
                 await asyncio.sleep(0.2)

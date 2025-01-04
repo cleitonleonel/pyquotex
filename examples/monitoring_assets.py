@@ -8,7 +8,6 @@ from quotexapi.config import (
     password
 )
 from quotexapi.stable_api import Quotex
-from quotexapi.constants import codes_asset
 from quotexapi.utils.processor import process_candles, get_color
 
 logging.basicConfig(
@@ -57,9 +56,9 @@ async def main():
         password=password,
         lang="pt",  # Default pt -> Português.
     )
-
     check_connect, message = await client.connect()
     if check_connect:
+        codes_asset = await client.get_all_assets()
         assets = list(codes_asset.keys())[:30]
         start_time = time.time()
         await process_all_assets(client, assets)

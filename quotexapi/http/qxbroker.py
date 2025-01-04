@@ -46,7 +46,6 @@ class Browser(object):
     password = None
     email_pass = None
     args = [
-        '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
         '--disable-web-security',
@@ -90,10 +89,7 @@ class Browser(object):
                 args=self.args,
                 user_agent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0",
                 headless=True,
-                viewport={
-                    "width": 1920,
-                    "height": 1080,
-                }
+                viewport=None,
             )
             page = context.pages[0]
         else:
@@ -102,10 +98,7 @@ class Browser(object):
                 args=self.args,
             )
             context = await browser.new_context(
-                viewport={
-                    "width": 1920,
-                    "height": 1080,
-                },
+                viewport=None,
                 user_agent='Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0',
             )
             page = await context.new_page()

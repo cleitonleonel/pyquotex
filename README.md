@@ -128,7 +128,7 @@ from quotexapi.expiration import (
     get_timestamp_days_ago
 )
 from quotexapi.stable_api import Quotex
-from quotexapi.constants import codes_asset
+
 from quotexapi.utils.processor import process_candles, get_color
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
@@ -511,6 +511,7 @@ async def get_candles_all_asset():
     if check_connect:
         offset = 3600  # in seconds
         period = 60    # in seconds
+        codes_asset = await client.get_all_assets()
         for asset in codes_asset.keys():
             asset_name, asset_data = await client.get_available_asset(asset)
             if asset_data[2]:
@@ -649,3 +650,91 @@ if __name__ == "__main__":
         loop.close()
 
 ```
+
+# Available Functions in the Script 🚀
+
+This script provides various functionalities to interact with the Quotex API. Each function is designed to perform specific tasks, from the initial connection to financial operations and data retrieval. Check out the details below:
+
+---
+
+### 🔌 Server Connection
+
+- **`connect(attempts=5)`**
+  - Attempts to connect to the Quotex server with multiple retries in case of failure. Includes automatic reconnection and session cleanup if necessary.
+
+---
+
+### ✅ Connection Tests
+
+- **`test_connection()`**
+  - Verifies if the connection to the server was successful and prints the status.
+
+---
+
+### 💰 Balance Management
+
+- **`get_balance()`**
+  - Retrieves the current account balance (demo or real).
+
+- **`balance_refill()`**
+  - Refills the demo account balance to a default value.
+
+---
+
+### 🛒 Purchase Operations
+
+- **`buy_simple()`**
+  - Executes a simple purchase operation with specified parameters like asset, direction, duration, and amount.
+
+- **`buy_and_check_win()`**
+  - Performs a purchase and waits for the result to check if the operation was profitable.
+
+- **`buy_multiple(orders=10)`**
+  - Executes multiple purchase operations in sequence, randomly selecting between different assets and configurations.
+
+---
+
+### 📊 Profile and Asset Data
+
+- **`get_profile()`**
+  - Retrieves user profile information, such as demo balance, real balance, and profile ID.
+
+- **`assets_open()`**
+  - Lists all available assets and checks which ones are open for trading.
+
+- **`get_payout()`**
+  - Checks the payout percentage of a specific asset.
+
+---
+
+### 🕯️ Candlestick Data
+
+- **`get_candle()`**
+  - Retrieves historical candlestick data for a specific asset over a given period.
+
+- **`get_candle_progressive()`**
+  - Fetches progressive historical candlestick data covering a larger period.
+
+---
+
+### 🔄 Option Selling
+
+- **`sell_option()`**
+  - Performs an early sale of a previously purchased option based on the operation ID.
+
+---
+
+### 🔍 Utilities and Support
+
+- **`get_all_options()`**
+  - Lists all available options in this script, including test functions, operations, and queries.
+
+- **`asset_parse(asset: str)`**
+  - Formats the name of an asset for more user-friendly display, highlighting if it is OTC.
+
+---
+
+💡 **Note**: Ensure that your login credentials are correctly configured before running the functions.
+
+🎉 Enjoy the script to automate and simplify your operations on Quotex!
+
