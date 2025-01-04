@@ -19,6 +19,7 @@ from .config import (
     update_session,
     resource_path
 )
+from .utils.indicators import TechnicalIndicators
 
 __version__ = "1.0.0"
 logger = logging.getLogger(__name__)
@@ -255,6 +256,303 @@ class Quotex(object):
         balance = self.api.account_balance.get("demoBalance") \
             if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
         return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
+
+    # Agregar al archivo stable_api.py dentro de la clase Quotex
+
+    async def calculate_indicator(self, asset: str, indicator: str, params: dict = None, history_size: int = 3600,
+                                  timeframe: int = 60) -> dict:
+        """
+        Calcula indicadores técnicos para un activo dado
+
+        Args:
+            asset (str): Nombre del activo (ej: "EURUSD")
+            indicator (str): Nombre del indicador
+            params (dict): Parámetros específicos del indicador
+            history_size (int): Tamaño del histórico en segundos
+            timeframe (int): Temporalidad en segundos. Valores posibles:
+                - 60: 1 minuto
+                - 300: 5 minutos
+                - 900: 15 minutos
+                - 1800: 30 minutos
+                - 3600: 1 hora
+                - 7200: 2 horas
+                - 14400: 4 horas
+                - 86400: 1 día
+        """
+        # Validar timeframe
+        valid_timeframes = [60, 300, 900, 1800, 3600, 7200, 14400, 86400]
+        if timeframe not in valid_timeframes:
+            return {"error": f"Timeframe no válido. Valores permitidos: {valid_timeframes}"}
+
+        # Ajustar history_size para asegurar suficientes velas según el timeframe
+        adjusted_history = max(history_size, timeframe * 50)  # Asegurar al menos 50 velas
+
+        candles = await self.get_candles(asset, time.time(), adjusted_history, timeframe)
+
+        if not candles:
+            return {"error": f"No hay datos disponibles para el activo {asset}"}
+
+        prices = [float(candle["close"]) for candle in candles]
+        highs = [float(candle["high"]) for candle in candles]
+        lows = [float(candle["low"]) for candle in candles]
+        timestamps = [candle["time"] for candle in candles]
+
+        indicators = TechnicalIndicators()
+        indicator = indicator.upper()
+
+        try:
+            # RSI
+            if indicator == "RSI":
+                period = params.get("period", 14)
+                values = indicators.calculate_rsi(prices, period)
+                return {
+                    "rsi": values,
+                    "current": values[-1] if values else None,
+                    "history_size": len(values),
+                    "timeframe": timeframe,
+                    "timestamps": timestamps[-len(values):] if values else []
+                }
+
+            # MACD
+            elif indicator == "MACD":
+                fast_period = params.get("fast_period", 12)
+                slow_period = params.get("slow_period", 26)
+                signal_period = params.get("signal_period", 9)
+                macd_data = indicators.calculate_macd(prices, fast_period, slow_period, signal_period)
+                macd_data["timeframe"] = timeframe
+                macd_data["timestamps"] = timestamps[-len(macd_data["macd"]):] if macd_data["macd"] else []
+                return macd_data
+
+            # SMA
+            elif indicator == "SMA":
+                period = params.get("period", 20)
+                values = indicators.calculate_sma(prices, period)
+                return {
+                    "sma": values,
+                    "current": values[-1] if values else None,
+                    "history_size": len(values),
+                    "timeframe": timeframe,
+                    "timestamps": timestamps[-len(values):] if values else []
+                }
+
+            # EMA
+            elif indicator == "EMA":
+                period = params.get("period", 20)
+                values = indicators.calculate_ema(prices, period)
+                return {
+                    "ema": values,
+                    "current": values[-1] if values else None,
+                    "history_size": len(values),
+                    "timeframe": timeframe,
+                    "timestamps": timestamps[-len(values):] if values else []
+                }
+
+            # BOLLINGER
+            elif indicator == "BOLLINGER":
+                period = params.get("period", 20)
+                num_std = params.get("std", 2)
+                bb_data = indicators.calculate_bollinger_bands(prices, period, num_std)
+                bb_data["timeframe"] = timeframe
+                bb_data["timestamps"] = timestamps[-len(bb_data["middle"]):] if bb_data["middle"] else []
+                return bb_data
+
+            # STOCHASTIC
+            elif indicator == "STOCHASTIC":
+                k_period = params.get("k_period", 14)
+                d_period = params.get("d_period", 3)
+                stoch_data = indicators.calculate_stochastic(prices, highs, lows, k_period, d_period)
+                stoch_data["timeframe"] = timeframe
+                stoch_data["timestamps"] = timestamps[-len(stoch_data["k"]):] if stoch_data["k"] else []
+                return stoch_data
+
+            # ATR
+            elif indicator == "ATR":
+                period = params.get("period", 14)
+                values = indicators.calculate_atr(highs, lows, prices, period)
+                return {
+                    "atr": values,
+                    "current": values[-1] if values else None,
+                    "history_size": len(values),
+                    "timeframe": timeframe,
+                    "timestamps": timestamps[-len(values):] if values else []
+                }
+
+            # ADX
+            elif indicator == "ADX":
+                period = params.get("period", 14)
+                adx_data = indicators.calculate_adx(highs, lows, prices, period)
+                adx_data["timeframe"] = timeframe
+                adx_data["timestamps"] = timestamps[-len(adx_data["adx"]):] if adx_data["adx"] else []
+                return adx_data
+
+            # ICHIMOKU
+            elif indicator == "ICHIMOKU":
+                tenkan_period = params.get("tenkan_period", 9)
+                kijun_period = params.get("kijun_period", 26)
+                senkou_b_period = params.get("senkou_b_period", 52)
+                ichimoku_data = indicators.calculate_ichimoku(highs, lows, tenkan_period, kijun_period, senkou_b_period)
+                ichimoku_data["timeframe"] = timeframe
+                ichimoku_data["timestamps"] = timestamps[-len(ichimoku_data["tenkan"]):] if ichimoku_data[
+                    "tenkan"] else []
+                return ichimoku_data
+
+            else:
+                return {"error": f"Indicador '{indicator}' no soportado"}
+
+        except Exception as e:
+            return {"error": f"Error calculando el indicador: {str(e)}"}
+
+    async def subscribe_indicator(self, asset: str, indicator: str, params: dict = None, callback=None,
+                                  timeframe: int = 60):
+        """
+        Suscribe a actualizaciones en tiempo real de un indicador
+
+        Args:
+            asset (str): Nombre del activo
+            indicator (str): Nombre del indicador
+            params (dict): Parámetros del indicador
+            callback (callable): Función que se llamará con cada actualización
+            timeframe (int): Temporalidad en segundos
+        """
+        if not callback:
+            raise ValueError("Debe proporcionar una función callback")
+
+        # Validar timeframe
+        valid_timeframes = [60, 300, 900, 1800, 3600, 7200, 14400, 86400]
+        if timeframe not in valid_timeframes:
+            raise ValueError(f"Timeframe no válido. Valores permitidos: {valid_timeframes}")
+
+        try:
+            # Iniciar stream de velas
+            self.start_candles_stream(asset, timeframe)
+
+            while True:
+                try:
+                    # Obtener velas en tiempo real
+                    real_time_candles = await self.get_realtime_candles(asset, timeframe)
+
+                    if real_time_candles:
+                        # Convertir el diccionario a lista ordenada por tiempo
+                        candles_list = sorted(real_time_candles.items(), key=lambda x: x[0])
+
+                        # Extraer datos de las velas
+                        prices = [float(candle[1]["close"]) for candle in candles_list]
+                        highs = [float(candle[1]["high"]) for candle in candles_list]
+                        lows = [float(candle[1]["low"]) for candle in candles_list]
+
+                        # Asegurar que tenemos suficientes datos
+                        min_periods = {
+                            "RSI": 14,
+                            "MACD": 26,
+                            "BOLLINGER": 20,
+                            "STOCHASTIC": 14,
+                            "ADX": 14,
+                            "ATR": 14,
+                            "SMA": 20,
+                            "EMA": 20,
+                            "ICHIMOKU": 52
+                        }
+
+                        required_periods = min_periods.get(indicator.upper(), 14)
+                        if len(prices) < required_periods:
+                            # Si no hay suficientes datos, obtener histórico
+                            historical_candles = await self.get_candles(
+                                asset,
+                                time.time(),
+                                timeframe * required_periods * 2,  # Doble del período requerido
+                                timeframe
+                            )
+                            if historical_candles:
+                                # Combinar datos históricos con tiempo real
+                                prices = [float(candle["close"]) for candle in historical_candles] + prices
+                                highs = [float(candle["high"]) for candle in historical_candles] + highs
+                                lows = [float(candle["low"]) for candle in historical_candles] + lows
+
+                        indicators = TechnicalIndicators()
+                        indicator = indicator.upper()
+
+                        # Calcular el indicador con los datos actualizados
+                        result = {
+                            "time": candles_list[-1][0],
+                            "timeframe": timeframe,
+                            "asset": asset
+                        }
+
+                        if indicator == "RSI":
+                            period = params.get("period", 14)
+                            values = indicators.calculate_rsi(prices, period)
+                            result["value"] = values[-1] if values else None
+                            result["all_values"] = values
+                            result["indicator"] = "RSI"
+
+                        elif indicator == "MACD":
+                            fast_period = params.get("fast_period", 12)
+                            slow_period = params.get("slow_period", 26)
+                            signal_period = params.get("signal_period", 9)
+                            macd_data = indicators.calculate_macd(prices, fast_period, slow_period, signal_period)
+                            result["value"] = macd_data["current"]
+                            result["all_values"] = macd_data
+                            result["indicator"] = "MACD"
+
+                        # BOLLINGER
+                        elif indicator == "BOLLINGER":
+                            period = params.get("period", 20)
+                            num_std = params.get("std", 2)
+                            bb_data = indicators.calculate_bollinger_bands(prices, period, num_std)
+                            result["value"] = bb_data["current"]
+                            result["all_values"] = bb_data
+
+                        # STOCHASTIC
+                        elif indicator == "STOCHASTIC":
+                            k_period = params.get("k_period", 14)
+                            d_period = params.get("d_period", 3)
+                            stoch_data = indicators.calculate_stochastic(prices, highs, lows, k_period, d_period)
+                            result["value"] = stoch_data["current"]
+                            result["all_values"] = stoch_data
+
+                        # ADX
+                        elif indicator == "ADX":
+                            period = params.get("period", 14)
+                            adx_data = indicators.calculate_adx(highs, lows, prices, period)
+                            result["value"] = adx_data["current"]
+                            result["all_values"] = adx_data
+
+                        # ATR
+                        elif indicator == "ATR":
+                            period = params.get("period", 14)
+                            values = indicators.calculate_atr(highs, lows, prices, period)
+                            result["value"] = values[-1] if values else None
+                            result["all_values"] = values
+
+                        # ICHIMOKU
+                        elif indicator == "ICHIMOKU":
+                            tenkan_period = params.get("tenkan_period", 9)
+                            kijun_period = params.get("kijun_period", 26)
+                            senkou_b_period = params.get("senkou_b_period", 52)
+                            ichimoku_data = indicators.calculate_ichimoku(highs, lows, tenkan_period, kijun_period,
+                                                                          senkou_b_period)
+                            result["value"] = ichimoku_data["current"]
+                            result["all_values"] = ichimoku_data
+
+                        else:
+                            result["error"] = f"Indicador '{indicator}' no soportado para tiempo real"
+
+                    # Llamar al callback con el resultado
+                        await callback(result)
+
+                    await asyncio.sleep(1)  # Esperar 1 segundo entre actualizaciones
+
+                except Exception as e:
+                    print(f"Error en la suscripción: {str(e)}")
+                    await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"Error en la suscripción: {str(e)}")
+        finally:
+            # Limpiar suscripciones al salir
+            try:
+                self.stop_candles_stream(asset)
+            except:
+                pass
 
     async def get_profile(self):
         return await self.api.get_profile()
