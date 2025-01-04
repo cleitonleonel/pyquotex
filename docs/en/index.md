@@ -9,16 +9,16 @@ Welcome to the pyquotex documentation!
 
 ## Sections
 
-- [Installation and Configuration](1.%20Installation%20and%20Configuration.md)
-- [Connection and Authentication](2.%20Connection%20and%20Authentication.md)
-- [Trading Operations](3.%20Trading%20Operations.md)
-- [Market Data Retrieval](4.%20Market%20Data%20Retrieval.md)
-- [Account Management](5.%20Account%20Management.md)
-- [WebSocket Management](6.%20WebSocket.md)
-- [Utilities and Helpers](7.%20Utilities%20and%20Helpers.md)
-- [Technical Aspects](8.%20Technical%20Aspects.md)
-- [Basic Examples](9.%20Basic%20Examples.md)
-- [Considerations and Warnings](10.%20Considerations%20and%20Warnings.md)
+- [Installation and Configuration](1.%20Installation%20and%20Configuration)
+- [Connection and Authentication](2.%20Connection%20and%20Authentication)
+- [Trading Operations](3.%20Trading%20Operations)
+- [Market Data Retrieval](4.%20Market%20Data%20Retrieval)
+- [Account Management](5.%20Account%20Management)
+- [WebSocket Management](6.%20WebSocket)
+- [Utilities and Helpers](7.%20Utilities%20and%20Helpers)
+- [Technical Aspects](8.%20Technical%20Aspects)
+- [Basic Examples](9.%20Basic%20Examples)
+- [Considerations and Warnings](10.%20Considerations%20and%20Warnings)
 
 ---
 
