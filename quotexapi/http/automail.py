@@ -1,3 +1,5 @@
+# quotexapi/http/automail.py
+
 import re
 import imaplib
 import email

@@ -1,3 +1,5 @@
+# quotexapi/utils/processor.py
+
 import time
 from quotexapi.utils.services import group_by_period
 

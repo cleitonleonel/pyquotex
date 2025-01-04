@@ -1,3 +1,5 @@
+# examples/monitoring_assets.py
+
 import time
 import asyncio
 import logging

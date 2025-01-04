@@ -1,3 +1,5 @@
+# quotexapi/ws/objects/base.py
+
 """Module for Quotex websocket object."""
 
 

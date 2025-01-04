@@ -1,3 +1,5 @@
+# quotexapi/http/navigator.py
+
 import random
 import requests
 from requests.adapters import HTTPAdapter

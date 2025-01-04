@@ -1,3 +1,5 @@
+# quotexapi/__init__.py
+
 """A python wrapper for Quotex API."""
 import logging
 

@@ -1,3 +1,5 @@
+# quotexapi/utils/services.py
+
 import math
 from collections import defaultdict
 

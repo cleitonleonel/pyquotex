@@ -1,3 +1,5 @@
+# quotexapi/__main__.py
+
 import sys
 import pyfiglet
 from pathlib import Path

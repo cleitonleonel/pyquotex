@@ -1,3 +1,5 @@
+# examples/trade_bot.py
+
 import asyncio
 from quotexapi.config import (
     email,

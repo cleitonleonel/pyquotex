@@ -1,3 +1,5 @@
+# quotexapi/http/resource.py
+
 """Module for base Quotex http base resource."""
 
 
