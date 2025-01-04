@@ -18,7 +18,7 @@ The documentation is organized in the following sections:
 - Basic Examples
 - Considerations and Warnings
 
-📚 Documentation is available in the `/docs/en` folder.
+📚 Documentation is available in here [English](en/index.md).
 
 ## 🇪🇸 Español
 
@@ -38,7 +38,7 @@ La documentación está organizada en las siguientes secciones:
 - Ejemplos Básicos
 - Consideraciones y Advertencias
 
-📚 La documentación está disponible en la carpeta `/docs/es`.
+📚 La documentación está disponible aquí [Español](es/index.md).
 
 ## 🇧🇷 Português
 
@@ -58,7 +58,7 @@ A documentação está organizada nas seguintes seções:
 - Exemplos Básicos
 - Considerações e Avisos
 
-📚 A documentação está disponível na pasta `/docs/pt`.
+📚 A documentação está disponível aqui [Português](pt/index.md).
 
 ---
 

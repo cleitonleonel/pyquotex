@@ -1,0 +1,25 @@
+---
+title: Documentação do pyquotex - Português
+description: Documentação completa do pyquotex em português.
+---
+
+# Documentação do pyquotex (Português)
+
+Bem-vindo à documentação do pyquotex!
+
+## Seções
+
+- [Instalação e Configuração](1.%20Instalação%20e%20Configuração.md)
+- [Conexão e Autenticação](2.%20Conexão%20e%20Autenticação.md)
+- [Operações de Trading](3.%20Operações%20de%20Trading.md)
+- [Recuperação de Dados do Mercado](4.%20Obtenção%20de%20Dados%20do%20Mercado.md)
+- [Gerenciamento de Conta](5.%20Gestão%20de%20Conta.md)
+- [Gerenciamento de WebSocket](6.%20WebSocket.md)
+- [Utilitários e Helpers](7.%20Utilitários%20e%20Helpers.md)
+- [Aspectos Técnicos](8.%20Aspectos%20Técnicos.md)
+- [Exemplos Básicos](9.%20Exemplos%20Básicos.md)
+- [Considerações e Avisos](10.%20Considerações%20e%20Advertências.md)
+
+---
+
+pyquotex é uma biblioteca Python projetada para integrar com a API da Quotex, permitindo operações automatizadas com facilidade.
