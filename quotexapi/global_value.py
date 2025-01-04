@@ -1,3 +1,5 @@
+# quotexapi/global_value.py
+
 # python
 SSID = None
 check_websocket_if_connect = None

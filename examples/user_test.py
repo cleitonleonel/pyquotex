@@ -1,3 +1,5 @@
+# examples/user_test.py
+
 import asyncio
 from quotexapi.stable_api import Quotex
 

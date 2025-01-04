@@ -1,3 +1,5 @@
+# quotexapi/utils/playwright_install.py
+
 from __future__ import annotations
 import subprocess
 from playwright._impl._driver import compute_driver_executable, get_driver_env

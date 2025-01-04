@@ -1,3 +1,5 @@
+# quotexapi/ws/objects/listinfodata.py
+
 """Module for Quotex Candles websocket object."""
 
 from quotexapi.ws.objects.base import Base

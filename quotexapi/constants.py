@@ -1,3 +1,5 @@
+# quotexapi/constants.py
+
 """Module for Quotex API constants."""
 
 codes_asset = {

@@ -1,3 +1,5 @@
+# quotexapi/ws/channels/ssid.py
+
 import json
 from quotexapi.ws.channels.base import Base
 

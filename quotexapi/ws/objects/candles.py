@@ -1,3 +1,5 @@
+# quotexapi/ws/objects/candles.py
+
 from quotexapi.ws.objects.base import Base
 
 
