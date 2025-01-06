@@ -12,6 +12,7 @@ The documentation is organized in the following sections:
 - Trading Operations
 - Market Data Retrieval
 - Account Management
+- Technical Indicators
 - WebSocket Management
 - Utilities and Helpers
 - Technical Aspects
@@ -32,6 +33,7 @@ La documentación está organizada en las siguientes secciones:
 - Operaciones de Trading
 - Obtención de Datos del Mercado
 - Gestión de Cuenta
+- Indicadores Técnicos
 - Gestión de WebSocket
 - Utilidades y Helpers
 - Aspectos Técnicos
@@ -52,6 +54,7 @@ A documentação está organizada nas seguintes seções:
 - Operações de Trading
 - Recuperação de Dados do Mercado
 - Gerenciamento de Conta
+- Indicadores Técnicos
 - Gerenciamento de WebSocket
 - Utilitários e Helpers
 - Aspectos Técnicos
