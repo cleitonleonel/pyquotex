@@ -14,11 +14,12 @@ description: Documentación completa de pyquotex en español.
 - [Operaciones de Trading](3.%20Operaciones%20de%20Trading)
 - [Obtención de Datos del Mercado](4.%20Obtención%20de%20Datos%20del%20Mercado)
 - [Gestión de Cuenta](5.%20Gestión%20de%20Cuenta)
-- [Gestión de WebSocket](6.%20WebSocket)
-- [Utilidades y Helpers](7.%20Utilidades%20y%20Helpers)
-- [Aspectos Técnicos](8.%20Aspectos%20Técnicos)
+- [Indicadores Técnicos](6.Indicadores%20Técnicos)
+- [WebSocket](7.%20WebSocket)
+- [Utilidades y Helpers](8.%20Utilidades%20y%20Helpers)
 - [Ejemplos Básicos](9.%20Ejemplos%20Básicos)
-- [Consideraciones y Advertencias](10.%20Consideraciones%20y%20Advertencias)
+- [Aspectos Técnicos](10.%20Aspectos%20Técnicos)
+- [Consideraciones y Advertencias](11.%20Consideraciones%20y%20Advertencias)
 
 ---
 

@@ -14,11 +14,12 @@ Welcome to the pyquotex documentation!
 - [Trading Operations](3.%20Trading%20Operations)
 - [Market Data Retrieval](4.%20Market%20Data%20Retrieval)
 - [Account Management](5.%20Account%20Management)
-- [WebSocket Management](6.%20WebSocket)
-- [Utilities and Helpers](7.%20Utilities%20and%20Helpers)
-- [Technical Aspects](8.%20Technical%20Aspects)
+- [Technical Indicators](6.%20Technical%20Indicators)
+- [WebSocket](7.%20WebSocket)
+- [Utilities and Helpers](8.%20Utilities%20and%20Helpers)
 - [Basic Examples](9.%20Basic%20Examples)
-- [Considerations and Warnings](10.%20Considerations%20and%20Warnings)
+- [Technical Aspects](10.%20Technical%20Aspects)
+- [Considerations and Warnings](11.%20Considerations%20and%20Warnings)
 
 ---
 

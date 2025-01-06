@@ -47,7 +47,7 @@ class WebsocketClient(object):
             self.wss.send('42["tick"]')
         try:
             if "authorization/reject" in str(message):
-                logger.info("Token rejeitado, fazendo reconexão automática.")
+                logger.debug("Token rejected, making automatic reconnection.")
                 global_value.check_rejected_connection = 1
             elif "s_authorization" in str(message):
                 global_value.check_accepted_connection = 1
@@ -117,7 +117,7 @@ class WebsocketClient(object):
                 pass
 
             if str(message) == "41":
-                logger.info("Evento de desconexão disparado pela plataforma, fazendo reconexão automática.")
+                logger.info("Disconnection event triggered by the platform, causing automatic reconnection.")
                 global_value.check_websocket_if_connect = 0
             if "51-" in str(message):
                 self.api._temp_status = str(message)
@@ -142,7 +142,7 @@ class WebsocketClient(object):
                     "price": message[0][2]
                 }
                 self.api.realtime_price[message[0][0]].append(result)
-                self.api.realtime_price_data[message[0][0]] = message[0]
+                self.api.realtime_price_data.append(message[0])
             elif len(message[0]) == 2:
                 for i in message:
                     result = {

@@ -270,8 +270,13 @@ class Quotex:
 
     # Agregar al archivo stable_api.py dentro de la clase Quotex
 
-    async def calculate_indicator(self, asset: str, indicator: str, params: dict = None, history_size: int = 3600,
-                                  timeframe: int = 60) -> dict:
+    async def calculate_indicator(
+            self, asset: str,
+            indicator: str,
+            params: dict = None,
+            history_size: int = 3600,
+            timeframe: int = 60
+    ) -> dict:
         """
         Calcula indicadores técnicos para un activo dado
 
@@ -413,8 +418,13 @@ class Quotex:
         except Exception as e:
             return {"error": f"Error calculando el indicador: {str(e)}"}
 
-    async def subscribe_indicator(self, asset: str, indicator: str, params: dict = None, callback=None,
-                                  timeframe: int = 60):
+    async def subscribe_indicator(
+            self, asset: str,
+            indicator: str,
+            params: dict = None,
+            callback=None,
+            timeframe: int = 60
+    ):
         """
         Suscribe a actualizaciones en tiempo real de un indicador
 
@@ -548,7 +558,7 @@ class Quotex:
                         else:
                             result["error"] = f"Indicador '{indicator}' no soportado para tiempo real"
 
-                    # Llamar al callback con el resultado
+                        # Llamar al callback con el resultado
                         await callback(result)
 
                     await asyncio.sleep(1)  # Esperar 1 segundo entre actualizaciones
@@ -577,12 +587,14 @@ class Quotex:
         account_type = "demo" if self.account_is_demo else "live"
         return await self.api.get_trader_history(account_type, page_number=1)
 
-    async def buy(self, amount: float, asset: str, direction: str, duration: int):
+    async def buy(self, amount: float, asset: str, direction: str, duration: int, time_mode: str = "TIMER"):
         """Buy Binary option"""
-        request_id = expiration.get_timestamp()
         self.api.buy_id = None
+        request_id = expiration.get_timestamp()
+        is_fast_option = True if time_mode.upper() == "TIME" else False
         self.start_candles_stream(asset, duration)
-        self.api.buy(amount, asset, direction, duration, request_id)
+        self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
+
         count = 0.1
         while self.api.buy_id is None:
             count += 0.1
@@ -594,6 +606,7 @@ class Quotex:
                 return False, global_value.websocket_error_reason
         else:
             status_buy = True
+
         return status_buy, self.api.buy_successful
 
     async def open_pending(self, amount: float, asset: str, direction: str, duration: int, open_time: str = None):
@@ -697,6 +710,60 @@ class Quotex:
         self.api.current_asset = asset
         self.api.subscribe_realtime_candle(asset, period)
         self.api.follow_candle(asset)
+
+    async def store_settings_apply(
+            self,
+            asset: str = "EURUSD",
+            period: int = 0,
+            time_mode: str = "TIMER",
+            deal: int = 5,
+            percent_mode: bool = False,
+            percent_deal: int = 1
+    ):
+        """
+        Applies trading settings for a specific asset and retrieves the updated investment settings.
+
+        This function sets up trading parameters for the specified asset, including the period,
+        deal amount, and percentage mode if applicable. It then waits for the updated investment
+        settings to be available and returns them.
+
+        Args:
+            asset (str): The asset for which to apply the settings.
+            period (int, optional): The trading period in seconds. Defaults to 0.
+            time_mode (bool, optional): Whether to switch time mode. Defaults to False.
+            deal (float, optional): The fixed amount for each deal. Defaults to 5.
+            percent_mode (bool, optional): Whether to enable percentage-based deals. Defaults to False.
+            percent_deal (float, optional): The percentage value for percentage-based deals. Defaults to 1.
+
+        Returns:
+            dict: The updated investment settings for the specified asset.
+
+        Raises:
+            ValueError: If the investment settings cannot be retrieved after multiple attempts.
+
+        Notes:
+            - This function continuously refreshes the settings until they are available.
+            - A sleep interval is used to prevent excessive API calls.
+        """
+        is_fast_option = False if time_mode.upper() == "TIMER" else True
+        self.api.current_asset = asset
+        self.api.settings_apply(
+            asset,
+            period,
+            is_fast_option=is_fast_option,
+            deal=deal,
+            percent_mode=percent_mode,
+            percent_deal=percent_deal
+        )
+        await asyncio.sleep(0.2)
+        while True:
+            self.api.refresh_settings()
+            if self.api.settings_list:
+                investments_settings = self.api.settings_list
+                break
+            await asyncio.sleep(0.2)
+
+        return investments_settings
 
     def stop_candles_stream(self, asset):
         self.api.unsubscribe_realtime_candle(asset)

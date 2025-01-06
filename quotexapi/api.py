@@ -117,7 +117,7 @@ class QuotexAPI(object):
         self.historical_candles = {}
         self.candle_v2_data = {}
         self.realtime_price = {}
-        self.realtime_price_data = {}
+        self.realtime_price_data = []
         self.real_time_candles = {}
         self.realtime_sentiment = {}
         self.top_list_leader = {}
@@ -135,12 +135,12 @@ class QuotexAPI(object):
 
     def subscribe_realtime_candle(self, asset, period):
         self.realtime_price[asset] = []
-        self.realtime_price_data[asset] = []
         payload = {
             "asset": asset,
             "period": period
         }
         data = f'42["instruments/update", {json.dumps(payload)}]'
+        print(data)
         return self.send_websocket_request(data)
 
     def follow_candle(self, asset):
@@ -150,6 +150,37 @@ class QuotexAPI(object):
     def unfollow_candle(self, asset):
         data = f'42["depth/unfollow", {json.dumps(asset)}]'
         return self.send_websocket_request(data)
+
+    def settings_apply(self, asset, duration, is_fast_option=False, end_time=None, deal=5, percent_mode=False, percent_deal=1):
+        payload = {
+            "chartId": "graph",
+            "settings": {
+                "chartId": "graph",
+                "chartType": 2,
+                "currentExpirationTime": int(time.time()) if not is_fast_option else end_time,
+                "isFastOption": is_fast_option,
+                "isFastAmountOption": percent_mode,
+                "isIndicatorsMinimized": False,
+                "isIndicatorsShowing": True,
+                "isShortBetElement": False,
+                "chartPeriod": 4,
+                "currentAsset": {
+                    "symbol": asset
+                },
+                "dealValue": deal,
+                "dealPercentValue": percent_deal,
+                "isVisible": True,
+                "timePeriod": duration,
+                "gridOpacity": 8,
+                "isAutoScrolling": 1,
+                "isOneClickTrade": True,
+                "upColor": "#0FAF59",
+                "downColor": "#FF6251"
+            }
+        }
+        data = f'42["settings/store",{json.dumps(payload)}]'
+        print(data)
+        self.send_websocket_request(data)
 
     def unsubscribe_realtime_candle(self, asset):
         data = f'42["subfor", {json.dumps(asset)}]'
@@ -212,8 +243,26 @@ class QuotexAPI(object):
         self.send_websocket_request(data)
 
     def indicators(self):
+        # 42["indicator/store",{"requestId":"X0edg3KVvtrbiTpm9kTpR","chartId":"graph","type":"zz","settings":{"lines":{"main":{"lineWidth":2,"color":"#D13939"}},"deviation":5,"depth":12,"backstep":3},"visible":1}]
+        # 451-["s_indicator/store",{"_placeholder":true,"num":0}]
+        # {"requestId":"X0edg3KVvtrbiTpm9kTpR","id":"367ae671-7619-4f5e-96de-5d4ebd2ca7dc"}
+
+        # 42["settings/store",{"chartId":"graph","settings":{"chartId":"graph","chartType":2,"currentExpirationTime":1734459660,"isFastOption":false,"isFastAmountOption":false,"isIndicatorsMinimized":false,"isIndicatorsShowing":true,"isShortBetElement":false,"chartPeriod":4,"currentAsset":{"symbol":"EURUSD"},"dealValue":5,"dealPercentValue":1,"isVisible":true,"timePeriod":60,"gridOpacity":8,"isAutoScrolling":1,"isOneClickTrade":true,"upColor":"#0FAF59","downColor":"#FF6251"}}]
+
+        # 42["indicator/change",{"id":"X0edg3KVvtrbiTpm9kTpR","settings":{"lines":{"main":{"lineWidth":2,"color":"#D13939"}},"deviation":5,"depth":12,"backstep":3}}]
+
         # 42["indicator/change",{"id":"Y5zYtYaUtjI6eUz06YlGF","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
-        # 42["indicator/delete", {"id": "23507dc2-05ca-4aec-9aef-55939735b3e0"}]
+        # 42["indicator/delete",{"id":"23507dc2-05ca-4aec-9aef-55939735b3e0"}]
+        # 42["indicator/delete",{"id":"367ae671-7619-4f5e-96de-5d4ebd2ca7dc"}]
+
+        # 42["indicator/store",{"requestId":"p_rQlJmbrY3ZNWyC8_jAh","chartId":"graph","type":"ma","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10},"visible":1}]
+        # 42["settings/store",{"chartId":"graph","settings":{"chartId":"graph","chartType":2,"currentExpirationTime":1734460020,"isFastOption":false,"isFastAmountOption":false,"isIndicatorsMinimized":false,"isIndicatorsShowing":true,"isShortBetElement":false,"chartPeriod":4,"currentAsset":{"symbol":"EURUSD"},"dealValue":5,"dealPercentValue":1,"isVisible":true,"timePeriod":60,"gridOpacity":8,"isAutoScrolling":1,"isOneClickTrade":true,"upColor":"#0FAF59","downColor":"#FF6251"}}]
+        # 42["indicator/change",{"id":"p_rQlJmbrY3ZNWyC8_jAh","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
+        # 42["indicator/change",{"id":"48d765c8-32ef-496e-84d7-981774adc771","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"WMA","period":10}}]
+        # 42["indicator/change",{"id":"48d765c8-32ef-496e-84d7-981774adc771","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"EMA","period":10}}]
+        # 42["indicator/change",{"id":"48d765c8-32ef-496e-84d7-981774adc771","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMMA","period":10}}]
+        # 42["indicator/change",{"id":"48d765c8-32ef-496e-84d7-981774adc771","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"TMA","period":10}}]
+        # 42["indicator/change",{"id":"48d765c8-32ef-496e-84d7-981774adc771","settings":{"lines":{"main":{"lineWidth":1,"color":"#db4635"}},"ma":"SMA","period":10}}]
         pass
 
     @property
@@ -381,7 +430,8 @@ class QuotexAPI(object):
                 "cert_reqs": ssl.CERT_NONE,
                 "ca_certs": cacert,
                 "context": ssl_context
-            }
+            },
+            "reconnect": 5
         }
         if platform.system() == "Linux":
             payload["sslopt"]["ssl_version"] = ssl.PROTOCOL_TLS
@@ -395,15 +445,15 @@ class QuotexAPI(object):
             if global_value.check_websocket_if_error:
                 return False, global_value.websocket_error_reason
             elif global_value.check_websocket_if_connect == 0:
-                logger.debug("Websocket conexão fechada.")
-                return False, "Websocket conexão fechada."
+                logger.debug("Websocket connection closed.")
+                return False, "Websocket connection closed."
             elif global_value.check_websocket_if_connect == 1:
-                logger.debug("Websocket conectado com sucesso!!!")
-                return True, "Websocket conectado com sucesso!!!"
+                logger.debug("Websocket connected successfully!!!")
+                return True, "Websocket connected successfully!!!"
             elif global_value.check_rejected_connection == 1:
                 global_value.SSID = None
-                logger.debug("Websocket Token Rejeitado.")
-                return True, "Websocket Token Rejeitado."
+                logger.debug("Websocket Token Rejected.")
+                return True, "Websocket Token Rejected."
 
     def send_ssid(self, timeout=10):
         self.wss_message = None

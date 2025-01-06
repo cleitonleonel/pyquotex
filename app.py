@@ -17,7 +17,6 @@ from quotexapi.config import (
     password
 )
 from quotexapi.stable_api import Quotex
-from quotexapi.constants import codes_asset
 from quotexapi.utils.processor import process_candles, get_color
 
 __author__ = "Cleiton Leonel Creton"
@@ -58,6 +57,8 @@ def get_all_options():
     - get_signal_data
     - trade_and_monitor
     - get_payment
+    - get_payout
+    - get_payout_by_asset
     - get_candle
     - get_candle_v2
     - get_candle_progressive
@@ -106,10 +107,19 @@ async def connect(attempts=5):
 
 
 async def test_connection():
-    await client.connect()
+    check_connect, message = await client.connect()
     is_connected = await client.check_connect()
-    print(f"Connected: {is_connected}")
+    if not is_connected:
+        check_connect, message = await client.connect()
+        if check_connect:
+            print(f"Reconnected successfully!!!")
+        else:
+            print("Error when reconnecting.")
+    else:
+        print(f"Connected: {is_connected}")
+
     print("Exiting...")
+
     client.close()
 
 
@@ -129,14 +139,14 @@ async def buy_simple():
     if check_connect:
         # client.change_account("REAL")
         amount = 50
-        asset = "AUDCAD"  # "EURUSD_otc"
+        asset = "USDINR_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 60  # in seconds
+        duration = 120  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset is open.")
-            status, buy_info = await client.buy(amount, asset_name, direction, duration)
+            status, buy_info = await client.buy(amount, asset_name, direction, duration, time_mode="TIME")
             print(status, buy_info)
         else:
             print("ERRO: Asset is closed.")
@@ -329,7 +339,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "16/12 15:51" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "17/12 22:23" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -407,14 +417,14 @@ async def get_candle():
                 candles = process_candles(candles_data, period)
                 candles_data = candles
 
-            print(asset, candles_data)
+            print(asset, candles_data[-1])
 
             for candle in candles_data:
                 color = get_color(candle)
                 candles_color.append(color)
 
             # print(candles)
-            print(candles_color if len(candles_color) > 0 else "")
+            # print(candles_color if len(candles_color) > 0 else "")
         else:
             print("No candles.")
 
@@ -517,6 +527,7 @@ async def get_candles_all_asset():
     if check_connect:
         offset = 3600  # in seconds
         period = 60  # in seconds
+        codes_asset = await client.get_all_assets()
         for asset in codes_asset.keys():
             asset_name, asset_data = await client.get_available_asset(asset)
             if asset_data[2]:
@@ -630,6 +641,8 @@ async def execute(argument):
             return await trade_and_monitor()
         case "get_payout":
             return await get_payout()
+        case "get_payout_by_asset":
+            return await get_payout_by_asset()
         case "get_payment":
             return await get_payment()
         case "assets_open":
