@@ -13,10 +13,10 @@ The documentation is organized in the following sections:
 - Market Data Retrieval
 - Account Management
 - Technical Indicators
-- WebSocket Management
+- WebSocket
 - Utilities and Helpers
-- Technical Aspects
 - Basic Examples
+- Technical Aspects
 - Considerations and Warnings
 
 📚 Documentation is available in here [English](en/index.md).
@@ -34,10 +34,10 @@ La documentación está organizada en las siguientes secciones:
 - Obtención de Datos del Mercado
 - Gestión de Cuenta
 - Indicadores Técnicos
-- Gestión de WebSocket
+- WebSocket
 - Utilidades y Helpers
-- Aspectos Técnicos
 - Ejemplos Básicos
+- Aspectos Técnicos
 - Consideraciones y Advertencias
 
 📚 La documentación está disponible aquí [Español](es/index.md).
@@ -55,10 +55,10 @@ A documentação está organizada nas seguintes seções:
 - Recuperação de Dados do Mercado
 - Gerenciamento de Conta
 - Indicadores Técnicos
-- Gerenciamento de WebSocket
+- WebSocket
 - Utilitários e Helpers
-- Aspectos Técnicos
 - Exemplos Básicos
+- Aspectos Técnicos
 - Considerações e Avisos
 
 📚 A documentação está disponível aqui [Português](pt/index.md).
