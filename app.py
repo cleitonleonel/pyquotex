@@ -552,13 +552,12 @@ async def get_realtime_candle():
         print(asset_name, asset_data)
         if asset_data[2]:
             print("Asset Open")
+            client.start_candles_stream(asset_name, 60)
             while True:
                 candles = await client.get_realtime_candles(asset_name, period)
-                print(candles)
-                """for _, candle in candles.items():
+                for _, candle in candles.items():
                     open_price = candle["open"]
                     print(f"Vela atual ({asset_name}): abertura = {open_price}", end="\r")
-                """
                 await asyncio.sleep(1)
         else:
             print("ERRO: Asset is closed.")
