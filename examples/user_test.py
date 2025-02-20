@@ -1,9 +1,8 @@
-# examples/user_test.py
-
 import asyncio
 from quotexapi.stable_api import Quotex
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
+
 
 class QuotexExchange:
 
@@ -32,8 +31,6 @@ class QuotexExchange:
 
     async def get_balance(self):
         return await self.client.get_balance()
-
-
 
 
 async def main():

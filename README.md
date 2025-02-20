@@ -1,14 +1,21 @@
 # README.md
 
 # PyQuotex
+<p>
+<a target="_blank">
+  <img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
+</a>
+<br>
+<a target="_blank">
+    <img src="https://img.shields.io/badge/python-3.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-green" alt="python" width="300">
+</a>
+</p>
 
-<img src="https://github.com/cleitonleonel/pyquotex/blob/master/pyquotex.gif?raw=true" alt="pyquotex" width="200"/>
-
-To access more features and greater stability, consider joining the private version.
 
 # About the PyQuotex Library
 
 This library was developed with the purpose of facilitating communication with the Quotex platform through WebSockets, enabling real-time data retrieval and the automation of operations. **It is important to note that this library is not a trading bot, nor does it intend to be**.
+To access more features and greater stability, consider joining the private version.
 
 ## Library Objective
 
@@ -31,8 +38,6 @@ Due to the high volume of messages seeking information and support, and consider
 This group was created so that members can help each other, ask questions, and collaborate with others who are also using this library. Your participation and interaction in the group are highly encouraged, as this way everyone can benefit from the collective experience.
 
 Feel free to join the group and contribute with your questions and knowledge.
-
-
 
 ### Important note
 For some reason, cloudflare ends up identifying automated access to the quotex API and we
@@ -71,6 +76,9 @@ https://github.com/user-attachments/assets/acaa0cbb-80c2-450c-9c8f-83fdbfedf0fa
 
 
 ### Install
+
+If you choose this method, do not use the next pip installation step, skip it.
+
 ```shell
 git clone https://github.com/cleitonleonel/pyquotex.git
 cd pyquotex
@@ -78,7 +86,11 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
+
 ### Install by pip
+
+If you didn't install via git clone, use pip for that.
+
 ```shell
 pip install git+https://github.com/cleitonleonel/pyquotex.git
 ```

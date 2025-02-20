@@ -67,6 +67,7 @@ def get_all_options():
     - get_realtime_sentiment
     - get_realtime_price
     - assets_open
+    - get_all_assets
     - buy_simple
     - buy_and_check_win
     - buy_multiple
@@ -126,7 +127,7 @@ async def test_connection():
 async def get_balance():
     check_connect, message = await client.connect()
     if check_connect:
-        # client.change_account("REAL")
+        client.change_account("PRACTICE")
         print("Current Balance: ", await client.get_balance())
 
     print("Exiting...")
@@ -137,11 +138,11 @@ async def get_balance():
 async def buy_simple():
     check_connect, message = await client.connect()
     if check_connect:
-        # client.change_account("REAL")
+        client.change_account("PRACTICE")
         amount = 50
-        asset = "USDINR_otc"  # "EURUSD_otc"
+        asset = "CADJPY"  # "EURUSD_otc"
         direction = "call"
-        duration = 120  # in seconds
+        duration = 60  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
@@ -171,7 +172,8 @@ async def get_result():
 async def get_profile():
     check_connect, message = await client.connect()
     if check_connect:
-        # client.change_account("REAL")
+        client.change_account("REAL")
+        client.set_account_mode("PRACTICE")
         profile = await client.get_profile()
         description = (
             f"\nUser: {profile.nick_name}\n"
@@ -401,6 +403,19 @@ async def assets_open():
     client.close()
 
 
+async def get_all_assets():
+    """
+    Continuously fetches and prints all asset.
+
+    This function connects to the client, checks if the asset.
+    It waits for a specified interval between requests.
+    """
+    check_connect, message = await client.connect()
+    if check_connect:
+        codes_asset = await client.get_all_assets()
+        print(codes_asset)
+
+
 async def get_candle():
     candles_color = []
     check_connect, message = await client.connect()
@@ -555,9 +570,10 @@ async def get_realtime_candle():
             client.start_candles_stream(asset_name, 60)
             while True:
                 candles = await client.get_realtime_candles(asset_name, period)
-                for _, candle in candles.items():
+                print(candles)
+                """for _, candle in candles.items():
                     open_price = candle["open"]
-                    print(f"Vela atual ({asset_name}): abertura = {open_price}", end="\r")
+                    print(f"Vela atual ({asset_name}): abertura = {open_price}", end="\r")"""
                 await asyncio.sleep(1)
         else:
             print("ERRO: Asset is closed.")
@@ -646,6 +662,8 @@ async def execute(argument):
             return await get_payment()
         case "assets_open":
             return await assets_open()
+        case "get_all_assets":
+            return await get_all_assets()
         case "get_candle":
             return await get_candle()
         case "get_candle_v2":
