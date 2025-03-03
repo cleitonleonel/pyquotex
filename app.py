@@ -140,9 +140,9 @@ async def buy_simple():
     if check_connect:
         client.change_account("PRACTICE")
         amount = 50
-        asset = "CADJPY"  # "EURUSD_otc"
+        asset = "BRLUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 60  # in seconds
+        duration = 180  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:

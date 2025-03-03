@@ -140,7 +140,6 @@ class QuotexAPI(object):
             "period": period
         }
         data = f'42["instruments/update", {json.dumps(payload)}]'
-        print(data)
         return self.send_websocket_request(data)
 
     def follow_candle(self, asset):

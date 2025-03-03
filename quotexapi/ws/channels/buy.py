@@ -12,14 +12,15 @@ class Buy(Base):
 
     def __call__(self, price, asset, direction, duration, request_id, is_fast_option):
         option_type = 100
+        expiration_time = get_expiration_time_quotex(
+            int(self.api.timesync.server_timestamp),
+            duration
+        )
+
+        duration = expiration_time
 
         if "_otc" not in asset or is_fast_option:
             option_type = 1
-            expiration_time = get_expiration_time_quotex(
-                int(self.api.timesync.server_timestamp),
-                duration
-            )
-
             if is_fast_option:
                 self.api.settings_apply(
                     asset,
@@ -27,11 +28,6 @@ class Buy(Base):
                     is_fast_option=True,
                     end_time=expiration_time,
                 )
-
-            duration = expiration_time
-
-        data = f'42["depth/follow", f"{asset}"]'
-        self.send_websocket_request(data)
 
         payload = {
             "asset": asset,

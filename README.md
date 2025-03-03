@@ -75,24 +75,24 @@ Thank you for your support! 🚀
 https://github.com/user-attachments/assets/acaa0cbb-80c2-450c-9c8f-83fdbfedf0fa
 
 
-### Install
+### Clone and Install
 
-If you choose this method, do not use the next pip installation step, skip it.
+If you choose this method, do not use the next poetry installation step, skip it.
 
 ```shell
 git clone https://github.com/cleitonleonel/pyquotex.git
 cd pyquotex
-pip install -r requirements.txt
-python3 app.py
+poetry install
+poetry run python app.py
 ```
 
 
-### Install by pip
+### Install with poetry in your project
 
-If you didn't install via git clone, use pip for that.
+If you didn't install via git clone, use poetry for that.
 
 ```shell
-pip install git+https://github.com/cleitonleonel/pyquotex.git
+poetry add git+https://github.com/cleitonleonel/pyquotex.git
 ```
 
 ### 📖 How to Fix the `playwright install` Error
