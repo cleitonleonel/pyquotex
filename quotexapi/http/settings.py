@@ -1,5 +1,3 @@
-# quotexapi/http/settings.py
-
 from ..http.navigator import Browser
 
 

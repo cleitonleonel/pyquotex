@@ -1,5 +1,3 @@
-# quotexapi/expiration.py
-
 import time
 import calendar
 from datetime import (

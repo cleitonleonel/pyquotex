@@ -1,5 +1,3 @@
-# quotexapi/stable_api.py
-
 import time
 import logging
 import asyncio

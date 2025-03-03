@@ -1,5 +1,3 @@
-# quotexapi/ws/objects/profile.py
-
 from quotexapi.ws.objects.base import Base
 
 

@@ -1,5 +1,3 @@
-# quotexapi/ws/channels/base.py
-
 class Base(object):
     """Class for base Quotex websocket channel."""
 

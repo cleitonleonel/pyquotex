@@ -1,5 +1,3 @@
-# quotexapi/http/logout.py
-
 """Module for Quotex http login resource."""
 
 from ..http.resource import Resource

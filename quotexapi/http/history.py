@@ -1,5 +1,3 @@
-# quotexapi/http/history.py
-
 """Module for Quotex http history resource."""
 
 from ..http.resource import Resource

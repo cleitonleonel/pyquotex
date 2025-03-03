@@ -1,5 +1,3 @@
-# quotexapi/ws/channels/buy.py
-
 import json
 from quotexapi.ws.channels.base import Base
 from quotexapi.expiration import get_expiration_time_quotex

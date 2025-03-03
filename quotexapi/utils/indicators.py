@@ -1,5 +1,3 @@
-# quotexapi/utils/indicators.py
-
 import numpy as np
 from typing import List, Dict, Union, Tuple
 

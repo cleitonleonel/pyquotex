@@ -1,5 +1,3 @@
-# quotexapi/ws/objects/timesync.py
-
 import time
 import datetime
 from quotexapi.ws.objects.base import Base

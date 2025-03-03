@@ -1,5 +1,3 @@
-# quotexapi/http/login.py
-
 from ..http.qxbroker import Browser
 
 

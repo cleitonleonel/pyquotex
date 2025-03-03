@@ -1,5 +1,3 @@
-# quotexapi/config.py
-
 import os
 import sys
 import json
@@ -8,7 +6,7 @@ from pathlib import Path
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
-base_dir = Path(__file__).parent.parent
+base_dir = Path.cwd()
 config_path = Path(os.path.join(base_dir, "settings/config.ini"))
 
 if not config_path.exists():
@@ -30,7 +28,13 @@ if not email or not password:
     print("Email and password cannot be left blank...")
     sys.exit()
 
-user_data_dir = "browser/instance/quotex.default"
+
+def resource_path(relative_path: str | Path) -> Path:
+    global base_dir
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base_dir = Path(sys._MEIPASS)
+    return base_dir / relative_path
 
 
 def load_session(user_agent):
@@ -78,12 +82,3 @@ def update_session(session_data):
         session_result
     )
     return session_data
-
-
-
-def resource_path(relative_path: str | Path) -> Path:
-    global base_dir
-    """Get absolute path to resource, works for dev and for PyInstaller"""
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        base_dir = Path(sys._MEIPASS)
-    return base_dir / relative_path

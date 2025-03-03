@@ -1,5 +1,3 @@
-# quotexapi/ws/client.py
-
 """Module for Quotex websocket."""
 import json
 import time

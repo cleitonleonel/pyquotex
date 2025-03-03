@@ -1,5 +1,3 @@
-# quotexapi/ws/channels/candles.py
-
 import json
 from quotexapi.ws.channels.base import Base
 
