@@ -26,4 +26,4 @@ description = "Quotex API Client written in Python."
 authors = ["Cleiton Leonel <cleiton.leonel@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{ include = "pyquotex" }]
+packages = [{ include = "quotexapi" }]
