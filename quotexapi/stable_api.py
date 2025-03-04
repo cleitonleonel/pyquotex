@@ -14,7 +14,8 @@ from .utils.processor import (
 from .config import (
     load_session,
     update_session,
-    resource_path
+    resource_path,
+    credentials
 )
 from .utils.indicators import TechnicalIndicators
 
@@ -26,8 +27,8 @@ class Quotex:
 
     def __init__(
             self,
-            email,
-            password,
+            email=None,
+            password=None,
             lang="pt",
             user_agent="Quotex/1.0",
             root_path=".",
@@ -73,6 +74,8 @@ class Quotex:
         self.resource_path = resource_path(root_path)
         session = load_session(user_agent)
         self.session_data = session
+        if not email or not password:
+            self.email, self.password = credentials()
 
     @property
     def websocket(self):

@@ -3,10 +3,7 @@
 import time
 import asyncio
 import logging
-from quotexapi.config import (
-    email,
-    password
-)
+from quotexapi.config import credentials
 from quotexapi.stable_api import Quotex
 from quotexapi.utils.processor import process_candles, get_color
 
@@ -51,6 +48,7 @@ async def process_all_assets(client, assets):
 
 
 async def main():
+    email, password = credentials()
     client = Quotex(
         email=email,
         password=password,

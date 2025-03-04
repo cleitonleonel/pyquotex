@@ -12,10 +12,7 @@ from quotexapi.expiration import (
     timestamp_to_date,
     get_timestamp_days_ago
 )
-from quotexapi.config import (
-    email,
-    password
-)
+from quotexapi.config import credentials
 from quotexapi.stable_api import Quotex
 from quotexapi.utils.processor import process_candles, get_color
 
@@ -38,6 +35,9 @@ art_effect = f"""{ascii_art}
 """
 
 print(art_effect)
+
+# After the first access, the user's credentials will be available in this function.
+email, password = credentials()
 
 client = Quotex(
     email=email,

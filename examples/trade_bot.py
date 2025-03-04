@@ -1,12 +1,10 @@
 # examples/trade_bot.py
 
 import asyncio
-from quotexapi.config import (
-    email,
-    password
-)
+from quotexapi.config import credentials
 from quotexapi.stable_api import Quotex
 
+email, password = credentials()
 client = Quotex(
     email=email,
     password=password,
