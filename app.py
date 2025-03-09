@@ -1,5 +1,3 @@
-# app.py
-
 import os
 import sys
 import json
@@ -142,12 +140,12 @@ async def buy_simple():
         amount = 50
         asset = "BRLUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 180  # in seconds
+        duration = 60  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset is open.")
-            status, buy_info = await client.buy(amount, asset_name, direction, duration, time_mode="TIME")
+            status, buy_info = await client.buy(amount, asset_name, direction, duration)
             print(status, buy_info)
         else:
             print("ERRO: Asset is closed.")
@@ -341,7 +339,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "17/12 22:23" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "09/03 17:29" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)

@@ -588,11 +588,11 @@ class Quotex:
         account_type = "demo" if self.account_is_demo else "live"
         return await self.api.get_trader_history(account_type, page_number=1)
 
-    async def buy(self, amount: float, asset: str, direction: str, duration: int, time_mode: str = "TIMER"):
+    async def buy(self, amount: float, asset: str, direction: str, duration: int, time_mode: str = "TIME"):
         """Buy Binary option"""
         self.api.buy_id = None
         request_id = expiration.get_timestamp()
-        is_fast_option = True if time_mode.upper() == "TIME" else False
+        is_fast_option = time_mode.upper() == "TIME"
         self.start_candles_stream(asset, duration)
         self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
 

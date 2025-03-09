@@ -149,7 +149,7 @@ async def trade_and_monitor():
                 print(f"{100 * '='}")
                 print(f"Betting {amount} on asset {asset_name} in the {direction} direction for {duration}s")
                 status, buy_info = await client.buy(amount, asset_name, direction, duration)
-
+                print(status, buy_info)
                 if status:
                     balance -= amount
                     print(f"New Balance: {balance}")
@@ -186,6 +186,8 @@ async def trade_and_monitor():
 
                 else:
                     print("Operation failed.")
+
+                await asyncio.sleep(1)
 
         else:
             print("ERROR: Asset is closed.")
