@@ -9,10 +9,7 @@ class Buy(Base):
     name = "buy"
 
     def __call__(self, price, asset, direction, duration, request_id, is_fast_option):
-        option_type = 100
-
-        if "_otc" in asset:
-            option_type = 1
+        option_type = 1
 
         expiration_time = get_expiration_time_quotex(
             int(self.api.timesync.server_timestamp),
@@ -43,5 +40,4 @@ class Buy(Base):
         self.send_websocket_request(data)
 
         data = f'42["orders/open",{json.dumps(payload)}]'
-
         self.send_websocket_request(data)

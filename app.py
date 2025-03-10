@@ -339,7 +339,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "09/03 17:29" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "10/03 08:30" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)

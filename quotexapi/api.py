@@ -176,7 +176,6 @@ class QuotexAPI(object):
             }
         }
         data = f'42["settings/store",{json.dumps(payload)}]'
-        print(data)
         self.send_websocket_request(data)
 
     def unsubscribe_realtime_candle(self, asset):
