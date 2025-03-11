@@ -122,6 +122,7 @@ class QuotexAPI(object):
         self.session_data = {}
         self.browser = Browser()
         self.browser.set_headers()
+        self.settings = Settings(self)
 
     @property
     def websocket(self):
@@ -363,8 +364,7 @@ class QuotexAPI(object):
         return response
 
     async def get_profile(self):
-        settings = Settings(self)
-        user_settings = settings.get_settings()
+        user_settings = self.settings.get_settings()
         self.profile.nick_name = user_settings.get("data")["nickname"]
         self.profile.profile_id = user_settings.get("data")["id"]
         self.profile.demo_balance = user_settings.get("data")["demoBalance"]
@@ -380,6 +380,11 @@ class QuotexAPI(object):
     async def get_trader_history(self, account_type, page_number):
         history = await self.get_history(account_type, page_number)
         return history.get("data", {})
+
+    def change_time_offset(self, time_offset):
+        user_settings = self.settings.set_time_offset(time_offset)
+        self.profile.offset = user_settings.get("data").get("timeOffset")
+        return self.profile
 
     def send_websocket_request(self, data, no_force_send=True):
         """Send websocket request to Quotex server.
@@ -455,12 +460,15 @@ class QuotexAPI(object):
         self.wss_message = None
         if not global_value.SSID:
             return False
+
         self.ssid(global_value.SSID)
         start_time = time.time()
+
         while self.wss_message is None:
             if time.time() - start_time > timeout:
                 return False
             time.sleep(0.5)
+
         return True
 
     async def connect(self, is_demo):
@@ -471,14 +479,18 @@ class QuotexAPI(object):
         if global_value.check_websocket_if_connect:
             logger.info("Closing websocket connection...")
             self.close()
+
         check_websocket, websocket_reason = await self.start_websocket()
+
         if not check_websocket:
             return check_websocket, websocket_reason
         check_ssid = self.send_ssid()
+
         if not check_ssid:
             await self.authenticate()
             if self.is_logged:
                 self.send_ssid()
+
         return check_websocket, websocket_reason
 
     async def reconnect(self):

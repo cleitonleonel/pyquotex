@@ -16,11 +16,15 @@ class Buy(Base):
             duration
         )
 
-        duration = expiration_time
+        expiration = expiration_time
+
+        if asset.endswith("_otc") and not is_fast_option:
+            option_type = 100
+            expiration = duration
 
         self.api.settings_apply(
             asset,
-            duration,
+            expiration,
             is_fast_option=is_fast_option,
             end_time=expiration_time,
         )
@@ -28,7 +32,7 @@ class Buy(Base):
         payload = {
             "asset": asset,
             "amount": price,
-            "time": duration,
+            "time": expiration,
             "action": direction,
             "isDemo": self.api.account_type,
             "tournamentId": 0,

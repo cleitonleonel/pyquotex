@@ -45,6 +45,7 @@ class WebsocketClient(object):
             self.wss.send('42["tick"]')
         try:
             if "authorization/reject" in str(message):
+                print("Token rejected, making automatic reconnection.")
                 logger.debug("Token rejected, making automatic reconnection.")
                 global_value.check_rejected_connection = 1
             elif "s_authorization" in str(message):

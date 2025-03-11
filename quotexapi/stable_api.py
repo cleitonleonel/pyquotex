@@ -134,6 +134,7 @@ class Quotex:
             refactor_asset = asset_name.replace("_otc", "")
             asset_name = f"{asset_name}_otc" if condition_otc else refactor_asset
             asset_open = await self.check_asset_open(asset_name)
+
         return asset_name, asset_open
 
     async def check_asset_open(self, asset_name: str):
@@ -142,6 +143,8 @@ class Quotex:
             if asset_name == i[1]:
                 self.api.current_asset = asset_name
                 return i[0], i[2].replace("\n", ""), i[14]
+
+        return [None, None, None]
 
     async def get_all_assets(self):
         instruments = await self.get_instruments()
@@ -254,6 +257,9 @@ class Quotex:
         """Change active account `real` or `practice`"""
         self.account_is_demo = 0 if balance_mode.upper() == "REAL" else 1
         self.api.change_account(self.account_is_demo)
+
+    def change_time_offset(self, time_offset):
+        return self.api.change_time_offset(time_offset)
 
     async def edit_practice_balance(self, amount=None):
         self.api.training_balance_edit_request = None
