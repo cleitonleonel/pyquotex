@@ -55,7 +55,7 @@ def get_all_options():
     - get_signal_data
     - trade_and_monitor
     - get_payment
-    - get_payout
+    - get_asset
     - get_payout_by_asset
     - get_candle
     - get_candle_v2
@@ -339,7 +339,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "10/03 08:30" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "11/03 21:57" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -393,8 +393,8 @@ async def assets_open():
     if check_connect:
         print("Asset Open")
         for i in client.get_all_asset_name():
-            print(i[1])
-            print(i[1], await client.check_asset_open(i[0]))
+            _, asset_open = await client.check_asset_open(i[0])
+            print(i[1], asset_open)
 
     print("Exiting...")
 
@@ -477,11 +477,12 @@ async def get_candle_progressive():
     client.close()
 
 
-async def get_payout():
+async def get_asset():
     check_connect, reason = await client.connect()
     if check_connect:
-        asset_data = await client.check_asset_open("EURUSD_otc")
+        asset_data, asset_info = await client.check_asset_open("EURUSD_otc")
         print(asset_data)
+        print(asset_info)
 
     print("Exiting...")
 
@@ -492,7 +493,7 @@ async def get_payout():
 async def get_payout_by_asset():
     check_connect, reason = await client.connect()
     if check_connect:
-        asset_data = client.get_payout_by_asset("AUDCAD_otc")
+        asset_data = client.get_payout_by_asset("EURUSD_otc")
         print(asset_data)
 
     print("Exiting...")
@@ -652,8 +653,8 @@ async def execute(argument):
             return await get_signal_data()
         case "trade_and_monitor":
             return await trade_and_monitor()
-        case "get_payout":
-            return await get_payout()
+        case "get_asset":
+            return await get_asset()
         case "get_payout_by_asset":
             return await get_payout_by_asset()
         case "get_payment":

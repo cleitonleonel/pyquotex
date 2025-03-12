@@ -1,4 +1,5 @@
 import json
+import time
 from quotexapi.ws.channels.base import Base
 from quotexapi.expiration import get_expiration_time_quotex
 
@@ -12,10 +13,9 @@ class Buy(Base):
         option_type = 1
 
         expiration_time = get_expiration_time_quotex(
-            int(self.api.timesync.server_timestamp),
+            int(time.time()),
             duration
         )
-
         expiration = expiration_time
 
         if asset.endswith("_otc") and not is_fast_option:

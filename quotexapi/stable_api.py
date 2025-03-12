@@ -128,12 +128,12 @@ class Quotex:
             return [[i[1], i[2].replace("\n", "")] for i in self.api.instruments]
 
     async def get_available_asset(self, asset_name: str, force_open: bool = False):
-        asset_open = await self.check_asset_open(asset_name)
+        _, asset_open = await self.check_asset_open(asset_name)
         if force_open and (not asset_open or not asset_open[2]):
             condition_otc = "otc" not in asset_name
             refactor_asset = asset_name.replace("_otc", "")
             asset_name = f"{asset_name}_otc" if condition_otc else refactor_asset
-            asset_open = await self.check_asset_open(asset_name)
+            _, asset_open = await self.check_asset_open(asset_name)
 
         return asset_name, asset_open
 
@@ -142,7 +142,7 @@ class Quotex:
         for i in instruments:
             if asset_name == i[1]:
                 self.api.current_asset = asset_name
-                return i[0], i[2].replace("\n", ""), i[14]
+                return i, (i[0], i[2].replace("\n", ""), i[14])
 
         return [None, None, None]
 
@@ -621,7 +621,7 @@ class Quotex:
         user_settings = await self.get_profile()
         offset_zone = user_settings.offset
         open_time = expiration.get_next_timeframe(
-            int(self.api.timesync.server_timestamp),
+            int(time.time()),
             offset_zone,
             duration,
             open_time

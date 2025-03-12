@@ -163,6 +163,7 @@ def get_all_options():
     - get_profile
     - get_balance
     - get_signal_data
+    - get_asset
     - get_payment
     - get_candle
     - get_candle_v2
@@ -410,13 +411,15 @@ async def assets_open():
     client.close()
 
 
-async def get_payout():
+async def get_asset():
     check_connect, reason = await client.connect()
     if check_connect:
-        asset_data = await client.check_asset_open("EURUSD_otc")
+        asset_data, asset_info = await client.check_asset_open("EURUSD_otc")
         print(asset_data)
+        print(asset_info)
 
     print("Exiting...")
+
     client.close()
 
 
@@ -603,8 +606,8 @@ async def execute(argument):
             return await get_balance()
         case "get_signal_data":
             return await get_signal_data()
-        case "get_payout":
-            return await get_payout()
+        case "get_asset":
+            return await get_asset()
         case "get_payment":
             return await get_payment()
         case "assets_open":

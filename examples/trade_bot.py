@@ -147,6 +147,10 @@ async def trade_and_monitor():
 
             while True:
                 print(f"{100 * '='}")
+                check_connect = await client.check_connect()
+                if not check_connect:
+                    check_connect, message = await client.connect()
+
                 print(f"Betting {amount} on asset {asset_name} in the {direction} direction for {duration}s")
                 status, buy_info = await client.buy(amount, asset_name, direction, duration)
                 print(status, buy_info)
