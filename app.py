@@ -15,7 +15,7 @@ from quotexapi.stable_api import Quotex
 from quotexapi.utils.processor import process_candles, get_color
 
 __author__ = "Cleiton Leonel Creton"
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 
 __message__ = f"""
 Use in moderation, because management is everything!
@@ -430,14 +430,14 @@ async def get_candle():
                 candles = process_candles(candles_data, period)
                 candles_data = candles
 
-            print(asset, candles_data[-1])
+            # print(asset, candles_data[-1])
 
             for candle in candles_data:
                 color = get_color(candle)
                 candles_color.append(color)
 
-            # print(candles)
-            # print(candles_color if len(candles_color) > 0 else "")
+            print(candles)
+            print(candles_color if len(candles_color) > 0 else "")
         else:
             print("No candles.")
 
@@ -642,6 +642,7 @@ async def get_signal_data():
 
 
 async def execute(argument):
+    print(argument)
     match argument:
         case "test_connection":
             return await test_connection()

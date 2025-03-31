@@ -2,7 +2,7 @@ import sys
 import pyfiglet
 
 __author__ = "Cleiton Leonel Creton"
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 
 __message__ = f"""
 Use com moderação, pois gerenciamento é tudo!
@@ -14,8 +14,7 @@ if not getattr(sys, 'frozen', False) and not hasattr(sys, '_MEIPASS'):
     ascii_art = custom_font.renderText("PyQuotex")
     art_effect = f"""{ascii_art}
 
-            author: {__author__} 
-            versão: {__version__}
+            author: {__author__} versão: {__version__}
             {__message__}"""
 
 

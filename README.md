@@ -74,6 +74,9 @@ Thank you for your support! 🚀
 
 https://github.com/user-attachments/assets/acaa0cbb-80c2-450c-9c8f-83fdbfedf0fa
 
+### Install Poetry
+Installing with the official [installer](https://python-poetry.org/docs/#installing-with-the-official-installer)
+
 
 ### Clone and Install
 
