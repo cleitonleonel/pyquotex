@@ -594,7 +594,20 @@ class Quotex:
         return await self.api.get_trader_history(account_type, page_number=1)
 
     async def buy(self, amount: float, asset: str, direction: str, duration: int, time_mode: str = "TIME"):
-        """Buy Binary option"""
+        """
+        Buy Binary option
+
+        Args:
+            amount (float): Amount to buy.
+            asset (str): Asset to buy.
+            direction (str): Direction to buy.
+            duration (int): Duration to buy.
+            time_mode (str): Time mode to buy.
+
+        Returns:
+            The buy result.
+
+        """
         self.api.buy_id = None
         request_id = expiration.get_timestamp()
         is_fast_option = time_mode.upper() == "TIME"

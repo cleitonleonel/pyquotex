@@ -30,18 +30,16 @@ from collections import defaultdict
 urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
-# cert_path = certifi.where()
-cert_path = os.path.join("../", "quotex.pem")
+cert_path = certifi.where()
 os.environ['SSL_CERT_FILE'] = cert_path
 os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
 cacert = os.environ.get('WEBSOCKET_CLIENT_CA_BUNDLE')
 
-# Configuração do contexto SSL para usar TLS 1.3
 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2  # Desativar versões TLS mais antigas
-ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3  # Garantir o uso de TLS 1.3
+ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2
+ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3
 
-ssl_context.load_verify_locations(certifi.where())
+ssl_context.load_verify_locations(cert_path)
 
 
 def nested_dict(n, type):
