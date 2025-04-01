@@ -140,12 +140,20 @@ async def buy_simple():
         amount = 50
         asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 60  # in seconds
+        duration = 300  # in seconds
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset is open.")
-            status, buy_info = await client.buy(amount, asset_name, direction, duration)
+
+            status, buy_info = await client.buy(
+                amount,
+                asset_name,
+                direction,
+                duration,
+                time_mode="TIMER"
+            )
+
             print(status, buy_info)
         else:
             print("ERRO: Asset is closed.")
@@ -642,7 +650,6 @@ async def get_signal_data():
 
 
 async def execute(argument):
-    print(argument)
     match argument:
         case "test_connection":
             return await test_connection()
