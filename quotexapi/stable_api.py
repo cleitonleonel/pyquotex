@@ -9,7 +9,8 @@ from .utils.services import truncate
 from .utils.processor import (
     calculate_candles,
     process_candles_v2,
-    merge_candles
+    merge_candles,
+    process_tick
 )
 from .config import (
     load_session,
@@ -725,9 +726,16 @@ class Quotex:
         self.api.listinfodata.delete(id_number)
         return data_dict["win"]
 
-    def start_candles_stream(self, asset, period=0):
+    def start_candles_stream(self, asset: str = "EURUSD", period: int = 0):
+        """Start streaming candle data for a specified asset.
+
+        Args:
+            asset (str): The asset to stream data for.
+            period (int, optional): The period for the candles. Defaults to 0.
+        """
         self.api.current_asset = asset
         self.api.subscribe_realtime_candle(asset, period)
+        self.api.chart_notification(asset)
         self.api.follow_candle(asset)
 
     async def store_settings_apply(
@@ -792,13 +800,23 @@ class Quotex:
         self.api.signals_subscribe()
 
     async def get_realtime_candles(self, asset: str, period: int = 0):
+        """Retrieve real-time candle data for a specified asset.
+
+        Args:
+            asset (str): The asset to get candle data for.
+            period (int, optional): The period for the candles. Defaults to 0.
+
+        Returns:
+            dict: A dictionary of real-time candle data.
+        """
+        data = {}
+        self.start_candles_stream(asset, period)
         while True:
-            if self.api.candle_v2_data.get(asset):
-                candles = self.prepare_candles(asset, period)
-                for candle in candles:
-                    self.api.real_time_candles[candle["time"]] = candle
-                return self.api.real_time_candles
-            await asyncio.sleep(0.2)
+            if self.api.realtime_price.get(asset):
+                tick = self.api.realtime_candles
+                return process_tick(tick, period, data)
+
+            await asyncio.sleep(0.1)
 
     async def start_realtime_price(self, asset: str, period: int = 0):
         self.start_candles_stream(asset, period)

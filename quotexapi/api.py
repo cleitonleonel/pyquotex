@@ -114,7 +114,7 @@ class QuotexAPI(object):
         self.candle_v2_data = {}
         self.realtime_price = {}
         self.realtime_price_data = []
-        self.real_time_candles = {}
+        self.realtime_candles = {}
         self.realtime_sentiment = {}
         self.top_list_leader = {}
         self.session_data = {}
@@ -139,6 +139,14 @@ class QuotexAPI(object):
         data = f'42["instruments/update", {json.dumps(payload)}]'
         return self.send_websocket_request(data)
 
+    def chart_notification(self, asset):
+        payload = {
+            "asset": asset,
+            "version": "1.0.0"
+        }
+        data = f'42["chart_notification/get", {json.dumps(payload)}]'
+        return self.send_websocket_request(data)
+
     def follow_candle(self, asset):
         data = f'42["depth/follow", {json.dumps(asset)}]'
         return self.send_websocket_request(data)
@@ -147,7 +155,16 @@ class QuotexAPI(object):
         data = f'42["depth/unfollow", {json.dumps(asset)}]'
         return self.send_websocket_request(data)
 
-    def settings_apply(self, asset, duration, is_fast_option=False, end_time=None, deal=5, percent_mode=False, percent_deal=1):
+    def settings_apply(
+            self,
+            asset,
+            duration,
+            is_fast_option=False,
+            end_time=None,
+            deal=5,
+            percent_mode=False,
+            percent_deal=1
+    ):
         payload = {
             "chartId": "graph",
             "settings": {
@@ -218,10 +235,19 @@ class QuotexAPI(object):
             "amount": amount
         }
         data = f'42["pending/create",{json.dumps(payload)}]'
-
+        print(data)
+        # 42["pending/create",{"openType":0,"asset":"AUDCAD_otc","openTime":"2025-04-01T20:09:00.000Z","timeframe":60,"command":"call","amount":50}]
+        # 42["pending/create",{"openType":0,"asset":"EURUSD_otc","openTime":"2025-04-01T20:11:00.000Z","timeframe":60,"command":"call","amount":5}]
         self.send_websocket_request(data)
 
-    def instruments_follow(self, amount, asset, direction, duration, open_time):
+    def instruments_follow(
+            self,
+            amount,
+            asset,
+            direction,
+            duration,
+            open_time
+    ):
         payload = {
             "amount": amount,
             "command": 0 if direction == "call" else 1,
@@ -314,7 +340,14 @@ class QuotexAPI(object):
         """
         return GetHistory(self)
 
-    def send_http_request_v1(self, resource, method, data=None, params=None, headers=None):
+    def send_http_request_v1(
+            self,
+            resource,
+            method,
+            data=None,
+            params=None,
+            headers=None
+    ):
         """Send http request to Quotex server.
 
         :param resource: The instance of

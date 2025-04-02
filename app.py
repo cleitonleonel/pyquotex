@@ -10,9 +10,13 @@ from quotexapi.expiration import (
     timestamp_to_date,
     get_timestamp_days_ago
 )
+from quotexapi.utils.processor import (
+    process_candles,
+    get_color,
+    aggregate_candle
+)
 from quotexapi.config import credentials
 from quotexapi.stable_api import Quotex
-from quotexapi.utils.processor import process_candles, get_color
 
 __author__ = "Cleiton Leonel Creton"
 __version__ = "1.0.2"
@@ -151,7 +155,7 @@ async def buy_simple():
                 asset_name,
                 direction,
                 duration,
-                time_mode="TIMER"
+                time_mode="TIME"
             )
 
             print(status, buy_info)
@@ -342,12 +346,12 @@ async def buy_pending():
     if check_connect:
         # client.change_account("REAL")
         amount = 50
-        asset = "AUDCAD"  # "EURUSD_otc"
+        asset = "EURUSD"  # "EURUSD_otc"
         direction = "call"
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "11/03 21:57" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "01/04 17:14" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -402,7 +406,7 @@ async def assets_open():
         print("Asset Open")
         for i in client.get_all_asset_name():
             _, asset_open = await client.check_asset_open(i[0])
-            print(i[1], asset_open)
+            print(i[0], asset_open)
 
     print("Exiting...")
 
@@ -566,24 +570,46 @@ async def get_candles_all_asset():
 
 
 async def get_realtime_candle():
-    check_connect, message = await client.connect()
+    """
+    Continuously fetches and prints real-time candle data for a specified asset.
+
+    This function connects to the client, checks if the asset "EURUSD"
+    is open, and if so, enters a loop to retrieve and print real-time
+    candle data. It waits for a specified interval between requests.
+    """
+    check_connect, reason = await client.connect()
     if check_connect:
-        period = 5  # in seconds [60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
-        asset = "EURUSD_otc"
+        period = 60  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        asset = "EURUSD"
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
-        print(asset_name, asset_data)
         if asset_data[2]:
-            print("Asset Open")
-            client.start_candles_stream(asset_name, 60)
+            print("Check Asset Open")
+            candles = []
+            candles_data = {}
             while True:
-                candles = await client.get_realtime_candles(asset_name, period)
-                print(candles)
-                """for _, candle in candles.items():
-                    open_price = candle["open"]
-                    print(f"Vela atual ({asset_name}): abertura = {open_price}", end="\r")"""
-                await asyncio.sleep(1)
+                candles_tick = await client.get_realtime_candles(asset_name, period)
+                # print(candles_tick)
+
+                aggregate = aggregate_candle(candles_tick, candles_data)
+                # print(aggregate)
+
+                candles_list = list(candles_data.values())
+                print(candles_list)
+
+                if len(candles_list[:-1]) > 3:
+                    candles = candles_list[:-1][-3:]
+
+                # Check if we have 3 consecutive green or red candles
+                if len(candles) == 3:
+                    colors = [get_color(candle) for candle in candles]
+                    # print(colors)
+
+                    if colors == ['green', 'green', 'green']:
+                        print(candles)
+
+                await asyncio.sleep(0.1)
         else:
-            print("ERRO: Asset is closed.")
+            print("Asset is closed.")
 
     print("Exiting...")
 

@@ -11,32 +11,24 @@ def get_color(candle):
         return 'gray'
 
 
-def process_tick(tick, candles, period=60):
-    pair, timestamp, price, direction = tick
-    timestamp = int(timestamp)
+def process_tick(tick, interval, candles):
+    symbol, timestamp, price, direction = tick
+    interval_start = int(timestamp // interval * interval)
 
-    start_time = (timestamp // period) * period
-
-    if pair not in candles:
-        candles[pair] = {}
-
-    if start_time not in candles[pair]:
-        candles[pair][start_time] = {
-            "open": price,
-            "close": price,
-            "high": price,
-            "low": price,
-            "ticks": [],
+    if interval_start not in candles:
+        candles[interval_start] = {
+            'symbol': symbol,
+            'open': price,
+            'close': price,
+            'high': price,
+            'low': price,
+            'timestamp': interval_start
         }
 
-    current_candle = candles[pair][start_time]
-    current_candle["close"] = price
-    current_candle["high"] = max(current_candle["high"], price)
-    current_candle["low"] = min(current_candle["low"], price)
-    current_candle["ticks"].append(tick)  # Armazena o tick para análises futuras
-
-    current_time = int(time.time())
-    candles[pair] = {k: v for k, v in candles[pair].items() if k > current_time - period * 10}
+    candle = candles[interval_start]
+    candle['close'] = price
+    candle['high'] = max(candle['high'], price)
+    candle['low'] = min(candle['low'], price)
 
     return candles
 
@@ -159,3 +151,20 @@ def merge_candles(candles_data):
     merged_list.sort(key=lambda x: x['time'])
 
     return merged_list
+
+
+def aggregate_candle(tick, candles):
+    for timestamp, data in tick.items():
+        candle = candles.setdefault(timestamp, {
+            'symbol': data['symbol'],
+            'open': data['open'],
+            'close': data['close'],
+            'high': data['high'],
+            'low': data['low'],
+            'timestamp': timestamp
+        })
+        candle['close'] = data['close']
+        candle['high'] = max(candle['high'], data['high'])
+        candle['low'] = min(candle['low'], data['low'])
+
+    return candles
