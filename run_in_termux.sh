@@ -3,7 +3,10 @@ set -e
 
 CURRENT_DIR=$(basename "$PWD")
 
-pkg update && upgrade -y
+pkg update -y \
+  && pkg upgrade -y \
+  && pkg autoclean -y \
+  && pkg clean -y
 
 pkg install \
   git \
