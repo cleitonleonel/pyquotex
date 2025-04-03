@@ -27,7 +27,6 @@ else
     cd pyquotex || exit
 fi
 
-pip install -U pip
 pip install poetry
 
 poetry install
