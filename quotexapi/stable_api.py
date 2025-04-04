@@ -144,7 +144,7 @@ class Quotex:
                 self.api.current_asset = asset_name
                 return i, (i[0], i[2].replace("\n", ""), i[14])
 
-        return [None, None, None]
+        return [None, [None, None, None]]
 
     async def get_all_assets(self):
         instruments = await self.get_instruments()
