@@ -26,12 +26,25 @@ def get_timestamp_days_ago(days):
 
 
 def get_expiration_time_quotex(timestamp, duration):
+    """
+    Calculates the expiration time for Quotex orders.
+
+    Args:
+        timestamp (int): The current timestamp in seconds.
+        duration (int): Order duration in seconds (e.g., 5, 10, 15, ...).
+
+    Returns:
+        int: UNIX timestamp of the expiration time.
+    """
     now_date = datetime.fromtimestamp(timestamp)
-    shift = 0
-    if now_date.second >= 30:
-        shift = 1
-    exp_date = now_date.replace(second=0, microsecond=0)
-    exp_date = exp_date + timedelta(minutes=int(duration / duration) + shift)
+    shift = 1 if now_date.second >= 30 else 0
+
+    exp_date = now_date.replace(second=0, microsecond=0) + timedelta(minutes=shift)
+    if duration > 60:
+        exp_date += timedelta(minutes=duration // 60)
+    else:
+        exp_date += timedelta(minutes=1)
+
     return date_to_timestamp(exp_date)
 
 

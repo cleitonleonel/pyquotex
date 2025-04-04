@@ -155,7 +155,7 @@ async def buy_simple():
                 asset_name,
                 direction,
                 duration,
-                time_mode="TIME"
+                time_mode="TIMER"
             )
 
             print(status, buy_info)
