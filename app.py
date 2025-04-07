@@ -123,7 +123,7 @@ async def test_connection():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_balance():
@@ -134,7 +134,7 @@ async def get_balance():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def buy_simple():
@@ -166,7 +166,7 @@ async def buy_simple():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_result():
@@ -176,7 +176,7 @@ async def get_result():
         print(status, operation_info)
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_profile():
@@ -198,7 +198,7 @@ async def get_profile():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def balance_refill():
@@ -209,7 +209,7 @@ async def balance_refill():
 
         print(result)
 
-    client.close()
+    await client.close()
 
 
 async def buy_and_check_win():
@@ -242,7 +242,7 @@ async def buy_and_check_win():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def trade_and_monitor():
@@ -299,7 +299,7 @@ async def trade_and_monitor():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def buy_multiple(orders=10):
@@ -338,7 +338,7 @@ async def buy_multiple(orders=10):
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def buy_pending():
@@ -351,7 +351,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "01/04 17:14" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "06/04 11:00" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -366,7 +366,7 @@ async def buy_pending():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def sell_option():
@@ -389,7 +389,7 @@ async def sell_option():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 def asset_parse(asset: str):
@@ -410,7 +410,7 @@ async def assets_open():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_all_assets():
@@ -455,7 +455,7 @@ async def get_candle():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candle_progressive():
@@ -486,7 +486,7 @@ async def get_candle_progressive():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_asset():
@@ -498,7 +498,7 @@ async def get_asset():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 # Function suggested by https://t.me/Suppor_Mk in the message https://t.me/c/2215782682/1/2990
@@ -510,7 +510,7 @@ async def get_payout_by_asset():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_payment():
@@ -526,7 +526,7 @@ async def get_payment():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candle_v2():
@@ -545,7 +545,7 @@ async def get_candle_v2():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candles_all_asset():
@@ -566,7 +566,7 @@ async def get_candles_all_asset():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_realtime_candle():
@@ -613,7 +613,7 @@ async def get_realtime_candle():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_realtime_sentiment():
@@ -632,7 +632,7 @@ async def get_realtime_sentiment():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_realtime_price():
@@ -657,7 +657,7 @@ async def get_realtime_price():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_signal_data():
@@ -672,7 +672,7 @@ async def get_signal_data():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def execute(argument):

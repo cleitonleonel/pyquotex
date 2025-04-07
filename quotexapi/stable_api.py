@@ -222,7 +222,7 @@ class Quotex:
             resource_path=self.resource_path,
             user_data_dir=self.user_data_dir
         )
-        self.close()
+        await self.close()
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
         self.api.current_asset = self.asset_default
@@ -918,5 +918,5 @@ class Quotex:
             finally:
                 await asyncio.sleep(0.2)
 
-    def close(self):
-        return self.api.close()
+    async def close(self):
+        return await self.api.close()

@@ -4,8 +4,9 @@ import sys
 import time
 import json
 import ssl
+import asyncio
 import urllib3
-import requests
+import niquests
 import certifi
 import logging
 import platform
@@ -356,7 +357,7 @@ class QuotexAPI(object):
         :param dict data: (optional) The http request data.
         :param dict params: (optional) The http request params.
         :param dict headers: (optional) The http request headers.
-        :returns: The instance of :class:`Response <requests.Response>`.
+        :returns: The instance of :class:`Response <niquests.Response>`.
         """
         url = resource.url
         logger.debug(url)
@@ -390,7 +391,7 @@ class QuotexAPI(object):
         )
         try:
             response.raise_for_status()
-        except requests.exceptions.HTTPError:
+        except niquests.exceptions.HTTPError:
             return None
         return response
 
@@ -433,15 +434,19 @@ class QuotexAPI(object):
     async def authenticate(self):
         print("Connecting User Account ...")
         logger.debug("Login Account User...")
-        status, message = await self.login(
-            self.username,
-            self.password,
-            self.user_data_dir
-        )
-        print(message)
+        async with self.login as login:
+            status, msg = await login(
+                self.username,
+                self.password,
+                self.user_data_dir
+            )
+            print(msg)
+
         if not status:
             sys.exit(1)
+
         global_value.SSID = self.session_data.get("token")
+
         self.is_logged = True
 
     async def start_websocket(self):
@@ -509,7 +514,7 @@ class QuotexAPI(object):
         global_value.ssl_Mutual_exclusion_write = False
         if global_value.check_websocket_if_connect:
             logger.info("Closing websocket connection...")
-            self.close()
+            await self.close()
 
         check_websocket, websocket_reason = await self.start_websocket()
 
@@ -529,9 +534,10 @@ class QuotexAPI(object):
         logger.info("Websocket Reconnection...")
         await self.start_websocket()
 
-    def close(self):
+    async def close(self):
         if self.websocket_client:
             self.websocket.close()
+            await asyncio.sleep(1)
             self.websocket_thread.join()
         return True
 

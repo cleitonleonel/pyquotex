@@ -1,27 +1,21 @@
-[project]
-name = "pyquotex"
-version = "1.0.2"
-description = "Quotex API Client written in Python."
-authors = [{ name = "Cleiton Leonel", email = "cleiton.leonel@gmail.com" }]
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "requests>=2.32.3,<3.0.0",
-    "websocket-client>=1.8.0,<2.0.0",
-    "beautifulsoup4>=4.13.3,<5.0.0",
-    "pyfiglet>=1.0.2,<2.0.0",
-    "setuptools (>=75.8.2,<76.0.0)"
-]
-
-[build-system]
-requires = ["poetry-core>=2.0.0"]
-build-backend = "poetry.core.masonry.api"
-
 [tool.poetry]
 name = "pyquotex"
-version = "0.1.0"
+version = "1.0.2"
 description = "Quotex API Client written in Python."
 authors = ["Cleiton Leonel <cleiton.leonel@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [{ include = "quotexapi" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12"
+websocket-client = ">=1.8.0,<2.0.0"
+beautifulsoup4 = ">=4.13.3,<5.0.0"
+pyfiglet = ">=1.0.2,<2.0.0"
+niquests = "^3.14.0"
+certifi = "^2025.1.31"
+numpy = { version = "^1.26.4", markers = "platform_machine != 'aarch64' and platform_machine != 'armv7l'" }
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"

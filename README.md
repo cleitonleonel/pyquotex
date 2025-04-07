@@ -7,7 +7,7 @@
 </a>
 <br>
 <a target="_blank">
-    <img src="https://img.shields.io/badge/python-3.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-green" alt="python" width="300">
+    <img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-green" alt="python" width="300">
 </a>
 </p>
 
