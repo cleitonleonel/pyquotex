@@ -218,7 +218,7 @@ async def test_connection():
     is_connected = client.check_connect()
     print(f"Connected: {is_connected}")
     print("Exiting...")
-    client.close()
+    await client.close()
 
 
 async def get_balance():
@@ -229,7 +229,7 @@ async def get_balance():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def buy_simple():
@@ -253,7 +253,7 @@ async def buy_simple():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_result():
@@ -263,7 +263,7 @@ async def get_result():
         print(status, operation_info)
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_profile():
@@ -284,7 +284,7 @@ async def get_profile():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def balance_refill():
@@ -295,7 +295,7 @@ async def balance_refill():
 
         print(result)
 
-    client.close()
+    await client.close()
 
 
 async def buy_and_check_win():
@@ -328,7 +328,7 @@ async def buy_and_check_win():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def buy_multiple(orders=10):
@@ -367,7 +367,7 @@ async def buy_multiple(orders=10):
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def sell_option():
@@ -390,7 +390,7 @@ async def sell_option():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 def asset_parse(asset: str):
@@ -411,7 +411,7 @@ async def assets_open():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_asset():
@@ -423,7 +423,7 @@ async def get_asset():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candle():
@@ -455,7 +455,7 @@ async def get_candle():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candle_progressive():
@@ -486,7 +486,7 @@ async def get_candle_progressive():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_payment():
@@ -502,7 +502,7 @@ async def get_payment():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candle_v2():
@@ -521,7 +521,7 @@ async def get_candle_v2():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_candles_all_asset():
@@ -542,7 +542,7 @@ async def get_candles_all_asset():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 async def get_realtime_candle():
     check_connect, message = await client.connect()
@@ -562,7 +562,7 @@ async def get_realtime_candle():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_realtime_sentiment():
@@ -581,7 +581,7 @@ async def get_realtime_sentiment():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def get_signal_data():
@@ -596,7 +596,7 @@ async def get_signal_data():
 
     print("Exiting...")
 
-    client.close()
+    await client.close()
 
 
 async def execute(argument):
