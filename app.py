@@ -64,6 +64,7 @@ def get_all_options():
     - get_candle
     - get_candle_v2
     - get_candle_progressive
+    - get_opening_closing_current_candle
     - get_realtime_candle
     - get_candles_all_asset
     - get_realtime_sentiment
@@ -142,20 +143,22 @@ async def buy_simple():
     if check_connect:
         client.change_account("PRACTICE")
         amount = 50
-        asset = "CADCHF"  # "EURUSD_otc"
+        asset = "EURUSD_otc"  # "EURUSD_otc"
         direction = "call"
-        duration = 35  # in seconds
-        asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
+        duration = 60  # in seconds
+        asset_name, asset_data = await client.get_available_asset(
+            asset,
+            force_open=True
+        )
         print(asset_name, asset_data)
         if asset_data[2]:
             print("OK: Asset is open.")
-
             status, buy_info = await client.buy(
                 amount,
                 asset_name,
                 direction,
                 duration,
-                time_mode="TIME"
+                time_mode="TIMER"
             )
 
             print(status, buy_info)
@@ -185,6 +188,7 @@ async def get_profile():
         client.change_account("REAL")
         client.set_account_mode("PRACTICE")
         profile = await client.get_profile()
+        await client.get_server_time()
         description = (
             f"\nUser: {profile.nick_name}\n"
             f"Demo Balance: {profile.demo_balance}\n"
@@ -351,7 +355,7 @@ async def buy_pending():
         duration = 60  # in seconds
 
         # Format d/m h:m
-        open_time = "06/04 11:00" # If None, then this will be set to the equivalent of one minute in duration
+        open_time = "15/04 11:17" # If None, then this will be set to the equivalent of one minute in duration
 
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         print(asset_name, asset_data)
@@ -569,6 +573,26 @@ async def get_candles_all_asset():
     await client.close()
 
 
+async def get_opening_closing_current_candle():
+    check_connect, reason = await client.connect()
+    if check_connect:
+        period = 5  # in seconds [5, 10, 15, 30, 60, 120, 180, 240, 300, 600, 900, 1800, 3600, 14400, 86400]
+        asset = "EURUSD"
+        asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
+        if asset_data[2]:
+            await client.start_realtime_candle(asset, period)
+            while True:
+                candle = await client.opening_closing_current_candle(asset_name, period)
+                print(candle)
+                await asyncio.sleep(1)
+        else:
+            print("Asset is closed.")
+
+    print("Exiting...")
+
+    await client.close()
+
+
 async def get_realtime_candle():
     """
     Continuously fetches and prints real-time candle data for a specified asset.
@@ -586,8 +610,9 @@ async def get_realtime_candle():
             print("Check Asset Open")
             candles = []
             candles_data = {}
+            await client.start_realtime_candle(asset, period)
             while True:
-                candles_tick = await client.get_realtime_candles(asset_name, period)
+                candles_tick = await client.get_realtime_candles(asset_name)
                 # print(candles_tick)
 
                 aggregate = aggregate_candle(candles_tick, candles_data)
@@ -620,10 +645,11 @@ async def get_realtime_sentiment():
     check_connect, message = await client.connect()
     if check_connect:
         asset = "EURUSD_otc"
+        period = 60
         asset_name, asset_data = await client.get_available_asset(asset, force_open=True)
         if asset_data[2]:
             print("OK: Asset is open.")
-            client.start_candles_stream(asset, 60)
+            await client.start_realtime_sentiment(asset, period)
             while True:
                 print(await client.get_realtime_sentiment(asset_name), end="\r")
                 await asyncio.sleep(0.5)
@@ -707,6 +733,8 @@ async def execute(argument):
             return await get_candle_progressive()
         case "get_realtime_candle":
             return await get_realtime_candle()
+        case "get_opening_closing_current_candle":
+            return await get_opening_closing_current_candle()
         case "get_realtime_sentiment":
             return await get_realtime_sentiment()
         case "get_realtime_price":

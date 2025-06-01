@@ -12,9 +12,9 @@ python = ">=3.12"
 websocket-client = ">=1.8.0,<2.0.0"
 beautifulsoup4 = ">=4.13.3,<5.0.0"
 pyfiglet = ">=1.0.2,<2.0.0"
-niquests = "^3.14.0"
 certifi = "^2025.1.31"
 numpy = { version = "^2.2.3", markers = "platform_machine != 'aarch64' and platform_machine != 'armv7l'" }
+niquests = {version = "^3.14.0", allow-prereleases = true}
 
 [build-system]
 requires = ["poetry-core>=2.0.0"]
