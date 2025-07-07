@@ -25,7 +25,7 @@ from pyquotex.config import credentials
 from pyquotex.stable_api import Quotex
 
 __author__ = "Cleiton Leonel Creton"
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
