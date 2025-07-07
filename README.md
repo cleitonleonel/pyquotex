@@ -3,7 +3,7 @@
 ---
 <p align="center">
   <a href="https://github.com/cleitonleonel/pyquotex">
-    <img src="pyquotex.png" alt="SmartBot logo" width="45%" height="auto">
+    <img src="pyquotex.png" alt="pyquotex" width="45%" height="auto">
   </a>
 </p>
 <p align="center">
