@@ -57,10 +57,10 @@ poetry add git+https://github.com/cleitonleonel/pyquotex.git
 ```
 
 ### 3. Requisitos adicionais
-If you encounter the error related to `playwright install` when using this library, follow the steps below to resolve the issue.
+Se você encontrar um erro relacionado ao `playwright install` ao usar esta biblioteca, siga os passos abaixo para resolver o problema.
 
-### Install Playwright Browsers
-Ensure that Playwright and the required browsers are installed.
+### Instalar navegadores do Playwright
+Certifique-se de que o Playwright e os navegadores compatíveis estejam instalados.
 
 ![playwright_info.png](playwright_info.png)
 
