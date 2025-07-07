@@ -3,9 +3,9 @@
 import time
 import asyncio
 import logging
-from quotexapi.config import credentials
-from quotexapi.stable_api import Quotex
-from quotexapi.utils.processor import process_candles, get_color
+from pyquotex.config import credentials
+from pyquotex.stable_api import Quotex
+from pyquotex.utils.processor import process_candles, get_color
 
 logging.basicConfig(
     level=logging.DEBUG,

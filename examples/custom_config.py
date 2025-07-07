@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from quotexapi.stable_api import Quotex
+from pyquotex.stable_api import Quotex
 
 logging.basicConfig(
     level=logging.DEBUG,
