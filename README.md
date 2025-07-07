@@ -56,6 +56,12 @@ poetry run python app.py
 poetry add git+https://github.com/cleitonleonel/pyquotex.git
 ```
 
+### 2.1. Instale com um comando no Termux (Android):
+
+```shell
+curl -sSL https://raw.githubusercontent.com/cleitonleonel/pyquotex/refs/heads/master/run_in_termux.sh | sh
+```
+
 ### 3. Requisitos adicionais
 Se você encontrar um erro relacionado ao `playwright install` ao usar esta biblioteca, siga os passos abaixo para resolver o problema.
 
