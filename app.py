@@ -199,7 +199,6 @@ class PyQuotexCLI:
         logger.info("Getting user profile.")
 
         profile = await self.client.get_profile()
-        print(profile.demo_balance)
 
         description = (
             f"\n👤 User Profile:\n"
