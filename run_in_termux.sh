@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 # Executando app.py
 echo -e "${CYAN}🧪 Testando conexão com Quotex...${RESET}"
-python app.py get-profile || {
+bash -c "python app.py get-profile" || {
     echo -e "${RED}❌ Falha ao executar a função 'get-profile'. Verifique credenciais no código.${RESET}"
     exit 1
 }
