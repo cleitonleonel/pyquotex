@@ -458,6 +458,7 @@ class QuotexAPI(object):
             await self.authenticate()
         self.websocket_client = WebsocketClient(self)
         payload = {
+            "suppress_origin": True,    # CloudFlare handshake status 403 forbidden fix
             "ping_interval": 24,
             "ping_timeout": 20,
             "ping_payload": "2",
