@@ -1,0 +1,45 @@
+2025-07-11 12:16:18,432 - __main__ - INFO - Quotex client initialized successfully.
+2025-07-11 12:23:22,463 - __main__ - INFO - Quotex client initialized successfully.
+2025-07-11 12:23:25,469 - __main__ - INFO - Establishing connection...
+2025-07-11 12:23:25,469 - __main__ - INFO - Attempting to connect to Quotex API...
+2025-07-11 12:23:29,416 - websocket - INFO - Websocket connected
+2025-07-11 12:23:29,493 - pyquotex.ws.client - INFO - Websocket client connected.
+2025-07-11 12:23:32,031 - __main__ - INFO - Connected successfully: Websocket connected successfully!!!
+2025-07-11 12:23:32,031 - __main__ - INFO - Running connection test.
+2025-07-11 12:23:34,039 - __main__ - INFO - Connection test successful.
+2025-07-11 12:23:36,314 - pyquotex.ws.client - INFO - Websocket connection closed.
+2025-07-11 12:24:00,878 - __main__ - INFO - Quotex client initialized successfully.
+2025-07-11 12:24:03,902 - __main__ - INFO - Establishing connection...
+2025-07-11 12:24:03,903 - __main__ - INFO - Attempting to connect to Quotex API...
+2025-07-11 12:24:05,447 - websocket - INFO - Websocket connected
+2025-07-11 12:24:05,510 - pyquotex.ws.client - INFO - Websocket client connected.
+2025-07-11 12:24:08,044 - __main__ - INFO - Connected successfully: Websocket connected successfully!!!
+2025-07-11 12:24:08,044 - __main__ - INFO - Getting account balance.
+2025-07-11 12:24:10,271 - pyquotex.ws.client - INFO - Websocket connection closed.
+2025-07-11 12:24:11,277 - __main__ - CRITICAL - Unexpected error occurred during command execution: object NoneType can't be used in 'await' expression
+Traceback (most recent call last):
+  File "C:\Users\User\Desktop\Quotex Broker\Quptex to mt5\Data retreival and sign in\pyquotex\app.py", line 579, in main
+    await cli.get_balance()
+  File "C:\Users\User\Desktop\Quotex Broker\Quptex to mt5\Data retreival and sign in\pyquotex\app.py", line 95, in wrapper
+    result = await func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\User\Desktop\Quotex Broker\Quptex to mt5\Data retreival and sign in\pyquotex\app.py", line 191, in get_balance
+    await self.client.change_account("PRACTICE")
+TypeError: object NoneType can't be used in 'await' expression
+2025-07-11 12:36:56,064 - __main__ - INFO - Quotex client initialized successfully.
+2025-07-11 12:36:59,086 - __main__ - INFO - Establishing connection...
+2025-07-11 12:36:59,086 - __main__ - INFO - Attempting to connect to Quotex API...
+2025-07-11 12:37:00,439 - websocket - INFO - Websocket connected
+2025-07-11 12:37:00,500 - pyquotex.ws.client - INFO - Websocket client connected.
+2025-07-11 12:37:03,046 - __main__ - INFO - Connected successfully: Websocket connected successfully!!!
+2025-07-11 12:37:03,046 - __main__ - INFO - Getting account balance.
+2025-07-11 12:37:03,047 - __main__ - INFO - Current balance: 10000.0
+2025-07-11 12:37:05,269 - pyquotex.ws.client - INFO - Websocket connection closed.
+2025-07-11 12:39:03,651 - __main__ - INFO - Quotex client initialized successfully.
+2025-07-11 12:39:06,679 - __main__ - INFO - Establishing connection...
+2025-07-11 12:39:06,680 - __main__ - INFO - Attempting to connect to Quotex API...
+2025-07-11 12:39:08,010 - websocket - INFO - Websocket connected
+2025-07-11 12:39:08,088 - pyquotex.ws.client - INFO - Websocket client connected.
+2025-07-11 12:39:10,622 - __main__ - INFO - Connected successfully: Websocket connected successfully!!!
+2025-07-11 12:39:10,623 - __main__ - INFO - Getting assets status.
+2025-07-11 12:39:12,852 - pyquotex.ws.client - INFO - Websocket connection closed.

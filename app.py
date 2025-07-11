@@ -188,7 +188,7 @@ class PyQuotexCLI:
     async def get_balance(self) -> None:
         """Gets the current account balance (practice by default)."""
         logger.info("Getting account balance.")
-        await self.client.change_account("PRACTICE")
+        self.client.change_account("PRACTICE")
         balance = await self.client.get_balance()
         logger.info(f"Current balance: {balance}")
         print(f"💰 Current Balance: R$ {balance:.2f}")
@@ -219,7 +219,7 @@ class PyQuotexCLI:
         """Executes a simple buy operation."""
         logger.info(f"Executing simple buy: {amount} on {asset} in {direction} direction for {duration}s.")
 
-        await self.client.change_account("PRACTICE")
+        self.client.change_account("PRACTICE")
         asset_name, asset_data = await self.client.get_available_asset(asset, force_open=True)
 
         if not asset_data or len(asset_data) < 3 or not asset_data[2]:
@@ -255,7 +255,7 @@ class PyQuotexCLI:
         logger.info(
             f"Executing buy and checking result: {amount} on {asset} in {direction} direction for {duration}s.")
 
-        await self.client.change_account("PRACTICE")
+        self.client.change_account("PRACTICE")
         balance_before = await self.client.get_balance()
         logger.info(f"Balance before trade: {balance_before}")
         print(f"💰 Balance Before: R$ {balance_before:.2f}")
@@ -401,7 +401,7 @@ class PyQuotexCLI:
         """Refills the practice account balance."""
         logger.info(f"Refilling practice account balance with R$ {amount:.2f}.")
 
-        await self.client.change_account("PRACTICE")
+        self.client.change_account("PRACTICE")
         result = await self.client.edit_practice_balance(amount)
 
         if result:
