@@ -254,7 +254,7 @@ class Quotex:
             logger.error("ERROR doesn't have this mode")
             exit(1)
 
-    def change_account(self, balance_mode: str):
+    async def change_account(self, balance_mode: str):
         """Change active account `real` or `practice`"""
         self.account_is_demo = 0 if balance_mode.upper() == "REAL" else 1
         self.api.change_account(self.account_is_demo)
