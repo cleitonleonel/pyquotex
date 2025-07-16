@@ -142,7 +142,7 @@ class WebsocketClient(object):
                 }
                 self.api.realtime_price[message[0][0]].append(result)
                 self.api.realtime_candles[self.api.current_asset] = message[0]
-                print(self.api.realtime_candles)
+                #print(self.api.realtime_candles)
             elif len(message[0]) == 2:
                 for i in message:
                     result = {
