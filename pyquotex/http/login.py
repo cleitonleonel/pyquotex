@@ -3,6 +3,7 @@ import json
 import sys
 import asyncio
 from pathlib import Path
+from pyquotex.config import update_session
 from pyquotex.http.navigator import Browser
 
 
@@ -92,15 +93,8 @@ class Login(Browser):
             self.api.session_data["cookies"] = self.cookies
             self.api.session_data["token"] = self.ssid
             self.api.session_data["user_agent"] = self.headers["User-Agent"]
-            output_file = Path(f"{self.api.resource_path}/session.json")
-            output_file.parent.mkdir(exist_ok=True, parents=True)
-            output_file.write_text(
-                json.dumps({
-                    "cookies": self.cookies,
-                    "token": self.ssid,
-                    "user_agent": self.headers["User-Agent"]
-                }, indent=4)
-            )
+
+            update_session(self.api.session_data["email"], self.api.session_data)
             return self.response, json.loads(match)
 
         return None, None

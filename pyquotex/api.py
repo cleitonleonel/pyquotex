@@ -1,4 +1,5 @@
 """Module for Quotex websocket."""
+
 import os
 import sys
 import time
@@ -32,9 +33,9 @@ urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
 cert_path = certifi.where()
-os.environ['SSL_CERT_FILE'] = cert_path
-os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
-cacert = os.environ.get('WEBSOCKET_CLIENT_CA_BUNDLE')
+os.environ["SSL_CERT_FILE"] = cert_path
+os.environ["WEBSOCKET_CLIENT_CA_BUNDLE"] = cert_path
+cacert = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE")
 
 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2
@@ -52,6 +53,7 @@ def nested_dict(n, type):
 
 class QuotexAPI(object):
     """Class for communication with Quotex API."""
+
     socket_option_opened = {}
     buy_id = None
     pending_id = None
@@ -74,14 +76,14 @@ class QuotexAPI(object):
     profile = Profile()
 
     def __init__(
-            self,
-            host,
-            username,
-            password,
-            lang,
-            proxies=None,
-            resource_path=None,
-            user_data_dir="."
+        self,
+        host,
+        username,
+        password,
+        lang,
+        proxies=None,
+        resource_path=None,
+        user_data_dir=".",
     ):
         """
         :param str host: The hostname or ip address of a Quotex server.
@@ -134,18 +136,12 @@ class QuotexAPI(object):
     def subscribe_realtime_candle(self, asset, period):
         self.realtime_price[asset] = []
         self.realtime_candles[asset] = {}
-        payload = {
-            "asset": asset,
-            "period": period
-        }
+        payload = {"asset": asset, "period": period}
         data = f'42["instruments/update", {json.dumps(payload)}]'
         return self.send_websocket_request(data)
 
     def chart_notification(self, asset):
-        payload = {
-            "asset": asset,
-            "version": "1.0.0"
-        }
+        payload = {"asset": asset, "version": "1.0.0"}
         data = f'42["chart_notification/get", {json.dumps(payload)}]'
         return self.send_websocket_request(data)
 
@@ -158,30 +154,30 @@ class QuotexAPI(object):
         return self.send_websocket_request(data)
 
     def settings_apply(
-            self,
-            asset,
-            duration,
-            is_fast_option=False,
-            end_time=None,
-            deal=5,
-            percent_mode=False,
-            percent_deal=1
+        self,
+        asset,
+        duration,
+        is_fast_option=False,
+        end_time=None,
+        deal=5,
+        percent_mode=False,
+        percent_deal=1,
     ):
         payload = {
             "chartId": "graph",
             "settings": {
                 "chartId": "graph",
                 "chartType": 2,
-                "currentExpirationTime": int(time.time()) if not is_fast_option else end_time,
+                "currentExpirationTime": (
+                    int(time.time()) if not is_fast_option else end_time
+                ),
                 "isFastOption": is_fast_option,
                 "isFastAmountOption": percent_mode,
                 "isIndicatorsMinimized": False,
                 "isIndicatorsShowing": True,
                 "isShortBetElement": False,
                 "chartPeriod": 4,
-                "currentAsset": {
-                    "symbol": asset
-                },
+                "currentAsset": {"symbol": asset},
                 "dealValue": deal,
                 "dealPercentValue": percent_deal,
                 "isVisible": True,
@@ -190,8 +186,8 @@ class QuotexAPI(object):
                 "isAutoScrolling": 1,
                 "isOneClickTrade": True,
                 "upColor": "#0FAF59",
-                "downColor": "#FF6251"
-            }
+                "downColor": "#FF6251",
+            },
         }
         data = f'42["settings/store",{json.dumps(payload)}]'
         self.send_websocket_request(data)
@@ -210,10 +206,7 @@ class QuotexAPI(object):
 
     def change_account(self, account_type):
         self.account_type = account_type
-        payload = {
-            "demo": self.account_type,
-            "tournamentId": 0
-        }
+        payload = {"demo": self.account_type, "tournamentId": 0}
         data = f'42["account/change",{json.dumps(payload)}]'
         self.send_websocket_request(data)
 
@@ -234,7 +227,7 @@ class QuotexAPI(object):
             "openTime": open_time,
             "timeframe": duration,
             "command": direction,
-            "amount": amount
+            "amount": amount,
         }
         data = f'42["pending/create",{json.dumps(payload)}]'
         print(data)
@@ -242,14 +235,7 @@ class QuotexAPI(object):
         # 42["pending/create",{"openType":0,"asset":"EURUSD_otc","openTime":"2025-04-01T20:11:00.000Z","timeframe":60,"command":"call","amount":5}]
         self.send_websocket_request(data)
 
-    def instruments_follow(
-            self,
-            amount,
-            asset,
-            direction,
-            duration,
-            open_time
-    ):
+    def instruments_follow(self, amount, asset, direction, duration, open_time):
         payload = {
             "amount": amount,
             "command": 0 if direction == "call" else 1,
@@ -260,7 +246,7 @@ class QuotexAPI(object):
             "symbol": asset,
             "ticket": self.pending_id,
             "timeframe": duration,
-            "uid": self.profile.profile_id
+            "uid": self.profile.profile_id,
         }
         data = f'42["instruments/follow",{json.dumps(payload)}]'
         self.send_websocket_request(data)
@@ -343,12 +329,7 @@ class QuotexAPI(object):
         return GetHistory(self)
 
     def send_http_request_v1(
-            self,
-            resource,
-            method,
-            data=None,
-            params=None,
-            headers=None
+        self, resource, method, data=None, params=None, headers=None
     ):
         """Send http request to Quotex server.
 
@@ -362,8 +343,8 @@ class QuotexAPI(object):
         """
         url = resource.url
         logger.debug(url)
-        cookies = self.session_data.get('cookies')
-        user_agent = self.session_data.get('user_agent')
+        cookies = self.session_data.get("cookies")
+        user_agent = self.session_data.get("user_agent")
         if cookies:
             self.browser.headers["Cookie"] = cookies
         if user_agent:
@@ -374,9 +355,11 @@ class QuotexAPI(object):
         self.browser.headers["Accept"] = (
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         )
-        self.browser.headers["Referer"] = headers.get('referer')
+        self.browser.headers["Referer"] = headers.get("referer")
         self.browser.headers["Upgrade-Insecure-Requests"] = "1"
-        self.browser.headers["Sec-Ch-Ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+        self.browser.headers["Sec-Ch-Ua"] = (
+            '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+        )
         self.browser.headers["Sec-Ch-Ua-Mobile"] = "?0"
         self.browser.headers["Sec-Ch-Ua-Platform"] = '"Linux"'
         self.browser.headers["Sec-Fetch-Site"] = "same-origin"
@@ -385,10 +368,7 @@ class QuotexAPI(object):
         self.browser.headers["Sec-Fetch-Mode"] = "navigate"
         self.browser.headers["Dnt"] = "1"
         response = self.browser.send_request(
-            method=method,
-            url=url,
-            data=data,
-            params=params
+            method=method, url=url, data=data, params=params
         )
         try:
             response.raise_for_status()
@@ -400,8 +380,12 @@ class QuotexAPI(object):
         user_settings = self.settings.get_settings()
         self.profile.nick_name = user_settings.get("data")["nickname"]
         self.profile.profile_id = user_settings.get("data")["id"]
-        self.profile.demo_balance = float(user_settings.get("data").get("demoBalance", 0))
-        self.profile.live_balance = float(user_settings.get("data").get("liveBalance", 0))
+        self.profile.demo_balance = float(
+            user_settings.get("data").get("demoBalance", 0)
+        )
+        self.profile.live_balance = float(
+            user_settings.get("data").get("liveBalance", 0)
+        )
         self.profile.avatar = user_settings.get("data")["avatar"]
         self.profile.currency_code = user_settings.get("data")["currencyCode"]
         self.profile.country = user_settings.get("data")["country"]
@@ -424,8 +408,9 @@ class QuotexAPI(object):
         :param str data: The websocket request data.
         :param bool no_force_send: Default None.
         """
-        while (global_value.ssl_Mutual_exclusion
-               or global_value.ssl_Mutual_exclusion_write) and no_force_send:
+        while (
+            global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write
+        ) and no_force_send:
             pass
         global_value.ssl_Mutual_exclusion_write = True
         self.websocket.send(data)
@@ -436,11 +421,7 @@ class QuotexAPI(object):
         print("Connecting User Account ...")
         logger.debug("Login Account User...")
         async with self.login as login:
-            status, msg = await login(
-                self.username,
-                self.password,
-                self.user_data_dir
-            )
+            status, msg = await login(self.username, self.password, self.user_data_dir)
             print(msg)
 
         if not status:
@@ -458,7 +439,7 @@ class QuotexAPI(object):
             await self.authenticate()
         self.websocket_client = WebsocketClient(self)
         payload = {
-            "suppress_origin": True,    # CloudFlare handshake status 403 forbidden fix
+            "suppress_origin": True,  # CloudFlare handshake status 403 forbidden fix
             "ping_interval": 24,
             "ping_timeout": 20,
             "ping_payload": "2",
@@ -468,15 +449,14 @@ class QuotexAPI(object):
                 "check_hostname": False,
                 "cert_reqs": ssl.CERT_NONE,
                 "ca_certs": cacert,
-                "context": ssl_context
+                "context": ssl_context,
             },
-            "reconnect": 5
+            "reconnect": 5,
         }
         if platform.system() == "Linux":
             payload["sslopt"]["ssl_version"] = ssl.PROTOCOL_TLS
         self.websocket_thread = threading.Thread(
-            target=self.websocket.run_forever,
-            kwargs=payload
+            target=self.websocket.run_forever, kwargs=payload
         )
         self.websocket_thread.daemon = True
         self.websocket_thread.start()
