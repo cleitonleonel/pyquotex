@@ -136,7 +136,7 @@ class Login(Browser):
             return True, "Login successful."
 
         soup = self.get_soup()
-        error = soup.find("div", class_=["hint--danger", "input-control-cabinet__hint"])
+        error = soup.select_one("#tab-1 form > div:nth-child(2) > div")
         
         msg = error.get_text(strip=True) if error else "Unknown error"
         return False, f"Login failed. {msg}"
@@ -156,10 +156,7 @@ class Login(Browser):
 
         }
         status, msg = await self._post(data)
-        if not status:
-            print(msg)
-            exit(0)
-
-        self.get_profile()
+        if status:
+            self.get_profile()
 
         return status, msg

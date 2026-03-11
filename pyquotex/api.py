@@ -6,6 +6,7 @@ import time
 import json
 import ssl
 import asyncio
+from typing import Tuple
 import urllib3
 import requests
 import certifi
@@ -417,19 +418,17 @@ class QuotexAPI(object):
         logger.debug(data)
         global_value.ssl_Mutual_exclusion_write = False
 
-    async def authenticate(self):
+    async def authenticate(self) -> Tuple[bool, str]:
         print("Connecting User Account ...")
         logger.debug("Login Account User...")
         async with self.login as login:
             status, msg = await login(self.username, self.password, self.user_data_dir)
-            print(msg)
 
-        if not status:
-            sys.exit(1)
+        if status:
+            global_value.SSID = self.session_data.get("token")
+            self.is_logged = True
 
-        global_value.SSID = self.session_data.get("token")
-
-        self.is_logged = True
+        return status, msg
 
     async def start_websocket(self):
         global_value.check_websocket_if_connect = None

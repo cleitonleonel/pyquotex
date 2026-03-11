@@ -231,13 +231,14 @@ class Quotex:
         global_value.SSID = self.session_data.get("token")
 
         if not self.session_data.get("token"):
-            await self.api.authenticate()
+            check, reason = await self.api.authenticate()
 
-        check, reason = await self.api.connect(self.account_is_demo)
+        if check:
+            check, reason = await self.api.connect(self.account_is_demo)
 
-        if not await self.check_connect():
-            logger.debug("Reconnecting on websocket")
-            return await self.connect()
+            if not await self.check_connect():
+                logger.debug("Reconnecting on websocket")
+                return await self.connect()
 
         return check, reason
 
