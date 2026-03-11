@@ -134,14 +134,12 @@ class Login(Browser):
     def success_login(self):
         if "trade" in self.response.url:
             return True, "Login successful."
-        html = self.get_soup()
-        match = html.find(
-            "div", {"class": "hint--danger"}
-        ) or html.find(
-            "div", {"class": "input-control-cabinet__hint"}
-        )
-        message_in_match = match.text.strip() if match else ""
-        return False, f"Login failed. {message_in_match}"
+
+        soup = self.get_soup()
+        error = soup.find("div", class_=["hint--danger", "input-control-cabinet__hint"])
+        
+        msg = error.get_text(strip=True) if error else "Unknown error"
+        return False, f"Login failed. {msg}"
 
     async def __call__(self, username, password, user_data_dir=None):
         """Method to get Quotex API login http request.
