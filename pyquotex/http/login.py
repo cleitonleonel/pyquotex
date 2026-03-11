@@ -94,7 +94,7 @@ class Login(Browser):
             self.api.session_data["token"] = self.ssid
             self.api.session_data["user_agent"] = self.headers["User-Agent"]
 
-            update_session(self.api.session_data["email"], self.api.session_data)
+            update_session(self.api.username, self.api.session_data)
             return self.response, json.loads(match)
 
         return None, None
