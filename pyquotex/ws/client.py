@@ -34,28 +34,28 @@ class WebsocketClient(object):
             on_ping=self.on_ping,
             on_pong=self.on_pong,
             header=self.headers,
-            # cookie=self.api.cookies
+            cookie=self.api.session_data.get("cookies")
         )
 
-    def on_message(self, wss, message):
+    def on_message(self, wss, msg):
         """Method to process websocket messages."""
         global_value.ssl_Mutual_exclusion = True
         current_time = time.localtime()
         if current_time.tm_sec in [0, 5, 10, 15, 20, 30, 40, 50]:
             self.wss.send('42["tick"]')
         try:
-            if "authorization/reject" in str(message):
+            if "authorization/reject" in str(msg):
                 print("Token rejected, making automatic reconnection.")
                 logger.debug("Token rejected, making automatic reconnection.")
                 global_value.check_rejected_connection = 1
-            elif "s_authorization" in str(message):
+            elif "s_authorization" in str(msg):
                 global_value.check_accepted_connection = 1
                 global_value.check_rejected_connection = 0
-            elif "instruments/list" in str(message):
+            elif "instruments/list" in str(msg):
                 global_value.started_listen_instruments = True
 
             try:
-                message = message[1:].decode()
+                message = msg[1:].decode()
                 logger.debug(message)
                 message = json.loads(message)
                 self.api.wss_message = message

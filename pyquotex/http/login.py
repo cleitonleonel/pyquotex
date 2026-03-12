@@ -3,6 +3,7 @@ import json
 import sys
 import asyncio
 from pathlib import Path
+from pyquotex.config import update_session
 from pyquotex.http.navigator import Browser
 
 
@@ -92,15 +93,8 @@ class Login(Browser):
             self.api.session_data["cookies"] = self.cookies
             self.api.session_data["token"] = self.ssid
             self.api.session_data["user_agent"] = self.headers["User-Agent"]
-            output_file = Path(f"{self.api.resource_path}/session.json")
-            output_file.parent.mkdir(exist_ok=True, parents=True)
-            output_file.write_text(
-                json.dumps({
-                    "cookies": self.cookies,
-                    "token": self.ssid,
-                    "user_agent": self.headers["User-Agent"]
-                }, indent=4)
-            )
+
+            update_session(self.api.username, self.api.session_data)
             return self.response, json.loads(match)
 
         return None, None
@@ -136,18 +130,21 @@ class Login(Browser):
         await asyncio.sleep(1)
         success = self.success_login()
         return success
-
+    
     def success_login(self):
         if "trade" in self.response.url:
             return True, "Login successful."
-        html = self.get_soup()
-        match = html.find(
-            "div", {"class": "hint--danger"}
-        ) or html.find(
-            "div", {"class": "input-control-cabinet__hint"}
-        )
-        message_in_match = match.text.strip() if match else ""
-        return False, f"Login failed. {message_in_match}"
+
+        soup = self.get_soup()
+
+        not_available = soup.select_one("#tab-1 > div > div.modal-sign__not-avalible__title")
+        if not_available:
+            return False, f"Service unavailable: {not_available.get_text(strip=True)}"
+
+        error = soup.select_one("#tab-1 form > div:nth-child(2) > div")
+        msg = error.get_text(strip=True) if error else "Unknown error"
+
+        return False, f"Login failed. {msg}"
 
     async def __call__(self, username, password, user_data_dir=None):
         """Method to get Quotex API login http request.
@@ -164,10 +161,7 @@ class Login(Browser):
 
         }
         status, msg = await self._post(data)
-        if not status:
-            print(msg)
-            exit(0)
-
-        self.get_profile()
+        if status:
+            self.get_profile()
 
         return status, msg
