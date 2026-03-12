@@ -227,6 +227,7 @@ class Quotex:
             user_data_dir=self.user_data_dir,
             proxies=self.proxies
         )
+
         await self.close()
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
@@ -237,7 +238,7 @@ class Quotex:
         if not self.session_data.get("token"):
             check, reason = await self.api.authenticate()
 
-        if check:
+        if locals().get("check"):
             check, reason = await self.api.connect(self.account_is_demo)
 
             if not await self.check_connect():
