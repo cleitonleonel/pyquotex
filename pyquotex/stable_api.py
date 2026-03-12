@@ -237,13 +237,12 @@ class Quotex:
 
         if not self.session_data.get("token"):
             check, reason = await self.api.authenticate()
+            if not check: return check, reason
 
-        if locals().get("check"):
-            check, reason = await self.api.connect(self.account_is_demo)
-
-            if not await self.check_connect():
-                logger.debug("Reconnecting on websocket")
-                return await self.connect()
+        check, reason = await self.api.connect(self.account_is_demo)
+        if not await self.check_connect():
+            logger.debug("Reconnecting on websocket")
+            return await self.connect()
 
         return check, reason
 

@@ -409,10 +409,9 @@ class QuotexAPI(object):
         :param str data: The websocket request data.
         :param bool no_force_send: Default None.
         """
-        while (
-            global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write
-        ) and no_force_send:
+        while global_value.ssl_Mutual_exclusion or global_value.ssl_Mutual_exclusion_write and no_force_send:
             pass
+        
         global_value.ssl_Mutual_exclusion_write = True
         self.websocket.send(data)
         logger.debug(data)
