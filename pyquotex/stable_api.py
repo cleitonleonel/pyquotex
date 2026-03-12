@@ -2,6 +2,7 @@ import time
 import logging
 import asyncio
 from datetime import datetime
+from typing import Dict
 from . import expiration
 from . import global_value
 from .api import QuotexAPI
@@ -35,7 +36,8 @@ class Quotex:
             root_path=".",
             user_data_dir="browser",
             asset_default="EURUSD",
-            period_default=60
+            period_default=60,
+            proxies: Dict[str, str] = None
     ):
         self.size = [
             5,
@@ -74,6 +76,7 @@ class Quotex:
         self.resource_path = resource_path(root_path)
         session = load_session(user_agent)
         self.session_data = session
+        self.proxies = proxies
         if not email or not password:
             self.email, self.password = credentials()
 
@@ -221,7 +224,8 @@ class Quotex:
             self.password,
             self.lang,
             resource_path=self.resource_path,
-            user_data_dir=self.user_data_dir
+            user_data_dir=self.user_data_dir,
+            proxies=self.proxies
         )
         await self.close()
         self.api.trace_ws = self.debug_ws_enable

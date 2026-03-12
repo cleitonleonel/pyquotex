@@ -422,6 +422,7 @@ class QuotexAPI(object):
         print("Connecting User Account ...")
         logger.debug("Login Account User...")
         async with self.login as login:
+            if self.proxies: login.proxies = self.proxies
             status, msg = await login(self.username, self.password, self.user_data_dir)
 
         if status:
