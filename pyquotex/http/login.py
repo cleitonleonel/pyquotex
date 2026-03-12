@@ -130,15 +130,20 @@ class Login(Browser):
         await asyncio.sleep(1)
         success = self.success_login()
         return success
-
+    
     def success_login(self):
         if "trade" in self.response.url:
             return True, "Login successful."
 
         soup = self.get_soup()
+
+        not_available = soup.select_one("#tab-1 > div > div.modal-sign__not-avalible__title")
+        if not_available:
+            return False, f"Service unavailable: {not_available.get_text(strip=True)}"
+
         error = soup.select_one("#tab-1 form > div:nth-child(2) > div")
-        
         msg = error.get_text(strip=True) if error else "Unknown error"
+
         return False, f"Login failed. {msg}"
 
     async def __call__(self, username, password, user_data_dir=None):
