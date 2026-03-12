@@ -34,7 +34,7 @@ class WebsocketClient(object):
             on_ping=self.on_ping,
             on_pong=self.on_pong,
             header=self.headers,
-            # cookie=self.api.cookies
+            cookie=self.api.session_data.get("cookies")
         )
 
     def on_message(self, wss, message):

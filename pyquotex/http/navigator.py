@@ -83,7 +83,7 @@ class Browser(Session):
         self.response = None
         self.default_headers = None
         self.ecdhCurve = kwargs.pop('ecdhCurve', 'prime256v1')
-        self.cipherSuite = kwargs.pop('cipherSuite', 'DEFAULT@SECLEVEL=1')
+        self.cipherSuite = kwargs.pop('cipherSuite', 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384')
         self.source_address = kwargs.pop('source_address', None)
         self.server_hostname = kwargs.pop('server_hostname', None)
         self.ssl_context = kwargs.pop('ssl_context', None)
