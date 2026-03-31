@@ -28,7 +28,7 @@ pkg install -y \
   libopenblas \
   libandroid-execinfo \
   patchelf \
-  binutils-is-llvm \
+  llvm lld binutils \
   openssl \
   python-numpy \
   python
