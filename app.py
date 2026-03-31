@@ -2,24 +2,17 @@ import os
 import sys
 import json
 import time
-import random
 import asyncio
 import logging
 import argparse
 import pyfiglet
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any, Callable
+from typing import Optional, Tuple, Callable
 from functools import wraps
 import locale
-
-from pyquotex.expiration import (
-    timestamp_to_date,
-    get_timestamp_days_ago
-)
 from pyquotex.utils.processor import (
     process_candles,
-    get_color,
-    aggregate_candle
+    get_color
 )
 from pyquotex.config import credentials
 from pyquotex.stable_api import Quotex
@@ -98,7 +91,7 @@ def ensure_connection(max_attempts: int = 5):
                 if self.client and await self.client.check_connect():
                     await self.client.close()
                     logger.debug("Connection closed after operation.")
-
+        # Use send_request
         return wrapper
 
     return decorator
@@ -118,6 +111,7 @@ class PyQuotexCLI:
             self.client = Quotex(
                 email=email,
                 password=password,
+                host="qxbroker.com",
                 lang="pt"
             )
             logger.info("Quotex client initialized successfully.")
@@ -186,12 +180,18 @@ class PyQuotexCLI:
 
     @ensure_connection()
     async def get_balance(self) -> None:
-        """Gets the current account balance (practice by default)."""
-        logger.info("Getting account balance.")
+        """Gets the current account balances."""
+        logger.info("Getting account balances.")
+        
+        await self.client.change_account("REAL")
+        live_balance = await self.client.get_balance()
+        logger.info(f"Live balance: {live_balance}")
+        print(f"💰 Live Balance: R$ {live_balance:.2f}")
+
         await self.client.change_account("PRACTICE")
-        balance = await self.client.get_balance()
-        logger.info(f"Current balance: {balance}")
-        print(f"💰 Current Balance: R$ {balance:.2f}")
+        demo_balance = await self.client.get_balance()
+        logger.info(f"Demo balance: {demo_balance}")
+        print(f"💰 Demo Balance: R$ {demo_balance:.2f}")
 
     @ensure_connection()
     async def get_profile(self) -> None:
@@ -221,6 +221,7 @@ class PyQuotexCLI:
 
         await self.client.change_account("PRACTICE")
         asset_name, asset_data = await self.client.get_available_asset(asset, force_open=True)
+        print(asset_name, asset_data)
 
         if not asset_data or len(asset_data) < 3 or not asset_data[2]:
             logger.error(f"Asset {asset} is closed or invalid.")

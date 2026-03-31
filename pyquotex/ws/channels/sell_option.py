@@ -11,7 +11,7 @@ class SellOption(Base):
         """
         :param options_ids: list or int
         """
-        if type(options_ids) != list:
+        if not isinstance(options_ids, list):
             payload = {
                 "ticket": options_ids
             }

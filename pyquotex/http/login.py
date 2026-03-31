@@ -102,12 +102,12 @@ class Login(Browser):
     def _get(self):
         return self.send_request(
             method="GET",
-            url=f"f{self.full_url}/trade"
+            url=f"{self.full_url}/trade"
         )
 
     async def _post(self, data):
         """Send get request for Quotex API login http resource.
-        :returns: The instance of :class:`requests.Response`.
+        :returns: The instance of: class:`requests.Response`.
         """
         self.response = self.send_request(
             method="POST",
@@ -151,7 +151,7 @@ class Login(Browser):
         :param str username: The username of a Quotex server.
         :param str password: The password of a Quotex server.
         :param str user_data_dir: The optional value for path userdata.
-        :returns: The instance of :class:`requests.Response`.
+        :returns: The instance of: class:`requests.Response`.
         """
         data = {
             "_token": self.get_token(),

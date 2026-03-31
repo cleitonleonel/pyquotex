@@ -138,13 +138,13 @@ class Browser(Session):
         return '; '.join(f'{i.name}={i.value}' for i in self.cookies)
 
     def get_soup(self):
-        if not self.response:
-            raise RuntimeError("No response stored. Use send_request() first.")
+        if self.response and not self.response.ok:
+            raise RuntimeError(self.response.reason)
         return BeautifulSoup(self.response.content, "html.parser")
 
     def get_json(self):
-        if not self.response:
-            raise RuntimeError("No response stored.")
+        if self.response and not self.response.ok:
+            raise RuntimeError(self.response.reason)
         try:
             return self.response.json()
         except Exception:
@@ -157,6 +157,8 @@ class Browser(Session):
 
         if self.proxies:
             kwargs['proxies'] = self.proxies
+
+        logger.debug("Using proxies: %s", self.proxies)
 
         self.response = self.request(
             method,

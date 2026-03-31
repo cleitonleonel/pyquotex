@@ -1,6 +1,9 @@
 import json
 import time
+import logging
 from pyquotex.ws.channels.base import Base
+
+logger = logging.getLogger(__name__)
 from pyquotex.expiration import get_expiration_time_quotex
 
 
@@ -48,5 +51,5 @@ class Buy(Base):
         self.send_websocket_request(data)
 
         data = f'42["orders/open",{json.dumps(payload)}]'
-        print(data)
+        logger.debug(data)
         self.send_websocket_request(data)

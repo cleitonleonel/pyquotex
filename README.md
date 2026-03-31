@@ -3,7 +3,7 @@
 ---
 <p align="center">
   <a href="https://github.com/cleitonleonel/pyquotex">
-    <img src="pyquotex.png" alt="pyquotex" width="45%" height="auto">
+    <img src="pyquotex.png" alt="pyquotex" width="350" height="auto" title="PyQuotex"/>
   </a>
 </p>
 <p align="center">
@@ -62,18 +62,6 @@ poetry add git+https://github.com/cleitonleonel/pyquotex.git
 curl -sSL https://raw.githubusercontent.com/cleitonleonel/pyquotex/refs/heads/master/run_in_termux.sh | sh
 ```
 
-### 3. Requisitos adicionais
-Se você encontrar um erro relacionado ao `playwright install` ao usar esta biblioteca, siga os passos abaixo para resolver o problema.
-
-### Instalar navegadores do Playwright
-Certifique-se de que o Playwright e os navegadores compatíveis estejam instalados.
-
-![playwright_info.png](playwright_info.png)
-
-```bash
-playwright install
-```
----
 
 ## 🧪 Exemplo de uso
 
@@ -99,11 +87,11 @@ await client.close()
 | -------------------------- | -------------------------------------- |
 | `connect()`                | Conecta via WebSocket com reconexão    |
 | `get_balance()`            | Retorna o saldo da conta               |
-| `buy_simple()`             | Realiza uma operação de compra simples |
-| `buy_and_check_win()`      | Compra e verifica o resultado          |
-| `get_candle()`             | Retorna candles históricos             |
+| `buy()`                    | Realiza uma operação de compra         |
+| `check_win()`              | Verifica o resultado de uma operação   |
+| `get_candles()`            | Retorna candles históricos             |
 | `get_realtime_sentiment()` | Sentimento em tempo real do ativo      |
-| `balance_refill()`         | Recarrega a conta demo                 |
+| `edit_practice_balance()`  | Recarrega a conta demo                 |
 
 ---
 
@@ -141,7 +129,7 @@ Uma versão privada está disponível com recursos adicionais, estabilidade apri
 
 ## 📞 Contato
 
-* Telegram: [@cleitonleonel](https://t.me/cleitonleonel)
+* Telegram: [cleitonlc](https://t.me/cleitonlc)
 * GitHub: [cleitonleonel](https://github.com/cleitonleonel)
 * LinkedIn: [Cleiton Leonel](https://www.linkedin.com/in/cleiton-leonel-creton-331138167/)
 
