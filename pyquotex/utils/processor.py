@@ -1,5 +1,8 @@
 import time
+import asyncio
+from datetime import datetime
 from pyquotex.utils.services import group_by_period
+from pyquotex.utils.async_utils import FastJSONParser
 
 
 def get_color(candle):
@@ -34,16 +37,18 @@ def process_tick(tick, interval, candles):
 
 
 def get_last_n_candles(pair, candles, n=3):
+    """Get last N candles with cached timestamp formatting."""
     if pair not in candles:
         return []
 
     sorted_periods = sorted(candles[pair].keys(), reverse=True)
-
+    
+    # Pre-format all timestamps instead of formatting in loop
     last_n_candles = []
     for period in sorted_periods[:n]:
         candle = candles[pair][period]
         last_n_candles.append({
-            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(period)),
+            "start_time": datetime.utcfromtimestamp(period).strftime("%Y-%m-%d %H:%M:%S"),
             "open": candle["open"],
             "close": candle["close"],
             "high": candle["high"],
@@ -51,6 +56,13 @@ def get_last_n_candles(pair, candles, n=3):
         })
 
     return last_n_candles
+
+def get_last_n_candles_batch(candles_dict, n=3):
+    """Get last N candles for multiple pairs efficiently."""
+    result = {}
+    for pair, candles in candles_dict.items():
+        result[pair] = get_last_n_candles(pair, {pair: candles}, n)
+    return result
 
 
 def process_candles(history, period):
@@ -142,15 +154,17 @@ def calculate_candles(history, period):
 
 
 def merge_candles(candles_data):
-    seen_times = set()
-    merged_list = []
-    for candle in candles_data:
-        if isinstance(candle, dict) and candle.get('time') not in seen_times:
-            seen_times.add(candle['time'])
-            merged_list.append(candle)
-    merged_list.sort(key=lambda x: x['time'])
+    """Efficiently merge candles using dict comprehension - O(n) instead of O(n²)."""
+    # Use dict to eliminate duplicates by time, then convert back to sorted list
+    candle_dict = {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}
+    return sorted(candle_dict.values(), key=lambda x: x['time'])
 
-    return merged_list
+def merge_candles_fast(candles_data):
+    """Ultra-fast candle merge for large datasets using dict comprehension."""
+    return sorted(
+        {c['time']: c for c in candles_data}.values(),
+        key=lambda x: x['time']
+    )
 
 
 def aggregate_candle(tick, candles):

@@ -13,6 +13,7 @@ from .utils.processor import (
     process_tick,
     aggregate_candle
 )
+from .utils.optimization import optimized_wait_for_data
 from .config import (
     load_session,
     update_session,
@@ -133,13 +134,24 @@ class Quotex:
             logger.warning("Failed to re-subscribe mood stream: %s", e)
 
     async def get_instruments(self, timeout=DEFAULT_TIMEOUT):
-        start_time = time.time()
-        while await self.check_connect() and self.api.instruments is None:
-            if time.time() - start_time > timeout:
-                logger.error("Timeout waiting for instruments data.")
-                break
-            await asyncio.sleep(0.2)
-        return self.api.instruments or []
+        """Get instruments using optimized event-driven approach."""
+        if not self.api or not await self.check_connect():
+            raise RuntimeError("Not connected to Quotex")
+
+        if self.api.instruments:
+            return self.api.instruments
+
+        try:
+            await optimized_wait_for_data(
+                get_data=lambda: self.api.instruments,
+                condition=lambda i: i is not None and len(i) > 0,
+                timeout=timeout,
+                error_message=f"Timeout waiting for instruments after {timeout}s"
+            )
+            return self.api.instruments
+        except TimeoutError as e:
+            logger.error(str(e))
+            return []
 
     def get_all_asset_name(self):
         if self.api.instruments:
@@ -179,12 +191,18 @@ class Quotex:
         self.api.candles.candles_data = None
         self.start_candles_stream(asset, period)
         self.api.get_candles(asset, index, end_from_time, offset, period)
-        start_time = time.time()
-        while await self.check_connect() and self.api.candles.candles_data is None:
-            if time.time() - start_time > timeout:
-                logger.error(f"Timeout waiting for get_candles data for {asset}.")
-                return None
-            await asyncio.sleep(0.1)
+
+        try:
+            await optimized_wait_for_data(
+                get_data=lambda: self.api.candles.candles_data if self.api.candles else None,
+                condition=lambda c: c is not None,
+                timeout=timeout,
+                check_interval=0.1,
+                error_message=f"Timeout waiting for candles after {timeout}s"
+            )
+        except TimeoutError as e:
+            logger.error(str(e))
+            return None
 
         candles = self.prepare_candles(asset, period)
 
@@ -306,14 +324,28 @@ class Quotex:
         return self.api.training_balance_edit_request
 
     async def get_balance(self, timeout=DEFAULT_TIMEOUT):
-        start = time.time()
-        while self.api.account_balance is None:
-            if time.time() - start > timeout:
-                raise TimeoutError("Timeout waiting for account balance.")
-            await asyncio.sleep(0.2)
-        balance = self.api.account_balance.get("demoBalance") \
-            if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
-        return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
+        """Get account balance using optimized event-driven approach."""
+        if not self.api or not await self.check_connect():
+            raise RuntimeError("Not connected to Quotex")
+
+        if self.api.account_balance is not None:
+            balance = self.api.account_balance.get("demoBalance") \
+                if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
+            return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
+
+        try:
+            await optimized_wait_for_data(
+                get_data=lambda: self.api.account_balance,
+                condition=lambda b: b is not None,
+                timeout=timeout,
+                error_message=f"Timeout waiting for account balance after {timeout}s"
+            )
+            balance = self.api.account_balance.get("demoBalance") \
+                if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
+            return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
+        except TimeoutError as e:
+            logger.error(str(e))
+            return 0
 
     async def calculate_indicator(
             self, asset: str,
@@ -625,19 +657,24 @@ class Quotex:
         await self.get_server_time()
         self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
 
-        count = 0.1
-        while await self.check_connect() and self.api.buy_id is None:
-            count += 0.2
-            if count > duration:
-                status_buy = False
-                break
-            await asyncio.sleep(0.2)
-            if self.api.state.check_websocket_if_error:
-                return False, self.api.state.websocket_error_reason
-        else:
-            status_buy = True
+        timeout = duration + 5 if duration else 30
 
-        return status_buy, self.api.buy_successful
+        try:
+            await optimized_wait_for_data(
+                get_data=lambda: self.api.buy_id,
+                condition=lambda bid: bid is not None,
+                timeout=timeout,
+                check_interval=0.2,
+                error_message=f"Timeout waiting for buy confirmation after {timeout}s"
+            )
+        except TimeoutError as e:
+            logger.error(str(e))
+            return False, None
+
+        if self.api.state.check_websocket_if_error:
+            return False, self.api.state.websocket_error_reason
+
+        return True, self.api.buy_successful
 
     async def open_pending(self, amount: float, asset: str, direction: str, duration: int, open_time: str = None):
         self.api.pending_id = None
