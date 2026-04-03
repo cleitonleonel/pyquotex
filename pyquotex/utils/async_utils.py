@@ -78,22 +78,22 @@ class FastJSONParser:
         """Parse JSON data asynchronously, optionally skipping header bytes."""
         if skip_header > 0:
             data = data[skip_header:]
-        
+
         # Offload to thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, orjson.loads, data)
-    
+
     @staticmethod
     def parse_sync(data: bytes, skip_header: int = 0) -> Any:
         """Parse JSON data synchronously."""
         if skip_header > 0:
             data = data[skip_header:]
         return orjson.loads(data)
-    
+
     @staticmethod
     async def dumps_async(obj: Any) -> bytes:
         """Serialize object to JSON bytes asynchronously."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, orjson.dumps, obj)
     
     @staticmethod
@@ -104,18 +104,33 @@ class FastJSONParser:
 
 class AsyncTimeout:
     """Context manager for async operations with timeout."""
-    
+
     def __init__(self, seconds: float, message: str = "Operation timeout"):
         self.seconds = seconds
         self.message = message
         self.task = None
-    
+        self._cancel_handle = None
+        self._timed_out = False
+
+    def _cancel_task(self):
+        """Cancel the tracked task when the timeout expires."""
+        self._timed_out = True
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
     async def __aenter__(self):
         self.task = asyncio.current_task()
+        loop = asyncio.get_running_loop()
+        self._timed_out = False
+        self._cancel_handle = loop.call_later(self.seconds, self._cancel_task)
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is asyncio.TimeoutError:
+        if self._cancel_handle is not None:
+            self._cancel_handle.cancel()
+            self._cancel_handle = None
+
+        if self._timed_out and exc_type is asyncio.CancelledError:
             raise TimeoutError(self.message)
 
 

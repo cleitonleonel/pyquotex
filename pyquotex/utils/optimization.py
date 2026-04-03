@@ -12,16 +12,17 @@ Performance improvements:
 import asyncio
 import logging
 from typing import Optional, Any, Callable
-from pyquotex.utils.async_utils import AsyncEvent, wait_for_condition
+from pyquotex.utils.async_utils import AsyncEvent
 
 logger = logging.getLogger(__name__)
 
 
 class OptimizedQuotexMixin:
     """Mixin providing optimized async methods for Quotex client."""
-    
-    def __init__(self):
+
+    def __init__(self, *args, **kwargs):
         """Initialize event registry for optimized waits."""
+        super().__init__(*args, **kwargs)
         self._balance_event = AsyncEvent()
         self._instruments_event = AsyncEvent()
         self._candles_event = AsyncEvent()

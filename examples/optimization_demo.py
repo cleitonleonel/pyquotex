@@ -31,21 +31,21 @@ class QuotexOptimizedExample:
     
     async def example_2_fast_json_parsing(self, client):
         """Example: Fast JSON parsing with orjson (3-5x faster).
-        
+
         When WebSocket receives message with binary data:
         """
         from pyquotex.utils.async_utils import FastJSONParser
-        
-        # Example binary message
-        message_data = b'[2,"candles",{"asset":"EURUSD","candles":[...]}]'
-        
+
+        # Example binary message (raw JSON payload, no transport header)
+        message_data = b'[2,"candles",{"asset":"EURUSD","candles":[]}]'
+
         # Async parse (offloaded to thread pool)
         try:
-            data = await FastJSONParser.parse_async(message_data, skip_header=1)
+            data = await FastJSONParser.parse_async(message_data, skip_header=0)
             logger.info(f"✓ Parsed message: {data}")
         except Exception as e:
             logger.error(f"✗ Parse error: {e}")
-        
+
         # Sync parse (for quick operations)
         data_sync = FastJSONParser.parse_sync(message_data)
         logger.info(f"✓ Sync parsed: {data_sync}")
@@ -230,18 +230,19 @@ async def run_all_examples():
 
 async def integration_example(client):
     """Example of how to integrate optimizations into actual trading bot.
-    
-    This shows a typical usage pattern with the optimized client.
+
+    This shows a typical usage pattern using the public client API together
+    with batched concurrent requests.
     """
     from pyquotex.utils.optimization import batch_requests_with_timeout
-    
-    # Get multiple data points efficiently
+
+    # Get multiple data points efficiently using the public client methods
     requests = [
-        client.get_balance_optimized(timeout=10.0),
-        client.get_instruments_optimized(timeout=10.0),
-        client.get_candles_optimized("EURUSD", 60, timeout=10.0),
+        client.get_balance(),
+        client.get_instruments(),
+        client.get_candles("EURUSD", None, 0, 60),
     ]
-    
+
     try:
         balance, instruments, candles = await batch_requests_with_timeout(
             requests,

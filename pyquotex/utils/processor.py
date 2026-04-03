@@ -1,8 +1,5 @@
-import time
-import asyncio
 from datetime import datetime
 from pyquotex.utils.services import group_by_period
-from pyquotex.utils.async_utils import FastJSONParser
 
 
 def get_color(candle):
@@ -162,7 +159,7 @@ def merge_candles(candles_data):
 def merge_candles_fast(candles_data):
     """Ultra-fast candle merge for large datasets using dict comprehension."""
     return sorted(
-        {c['time']: c for c in candles_data}.values(),
+        {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}.values(),
         key=lambda x: x['time']
     )
 

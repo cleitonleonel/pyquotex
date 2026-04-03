@@ -136,7 +136,7 @@ class Quotex:
     async def get_instruments(self, timeout=DEFAULT_TIMEOUT):
         """Get instruments using optimized event-driven approach."""
         if not self.api or not await self.check_connect():
-            raise RuntimeError("Not connected to Quotex")
+            return []
 
         if self.api.instruments:
             return self.api.instruments
@@ -345,7 +345,7 @@ class Quotex:
             return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
         except TimeoutError as e:
             logger.error(str(e))
-            return 0
+            raise
 
     async def calculate_indicator(
             self, asset: str,
