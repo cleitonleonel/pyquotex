@@ -2,6 +2,7 @@
 import asyncio
 import orjson
 import uuid
+import time
 from typing import Any, Dict, Optional, Callable
 
 
@@ -12,7 +13,7 @@ class AsyncEvent:
     This ensures data isn't lost if set() is called before wait() starts.
     """
 
-    def __init__(self, auto_reset: bool = True):
+    def __init__(self, auto_reset: bool = False):
         self.event = asyncio.Event()
         self.auto_reset = auto_reset
         self.data: Optional[Any] = None
@@ -73,9 +74,14 @@ class EventRequest:
 
     def __init__(self, request_id: Optional[str] = None):
         self.request_id = request_id or str(uuid.uuid4())
-        self.event = AsyncEvent(auto_reset=True)
+        # Request-scoped event - not auto_reset since each request is done after one result
+        self.event = AsyncEvent(auto_reset=False)
         self.data: Optional[Any] = None
-        self.created_at = asyncio.get_event_loop().time()
+        # Use event loop time if available, fallback to system time
+        try:
+            self.created_at = asyncio.get_event_loop().time()
+        except RuntimeError:
+            self.created_at = time.time()
 
     async def wait(self, timeout: Optional[float] = None) -> Any:
         """Wait for request to complete within timeout."""
@@ -98,11 +104,11 @@ class EventRegistry:
         self._events: Dict[str, AsyncEvent] = {}
         self._lock = asyncio.Lock()
     
-    async def get_event(self, key: str, auto_reset: bool = True) -> AsyncEvent:
+    async def get_event(self, key: str, auto_reset: bool = False) -> AsyncEvent:
         """Get or create an event by key.
 
-        Default auto_reset=True matches AsyncEvent default for consistency.
-        Events automatically reset after each waiter consumes them.
+        Events don't auto-reset by default to support multiple concurrent waiters.
+        All pending waiters see the data when an event fires.
         """
         async with self._lock:
             if key not in self._events:
