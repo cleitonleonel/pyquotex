@@ -40,39 +40,29 @@ class WebsocketClient:
         )
 
     def _signal_event(self, event_name, data=None):
-        """Safely signal an event from the WebSocket thread to the event loop."""
+        """Safely signal an event from the WebSocket thread to the event loop.
+
+        Only uses the stored event loop - does not attempt to guess or fallback.
+        This prevents silent failures from trying multiple strategies in a different thread.
+        """
         if not hasattr(self.api, 'event_registry'):
             return
 
         try:
-            # Use stored event loop if available
+            # Only use stored event loop - don't try to guess in a different thread
             loop = getattr(self.api, 'event_loop', None)
 
-            # If not stored or not running, try to find it
-            if loop is None or not loop.is_running():
-                try:
-                    loop = asyncio.get_running_loop()
-                    self.api.event_loop = loop  # Store for future use
-                except RuntimeError:
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop is None or loop.is_closed():
-                            logger.debug(f"No active event loop for signaling {event_name}")
-                            return
-                    except RuntimeError:
-                        logger.debug(f"Could not get event loop for signaling {event_name}")
-                        return
+            if not loop or not loop.is_running():
+                logger.debug(f"Event loop not available for signaling {event_name}")
+                return
 
-            if loop and loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    self.api.event_registry.set_event(event_name, data),
-                    loop
-                )
-                logger.debug(f"Signaled event: {event_name}")
-            else:
-                logger.debug(f"Event loop not running for {event_name}")
+            asyncio.run_coroutine_threadsafe(
+                self.api.event_registry.set_event(event_name, data),
+                loop
+            )
+            logger.debug(f"Signaled event: {event_name}")
         except Exception as e:
-            logger.debug(f"Could not signal event {event_name}: {e}")
+            logger.debug(f"Failed to signal event {event_name}: {e}")
 
     def on_message(self, wss, msg):
         """Method to process websocket messages."""

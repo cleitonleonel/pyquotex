@@ -128,13 +128,25 @@ def process_candles(history, period):
 
 
 def process_candles_v2(history, asset, data):
+    """Process and merge historical + realtime candles with deduplication.
+
+    Prevents adding the same candle object multiple times by time-based deduplication.
+    """
     if not history or not isinstance(history, dict):
         return data if data else []
 
     candles_data = history.get(asset, {})
     candles = candles_data.get("candles", [])[1:] if candles_data else []
-    candles += data if data else []
-    return candles
+
+    # Combine candles and realtime data
+    combined = candles + (data if data else [])
+
+    # Deduplicate by time to prevent same candle from being added multiple times
+    if combined:
+        candle_dict = {c.get('time'): c for c in combined if isinstance(c, dict) and 'time' in c}
+        return list(candle_dict.values()) if candle_dict else []
+
+    return combined
 
 
 def calculate_candles(history, period):

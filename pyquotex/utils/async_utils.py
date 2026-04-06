@@ -1,41 +1,93 @@
 """Async utilities for improved performance with event-driven architecture."""
 import asyncio
 import orjson
+import uuid
 from typing import Any, Dict, Optional, Callable
 
 
 class AsyncEvent:
-    """Enhanced asyncio.Event with timeout support and automatic reset."""
-    
-    def __init__(self, auto_reset: bool = False):
+    """Enhanced asyncio.Event with timeout support and automatic reset.
+
+    Prevents race conditions by tracking event state separately from asyncio.Event.
+    This ensures data isn't lost if set() is called before wait() starts.
+    """
+
+    def __init__(self, auto_reset: bool = True):
         self.event = asyncio.Event()
         self.auto_reset = auto_reset
         self.data: Optional[Any] = None
-    
+        self._has_fired = False  # Track if event has ever been set
+
     async def wait(self, timeout: Optional[float] = None):
-        """Wait for event with optional timeout."""
+        """Wait for event with optional timeout.
+
+        If the event was already set before this wait started, returns data immediately.
+        This prevents race conditions where set() fires before wait() starts listening.
+        """
+        # Check if event already fired (prevents race condition)
+        if self._has_fired:
+            data = self.data
+            if self.auto_reset:
+                self._has_fired = False
+                self._reset_state()
+            return data
+
         try:
             await asyncio.wait_for(self.event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             raise TimeoutError(f"Event wait timeout after {timeout}s")
-        
+
         data = self.data
         if self.auto_reset:
-            self.reset()
+            self._has_fired = False
+            self._reset_state()
         return data
-    
+
     def set(self, data: Optional[Any] = None):
         """Set event and store data."""
         self.data = data
+        self._has_fired = True
         self.event.set()
-    
-    def reset(self):
-        """Reset event and clear data."""
+
+    def _reset_state(self):
+        """Reset internal state (called by wait when auto_reset=True)."""
         self.event.clear()
         self.data = None
-    
+
+    def reset(self):
+        """Manually reset event and state."""
+        self._has_fired = False
+        self._reset_state()
+
     def is_set(self) -> bool:
         """Check if event is set."""
+        return self.event.is_set() or self._has_fired
+
+
+class EventRequest:
+    """Request-scoped event for concurrent operations.
+
+    Each request gets a unique ID so concurrent calls don't interfere.
+    The WebSocket handler can safely signal multiple concurrent requests.
+    """
+
+    def __init__(self, request_id: Optional[str] = None):
+        self.request_id = request_id or str(uuid.uuid4())
+        self.event = AsyncEvent(auto_reset=True)
+        self.data: Optional[Any] = None
+        self.created_at = asyncio.get_event_loop().time()
+
+    async def wait(self, timeout: Optional[float] = None) -> Any:
+        """Wait for request to complete within timeout."""
+        return await self.event.wait(timeout=timeout)
+
+    def set_data(self, data: Any):
+        """Mark request as complete with data."""
+        self.data = data
+        self.event.set(data)
+
+    def is_complete(self) -> bool:
+        """Check if request completed."""
         return self.event.is_set()
 
 
@@ -46,8 +98,12 @@ class EventRegistry:
         self._events: Dict[str, AsyncEvent] = {}
         self._lock = asyncio.Lock()
     
-    async def get_event(self, key: str, auto_reset: bool = False) -> AsyncEvent:
-        """Get or create an event by key."""
+    async def get_event(self, key: str, auto_reset: bool = True) -> AsyncEvent:
+        """Get or create an event by key.
+
+        Default auto_reset=True matches AsyncEvent default for consistency.
+        Events automatically reset after each waiter consumes them.
+        """
         async with self._lock:
             if key not in self._events:
                 self._events[key] = AsyncEvent(auto_reset=auto_reset)

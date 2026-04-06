@@ -142,7 +142,11 @@ class Quotex:
             logger.warning("Failed to re-subscribe mood stream: %s", e)
 
     async def get_instruments(self, timeout=DEFAULT_TIMEOUT):
-        """Get instruments using true event-driven approach (no polling)."""
+        """Get instruments using true event-driven approach (no polling).
+
+        With the improved AsyncEvent that tracks _has_fired, events can't be lost
+        to race conditions, so no sleep-based recovery is needed.
+        """
         self._capture_event_loop()  # Ensure event loop is captured
 
         if not self.api or not await self.check_connect():
@@ -156,12 +160,6 @@ class Quotex:
             await self.api.event_registry.wait_event('instruments_ready', timeout=timeout)
             return self.api.instruments or []
         except TimeoutError:
-            logger.debug(f"Event timeout waiting for instruments, checking if data arrived...")
-            # Event timeout - but data might still have arrived
-            await asyncio.sleep(0.1)
-            if self.api.instruments:
-                logger.debug("Instruments data arrived after timeout")
-                return self.api.instruments
             logger.error(f"Timeout waiting for instruments after {timeout}s")
             return []
 
@@ -207,15 +205,12 @@ class Quotex:
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
         try:
-            # Wait for WebSocket event signaling candles arrival (asset-specific to handle multiple assets)
+            # Wait for WebSocket event signaling candles arrival (asset-specific)
+            # With improved AsyncEvent, race conditions are prevented, so no sleep-based recovery needed
             await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
         except TimeoutError:
-            logger.debug(f"Event timeout waiting for candles for {asset}, checking if data arrived...")
-            # Event timeout - but data might still have arrived, give it a moment
-            await asyncio.sleep(0.1)
-            if self.api.candles.candles_data is None:
-                logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
-                return None
+            logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
+            return None
 
         candles = self.prepare_candles(asset, period)
 
@@ -337,7 +332,11 @@ class Quotex:
         return self.api.training_balance_edit_request
 
     async def get_balance(self, timeout=DEFAULT_TIMEOUT):
-        """Get account balance using true event-driven approach (no polling)."""
+        """Get account balance using true event-driven approach (no polling).
+
+        With the improved AsyncEvent that tracks _has_fired, events can't be lost
+        to race conditions, so no sleep-based recovery is needed.
+        """
         self._capture_event_loop()  # Ensure event loop is captured
 
         if not self.api or not await self.check_connect():
@@ -349,15 +348,11 @@ class Quotex:
             return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
 
         try:
-            # Wait for WebSocket event signaling balance arrival (true event-driven, no polling)
+            # Wait for WebSocket event signaling balance arrival
             await self.api.event_registry.wait_event('balance_ready', timeout=timeout)
         except TimeoutError:
-            logger.debug(f"Event timeout waiting for balance, checking if data arrived...")
-            # Event timeout - but data might still have arrived
-            await asyncio.sleep(0.1)
-            if self.api.account_balance is None:
-                logger.error(f"Timeout waiting for balance after {timeout}s")
-                raise
+            logger.error(f"Timeout waiting for balance after {timeout}s")
+            raise
 
         balance = self.api.account_balance.get("demoBalance") \
             if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
