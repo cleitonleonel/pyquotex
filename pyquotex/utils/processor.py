@@ -66,8 +66,8 @@ def process_candles(history, period):
     candles = []
     current_candle = {
         'open': None,
-        'high': float('-inf'),
-        'low': float('inf'),
+        'high': None,
+        'low': None,
         'close': None,
         'start_time': None,
         'end_time': None,
@@ -75,49 +75,56 @@ def process_candles(history, period):
     }
 
     start_time = None
-    timestamp = None
-    price = 0
     for entry in history:
         if isinstance(entry, dict):
             timestamp = entry['time']
             price = entry['price']
         elif isinstance(entry, list):
             timestamp, price, _ = entry
+        else:
+            continue
+
         if start_time is None:
             start_time = timestamp - (timestamp % period)
 
         end_time = start_time + period
         if timestamp >= end_time:
+            # Finish current candle
+            if current_candle['open'] is not None:
+                candles.append(current_candle)
 
-            # Concluir a vela atual
-            candles.append(current_candle)
-
-            # Resetar para a próxima vela
+            # Reset for next candle
             start_time = timestamp - (timestamp % period)
+            end_time = start_time + period
             current_candle = {
                 'open': price,
                 'high': price,
                 'low': price,
                 'close': price,
                 'start_time': start_time,
-                'end_time': start_time + period,
+                'end_time': end_time,
                 'ticks': 1
             }
-
         else:
             if current_candle['open'] is None:
                 current_candle['open'] = price
+                current_candle['high'] = price
+                current_candle['low'] = price
+            else:
+                if price > current_candle['high']:
+                    current_candle['high'] = price
+                if price < current_candle['low']:
+                    current_candle['low'] = price
+
             current_candle['close'] = price
-            current_candle['high'] = max(current_candle['high'], price)
-            current_candle['low'] = min(current_candle['low'], price)
             current_candle['end_time'] = end_time
             current_candle['ticks'] += 1
 
-    # Adicionar a última vela se não estiver vazia
+    # Add last candle if not empty
     if current_candle['open'] is not None:
         candles.append(current_candle)
 
-    return candles[:-1]
+    return candles[:-1] if candles else []
 
 
 def process_candles_v2(history, asset, data):

@@ -2,6 +2,8 @@
 import json
 import time
 import logging
+import asyncio
+import threading
 import websocket
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ class WebsocketClient:
             "Origin": self.api.https_url,
             "Host": f"ws2.{self.api.host}",
         }
+        self._event_loop = None  # Will be set when WebSocket connects
 
         websocket.enableTrace(self.api.trace_ws)
         self.wss = websocket.WebSocketApp(
@@ -36,6 +39,41 @@ class WebsocketClient:
             header=self.headers,
             cookie=self.api.session_data.get("cookies")
         )
+
+    def _signal_event(self, event_name, data=None):
+        """Safely signal an event from the WebSocket thread to the event loop."""
+        if not hasattr(self.api, 'event_registry'):
+            return
+
+        try:
+            # Use stored event loop if available
+            loop = getattr(self.api, 'event_loop', None)
+
+            # If not stored or not running, try to find it
+            if loop is None or not loop.is_running():
+                try:
+                    loop = asyncio.get_running_loop()
+                    self.api.event_loop = loop  # Store for future use
+                except RuntimeError:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop is None or loop.is_closed():
+                            logger.debug(f"No active event loop for signaling {event_name}")
+                            return
+                    except RuntimeError:
+                        logger.debug(f"Could not get event loop for signaling {event_name}")
+                        return
+
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self.api.event_registry.set_event(event_name, data),
+                    loop
+                )
+                logger.debug(f"Signaled event: {event_name}")
+            else:
+                logger.debug(f"Event loop not running for {event_name}")
+        except Exception as e:
+            logger.debug(f"Could not signal event {event_name}: {e}")
 
     def on_message(self, wss, msg):
         """Method to process websocket messages."""
@@ -65,6 +103,8 @@ class WebsocketClient:
                     self.api.wss_message = message
                     if "call" in str(message) or 'put' in str(message):
                         self.api.instruments = message
+                        # Signal event for instruments received
+                        self._signal_event('instruments_ready', message)
                 except (ValueError, TypeError):
                     pass
                 if isinstance(message, dict):
@@ -83,6 +123,8 @@ class WebsocketClient:
                                 self.api.signal_data[i[0]][time_in]["duration"] = i[1][0][0]
                     elif message.get("liveBalance") or message.get("demoBalance"):
                         self.api.account_balance = message
+                        # Signal event for balance received
+                        self._signal_event('balance_ready', message)
                     elif message.get("position"):
                         self.api.top_list_leader = message
                     elif len(message) == 1 and message.get("profit", -1) > -1:
@@ -99,6 +141,8 @@ class WebsocketClient:
                         self.api.buy_id = message["id"]
                         if message.get("closeTimestamp"):
                             self.api.timesync.server_timestamp = message.get("closeTimestamp")
+                        # Signal event for buy confirmation received
+                        self._signal_event('buy_confirmed', message)
                     elif message.get("ticket") and not message.get("id"):
                         self.api.sold_options_respond = message
                     elif message.get("deals"):
@@ -140,6 +184,8 @@ class WebsocketClient:
                         "low": candle[4],
                         "ticks": candle[5]
                     } for candle in message["candles"]]
+                    # Signal event for historical candles received
+                    self._signal_event('candles_ready', message["history"])
             elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 4:
                 result = {
                     "time": message[0][1],
@@ -147,6 +193,8 @@ class WebsocketClient:
                 }
                 self.api.realtime_price[message[0][0]].append(result)
                 self.api.realtime_candles[self.api.current_asset] = message[0]
+                # Signal event for realtime candles received
+                self._signal_event('realtime_candles_ready', message[0])
             elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 2:
                 for i in message:
                     result = {
