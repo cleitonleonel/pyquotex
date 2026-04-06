@@ -3,7 +3,6 @@ import json
 import time
 import logging
 import asyncio
-import threading
 import websocket
 
 logger = logging.getLogger(__name__)
@@ -184,8 +183,9 @@ class WebsocketClient:
                         "low": candle[4],
                         "ticks": candle[5]
                     } for candle in message["candles"]]
-                    # Signal event for historical candles received
-                    self._signal_event('candles_ready', message["history"])
+                    # Signal event for historical candles received (asset-specific to handle multiple assets)
+                    asset_name = message.get("asset", "unknown")
+                    self._signal_event(f'candles_ready_{asset_name}', message["history"])
             elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 4:
                 result = {
                     "time": message[0][1],
@@ -193,8 +193,9 @@ class WebsocketClient:
                 }
                 self.api.realtime_price[message[0][0]].append(result)
                 self.api.realtime_candles[self.api.current_asset] = message[0]
-                # Signal event for realtime candles received
-                self._signal_event('realtime_candles_ready', message[0])
+                # Signal event for realtime candles received (asset-specific)
+                asset = self.api.current_asset
+                self._signal_event(f'realtime_candles_ready_{asset}', message[0])
             elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 2:
                 for i in message:
                     result = {

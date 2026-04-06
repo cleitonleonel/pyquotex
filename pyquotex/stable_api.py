@@ -207,14 +207,14 @@ class Quotex:
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
         try:
-            # Wait for WebSocket event signaling candles arrival (true event-driven, no polling)
-            await self.api.event_registry.wait_event('candles_ready', timeout=timeout)
+            # Wait for WebSocket event signaling candles arrival (asset-specific to handle multiple assets)
+            await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
         except TimeoutError:
-            logger.debug(f"Event timeout waiting for candles, checking if data arrived...")
+            logger.debug(f"Event timeout waiting for candles for {asset}, checking if data arrived...")
             # Event timeout - but data might still have arrived, give it a moment
             await asyncio.sleep(0.1)
             if self.api.candles.candles_data is None:
-                logger.error(f"Timeout waiting for candles after {timeout}s")
+                logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
                 return None
 
         candles = self.prepare_candles(asset, period)

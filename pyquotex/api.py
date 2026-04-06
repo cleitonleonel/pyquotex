@@ -9,7 +9,6 @@ import certifi
 import logging
 import platform
 import threading
-import orjson
 from .global_value import ConnectionState
 from .http.login import Login
 from .http.logout import Logout
