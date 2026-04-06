@@ -128,14 +128,23 @@ def process_candles(history, period):
 
 
 def process_candles_v2(history, asset, data):
+    if not history or not isinstance(history, dict):
+        return data if data else []
+
     candles_data = history.get(asset, {})
-    candles = candles_data.get("candles", [])[1:]
-    candles += data
+    candles = candles_data.get("candles", [])[1:] if candles_data else []
+    candles += data if data else []
     return candles
 
 
 def calculate_candles(history, period):
+    if history is None:
+        return []
+
     grouped = group_by_period(history, period)
+    if grouped is None:
+        return []
+
     candles = []
     for minute, ticks in grouped.items():
         open_price = ticks[0][1]
@@ -159,16 +168,22 @@ def calculate_candles(history, period):
 
 def merge_candles(candles_data):
     """Efficiently merge candles using dict comprehension - O(n) instead of O(n²)."""
+    if not candles_data:
+        return []
+
     # Use dict to eliminate duplicates by time, then convert back to sorted list
     candle_dict = {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}
-    return sorted(candle_dict.values(), key=lambda x: x['time'])
+    return sorted(candle_dict.values(), key=lambda x: x['time']) if candle_dict else []
 
 def merge_candles_fast(candles_data):
     """Ultra-fast candle merge for large datasets using dict comprehension."""
+    if not candles_data:
+        return []
+
     return sorted(
         {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}.values(),
         key=lambda x: x['time']
-    )
+    ) or []
 
 
 def aggregate_candle(tick, candles):
