@@ -59,16 +59,15 @@ class WebsocketClient:
                 self.api.event_registry.set_event(event_name, data),
                 loop
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                def on_done(f):
+                    try:
+                        f.result()  # Raises exception if set_event() failed
+                        logger.debug(f"Successfully signaled event: {event_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to signal event {event_name}: {e}")
 
-            # Observe the future to catch and log any exceptions from set_event()
-            def on_done(f):
-                try:
-                    f.result()  # Raises exception if set_event() failed
-                    logger.debug(f"Successfully signaled event: {event_name}")
-                except Exception as e:
-                    logger.error(f"Failed to signal event {event_name}: {e}")
-
-            future.add_done_callback(on_done)
+                future.add_done_callback(on_done)
 
         except Exception as e:
             logger.debug(f"Failed to schedule event signal for {event_name}: {e}")

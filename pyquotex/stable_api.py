@@ -212,12 +212,14 @@ class Quotex:
         try:
             # Wait for WebSocket event signaling candles arrival (asset-specific)
             # Event is cleared before request, ensuring fresh wait for new data
-            await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
+            # The returned value contains the history data for this specific asset
+            history_data = await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
         except TimeoutError:
             logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
             return None
 
-        candles = self.prepare_candles(asset, period)
+        # Pass the asset-specific history directly to avoid multi-asset state races
+        candles = self.prepare_candles(asset, period, history_data)
 
         if progressive:
             return self.api.historical_candles.get("data", {})
@@ -258,18 +260,21 @@ class Quotex:
         candles = self.prepare_candles(asset, period)
         return candles
 
-    def prepare_candles(self, asset: str, period: int):
+    def prepare_candles(self, asset: str, period: int, history: list = None):
         """
         Prepare candles data for a specified asset.
 
         Args:
             asset (str): Asset name.
             period (int): Period for fetching candles.
+            history (list, optional): Historical candle data. If provided, uses this instead of shared state.
 
         Returns:
             list: List of prepared candles data.
         """
-        candles_data = calculate_candles(self.api.candles.candles_data, period)
+        # Use provided history if available (from event response), otherwise fallback to shared state
+        history_data = history if history is not None else self.api.candles.candles_data
+        candles_data = calculate_candles(history_data, period)
         candles_v2_data = process_candles_v2(self.api.candle_v2_data, asset, candles_data)
         new_candles = merge_candles(candles_v2_data)
 
