@@ -66,8 +66,8 @@ def process_candles(history, period):
     candles = []
     current_candle = {
         'open': None,
-        'high': float('-inf'),
-        'low': float('inf'),
+        'high': None,
+        'low': None,
         'close': None,
         'start_time': None,
         'end_time': None,
@@ -75,60 +75,90 @@ def process_candles(history, period):
     }
 
     start_time = None
-    timestamp = None
-    price = 0
     for entry in history:
         if isinstance(entry, dict):
             timestamp = entry['time']
             price = entry['price']
         elif isinstance(entry, list):
             timestamp, price, _ = entry
+        else:
+            continue
+
         if start_time is None:
             start_time = timestamp - (timestamp % period)
 
         end_time = start_time + period
         if timestamp >= end_time:
+            # Finish current candle
+            if current_candle['open'] is not None:
+                candles.append(current_candle)
 
-            # Concluir a vela atual
-            candles.append(current_candle)
-
-            # Resetar para a próxima vela
+            # Reset for next candle
             start_time = timestamp - (timestamp % period)
+            end_time = start_time + period
             current_candle = {
                 'open': price,
                 'high': price,
                 'low': price,
                 'close': price,
                 'start_time': start_time,
-                'end_time': start_time + period,
+                'end_time': end_time,
                 'ticks': 1
             }
-
         else:
             if current_candle['open'] is None:
                 current_candle['open'] = price
+                current_candle['high'] = price
+                current_candle['low'] = price
+                current_candle['start_time'] = start_time
+                current_candle['end_time'] = end_time
+            else:
+                if price > current_candle['high']:
+                    current_candle['high'] = price
+                if price < current_candle['low']:
+                    current_candle['low'] = price
+
             current_candle['close'] = price
-            current_candle['high'] = max(current_candle['high'], price)
-            current_candle['low'] = min(current_candle['low'], price)
             current_candle['end_time'] = end_time
             current_candle['ticks'] += 1
 
-    # Adicionar a última vela se não estiver vazia
+    # Add last candle if not empty
     if current_candle['open'] is not None:
         candles.append(current_candle)
 
-    return candles[:-1]
+    return candles[:-1] if candles else []
 
 
 def process_candles_v2(history, asset, data):
+    """Process and merge historical + realtime candles with deduplication.
+
+    Prevents adding the same candle object multiple times by time-based deduplication.
+    """
+    if not history or not isinstance(history, dict):
+        return data if data else []
+
     candles_data = history.get(asset, {})
-    candles = candles_data.get("candles", [])[1:]
-    candles += data
-    return candles
+    candles = candles_data.get("candles", [])[1:] if candles_data else []
+
+    # Combine candles and realtime data
+    combined = candles + (data if data else [])
+
+    # Deduplicate by time to prevent same candle from being added multiple times
+    if combined:
+        candle_dict = {c.get('time'): c for c in combined if isinstance(c, dict) and 'time' in c}
+        return list(candle_dict.values()) if candle_dict else []
+
+    return combined
 
 
 def calculate_candles(history, period):
+    if history is None:
+        return []
+
     grouped = group_by_period(history, period)
+    if grouped is None:
+        return []
+
     candles = []
     for minute, ticks in grouped.items():
         open_price = ticks[0][1]
@@ -152,16 +182,22 @@ def calculate_candles(history, period):
 
 def merge_candles(candles_data):
     """Efficiently merge candles using dict comprehension - O(n) instead of O(n²)."""
+    if not candles_data:
+        return []
+
     # Use dict to eliminate duplicates by time, then convert back to sorted list
     candle_dict = {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}
-    return sorted(candle_dict.values(), key=lambda x: x['time'])
+    return sorted(candle_dict.values(), key=lambda x: x['time']) if candle_dict else []
 
 def merge_candles_fast(candles_data):
     """Ultra-fast candle merge for large datasets using dict comprehension."""
+    if not candles_data:
+        return []
+
     return sorted(
         {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}.values(),
         key=lambda x: x['time']
-    )
+    ) or []
 
 
 def aggregate_candle(tick, candles):

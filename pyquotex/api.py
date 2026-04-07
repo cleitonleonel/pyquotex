@@ -9,7 +9,6 @@ import certifi
 import logging
 import platform
 import threading
-import orjson
 from .global_value import ConnectionState
 from .http.login import Login
 from .http.logout import Logout
@@ -25,7 +24,7 @@ from .ws.objects.candles import Candles
 from .ws.objects.profile import Profile
 from .ws.objects.listinfodata import ListInfoData
 from .ws.client import WebsocketClient
-from .utils.async_utils import EventRegistry, FastJSONParser
+from .utils.async_utils import EventRegistry
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -128,6 +127,7 @@ class QuotexAPI:
         self.settings = Settings(self)
         # Event registry for optimized async operations
         self.event_registry = EventRegistry()
+        self.event_loop = None  # Will be set when WebSocket connects
 
     @property
     def websocket(self):
