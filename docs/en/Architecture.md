@@ -251,20 +251,20 @@ graph TB
 sequenceDiagram
     participant MainL as Main Event Loop
     participant WST as WebSocket Thread
-    participant Loop as event_loop
+    participant EL as Event Loop Ref
 
     MainL->>MainL: get_running_loop
-    MainL->>Loop: Store event_loop reference
-    activate Loop
+    MainL->>EL: Store event_loop reference
+    activate EL
 
     WST->>WST: on_message
-    WST->>Loop: Retrieve event_loop reference
+    WST->>EL: Retrieve event_loop reference
 
     WST->>WST: Call run_coroutine_threadsafe
 
-    Loop->>MainL: Schedule coroutine
+    EL->>MainL: Schedule coroutine
     MainL->>MainL: set_event executes
-    deactivate Loop
+    deactivate EL
 ```
 
 ---
