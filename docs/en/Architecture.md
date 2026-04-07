@@ -15,14 +15,14 @@ graph TB
     WS["WebSocket Client<br/>(Different Thread)"]
     EventReg["EventRegistry<br/>(Event Hub)"]
 
-    User -->|get_balance()| API
-    User -->|get_candles()| API
+    User -->|"get_balance()"| API
+    User -->|"get_candles()"| API
 
-    API -->|_capture_event_loop()| EventReg
-    API -->|wait_event()| EventReg
+    API -->|"_capture_event_loop()"| EventReg
+    API -->|"wait_event()"| EventReg
 
-    WS -->|on_message()| WS
-    WS -->|_signal_event()| EventReg
+    WS -->|"on_message()"| WS
+    WS -->|"_signal_event()"| EventReg
 
     EventReg -->|returns data| API
     API -->|returns result| User
@@ -167,11 +167,11 @@ graph TB
     API["API"]
     WS["WebSocket"]
 
-    User -->|get_candles(EURUSD)| API
-    User -->|get_candles(AUDCAD)| API
+    User -->|"get_candles(EURUSD)"| API
+    User -->|"get_candles(AUDCAD)"| API
 
-    API -->|wait_event(candles_ready_EURUSD)| Events["EventRegistry"]
-    API -->|wait_event(candles_ready_AUDCAD)| Events
+    API -->|"wait_event(candles_ready_EURUSD)"| Events["EventRegistry"]
+    API -->|"wait_event(candles_ready_AUDCAD)"| Events
 
     WS -->|candles received| EURUSD["candles_ready_EURUSD"]
     WS -->|candles received| AUDCAD["candles_ready_AUDCAD"]
@@ -253,21 +253,18 @@ sequenceDiagram
     participant WST as WebSocket Thread
     participant Loop as event_loop
 
-    MainL->>MainL: get_running_loop()
-    MainL->>Loop: api.event_loop = loop
+    MainL->>MainL: get_running_loop
+    MainL->>Loop: Store event_loop reference
     activate Loop
 
-    WST->>WST: on_message()
-    WST->>Loop: get(api.event_loop)
+    WST->>WST: on_message
+    WST->>Loop: Retrieve event_loop reference
 
-    WST->>WST: run_coroutine_threadsafe(<br/>set_event(), loop)
+    WST->>WST: Call run_coroutine_threadsafe
 
     Loop->>MainL: Schedule coroutine
-    MainL->>MainL: set_event() executes
+    MainL->>MainL: set_event executes
     deactivate Loop
-
-    style MainL fill:#4CAF50,color:#fff
-    style WST fill:#2196F3,color:#fff
 ```
 
 ---
@@ -430,10 +427,10 @@ graph TB
 
 The event-driven architecture provides:
 
-✅ **Zero race conditions** - Events can't be lost
-✅ **Concurrent request support** - Multiple requests succeed
-✅ **Thread-safe signaling** - WebSocket thread safely notifies main loop
-✅ **Asset isolation** - Asset-specific event names prevent cross-contamination
-✅ **3-10x faster** - No polling, immediate response on data arrival
-✅ **Production-ready** - Comprehensive error handling and validation
+**Zero race conditions** - Events can't be lost
+**Concurrent request support** - Multiple requests succeed
+**Thread-safe signaling** - WebSocket thread safely notifies main loop
+**Asset isolation** - Asset-specific event names prevent cross-contamination
+**3-10x faster** - No polling, immediate response on data arrival
+**Production-ready** - Comprehensive error handling and validation
 
