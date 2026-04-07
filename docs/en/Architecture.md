@@ -50,16 +50,16 @@ sequenceDiagram
     API->>API: _capture_event_loop()
     Note over API: Store event loop reference
 
-    API->>EventReg: wait_event('balance_ready', 30s)
+    API->>EventReg: wait_event(balance_ready, 30s)
     activate EventReg
     Note over EventReg: Check _has_fired flag
     Note over EventReg: If False: await on asyncio.Event
 
     WS->>WS: on_message() received balance data
-    WS->>WS: api.account_balance = new_data
+    WS->>WS: api.account_balance data updated
 
-    WS->>EventReg: _signal_event('balance_ready')
-    EventReg->>EventReg: _has_fired = True
+    WS->>EventReg: _signal_event(balance_ready)
+    EventReg->>EventReg: _has_fired set to True
     EventReg->>EventReg: event.set(data)
 
     EventReg-->>API: Returns data immediately
@@ -90,8 +90,8 @@ graph LR
 
 ```mermaid
 graph LR
-    A["set_event()<br/>fires"] -->|_has_fired = True| B["Event stored"]
-    B -->|wait() checks| C["_has_fired is True"]
+    A["set_event()<br/>fires"] -->|has_fired True| B["Event stored"]
+    B -->|wait checks| C["has_fired is True"]
     C -->|RESULT| D["Returns data<br/>immediately"]
 
     style A fill:#4CAF50,color:#fff
@@ -113,21 +113,17 @@ sequenceDiagram
     participant EventReg as EventRegistry
     participant WS as WebSocket
 
-    R1->>EventReg: wait_event('balance_ready')
+    R1->>EventReg: wait_event(balance_ready)
     activate EventReg
-    R2->>EventReg: wait_event('balance_ready')
+    R2->>EventReg: wait_event(balance_ready)
 
-    WS->>EventReg: _signal_event('balance_ready')
+    WS->>EventReg: _signal_event(balance_ready)
 
-    Note over EventReg: auto_reset=False<br/>so event stays set
+    Note over EventReg: auto_reset False so event stays set
 
     EventReg-->>R1: Return data
     EventReg-->>R2: Return data (not consumed!)
     deactivate EventReg
-
-    style R1 fill:#4CAF50,color:#fff
-    style R2 fill:#4CAF50,color:#fff
-    style EventReg fill:#FF9800,color:#fff
 ```
 
 ---
@@ -139,20 +135,20 @@ stateDiagram-v2
     [*] --> Cleared
 
     Cleared --> Fired: set(data)
-    Fired --> Cleared: wait() if auto_reset=True
-    Fired --> Fired: wait() if auto_reset=False
+    Fired --> Cleared: wait() if auto_reset True
+    Fired --> Fired: wait() if auto_reset False
 
     Cleared --> WaitingByTimeout: wait() timeout
     WaitingByTimeout --> Cleared: Timeout raised
 
     note right of Cleared
-        _has_fired = False
-        data = None
+        has_fired False
+        data None
     end note
 
     note right of Fired
-        _has_fired = True
-        data = {...}
+        has_fired True
+        data {...}
     end note
 
     note right of WaitingByTimeout
@@ -171,11 +167,11 @@ graph TB
     API["API"]
     WS["WebSocket"]
 
-    User -->|get_candles('EURUSD')| API
-    User -->|get_candles('AUDCAD')| API
+    User -->|get_candles(EURUSD)| API
+    User -->|get_candles(AUDCAD)| API
 
-    API -->|wait_event('candles_ready_EURUSD')| Events["EventRegistry"]
-    API -->|wait_event('candles_ready_AUDCAD')| Events
+    API -->|wait_event(candles_ready_EURUSD)| Events["EventRegistry"]
+    API -->|wait_event(candles_ready_AUDCAD)| Events
 
     WS -->|candles received| EURUSD["candles_ready_EURUSD"]
     WS -->|candles received| AUDCAD["candles_ready_AUDCAD"]
