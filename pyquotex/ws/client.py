@@ -55,13 +55,23 @@ class WebsocketClient:
                 logger.debug(f"Event loop not available for signaling {event_name}")
                 return
 
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self.api.event_registry.set_event(event_name, data),
                 loop
             )
-            logger.debug(f"Signaled event: {event_name}")
+
+            # Observe the future to catch and log any exceptions from set_event()
+            def on_done(f):
+                try:
+                    f.result()  # Raises exception if set_event() failed
+                    logger.debug(f"Successfully signaled event: {event_name}")
+                except Exception as e:
+                    logger.error(f"Failed to signal event {event_name}: {e}")
+
+            future.add_done_callback(on_done)
+
         except Exception as e:
-            logger.debug(f"Failed to signal event {event_name}: {e}")
+            logger.debug(f"Failed to schedule event signal for {event_name}: {e}")
 
     def on_message(self, wss, msg):
         """Method to process websocket messages."""
@@ -163,6 +173,9 @@ class WebsocketClient:
             elif self.api._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
                 if message.get("asset") == self.api.current_asset:
                     self.api.candles.candles_data = message["history"]
+                # Always process and signal event for any asset with candle data
+                # This enables multi-asset concurrent requests without deadlock
+                if message.get("asset") and message.get("candles"):
                     self.api.candle_v2_data[message["asset"]] = message
                     self.api.candle_v2_data[message["asset"]]["candles"] = [{
                         "time": candle[0],

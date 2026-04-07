@@ -199,13 +199,15 @@ class Quotex:
             end_from_time = time.time()
         index = expiration.get_timestamp()
         self.api.candles.candles_data = None
-        self.start_candles_stream(asset, period)
-        self.api.get_candles(asset, index, end_from_time, offset, period)
 
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
-        # Clear event state before requesting new data to prevent stale state from previous requests
+        # Clear event state before requesting data to prevent race with WS response
+        # If cleared after request, WS may signal event before we clear, causing stale data
         await self.api.event_registry.clear_event(f'candles_ready_{asset}')
+
+        self.start_candles_stream(asset, period)
+        self.api.get_candles(asset, index, end_from_time, offset, period)
 
         try:
             # Wait for WebSocket event signaling candles arrival (asset-specific)
@@ -668,14 +670,16 @@ class Quotex:
         self.api.buy_successful = None
         request_id = expiration.get_timestamp()
         is_fast_option = time_mode.upper() == "TIME"
-        self.start_candles_stream(asset, duration)
-        await self.get_server_time()
-        self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
 
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
-        # Clear event state before requesting buy to prevent stale state from previous buy
+        # Clear event state before requesting buy to prevent race with WS response
+        # If cleared after request, WS may signal event before we clear, causing timeout
         await self.api.event_registry.clear_event('buy_confirmed')
+
+        self.start_candles_stream(asset, duration)
+        await self.get_server_time()
+        self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
 
         timeout = duration + 5 if duration else 30
 

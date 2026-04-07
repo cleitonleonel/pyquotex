@@ -11,6 +11,14 @@ class AsyncEvent:
 
     Prevents race conditions by tracking event state separately from asyncio.Event.
     This ensures data isn't lost if set() is called before wait() starts.
+
+    Note on auto_reset=True:
+        When auto_reset=True, the event is reset after any wait() returns.
+        With multiple concurrent waiters on the same event:
+        - The first waiter gets the data and resets the event
+        - Subsequent waiters may see None or race conditions
+        Use auto_reset=False for shared/broadcast events, or use request-scoped
+        events (EventRequest) for per-request isolation in concurrent scenarios.
     """
 
     def __init__(self, auto_reset: bool = False):

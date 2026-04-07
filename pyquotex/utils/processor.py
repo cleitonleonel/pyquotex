@@ -110,6 +110,8 @@ def process_candles(history, period):
                 current_candle['open'] = price
                 current_candle['high'] = price
                 current_candle['low'] = price
+                current_candle['start_time'] = start_time
+                current_candle['end_time'] = end_time
             else:
                 if price > current_candle['high']:
                     current_candle['high'] = price
