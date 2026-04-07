@@ -18,7 +18,7 @@ graph TB
     User -->|"get_balance()"| API
     User -->|"get_candles()"| API
 
-    API -->|"_capture_event_loop()"| EventReg
+    API -->|"_capture_event_loop() stores api.event_loop"| API
     API -->|"wait_event()"| EventReg
 
     WS -->|"on_message()"| WS

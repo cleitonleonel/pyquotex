@@ -24,7 +24,6 @@ class WebsocketClient:
             "Origin": self.api.https_url,
             "Host": f"ws2.{self.api.host}",
         }
-        self._event_loop = None  # Will be set when WebSocket connects
 
         websocket.enableTrace(self.api.trace_ws)
         self.wss = websocket.WebSocketApp(

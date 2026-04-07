@@ -204,9 +204,12 @@ class Quotex:
 
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
+        # Clear event state before requesting new data to prevent stale state from previous requests
+        await self.api.event_registry.clear_event(f'candles_ready_{asset}')
+
         try:
             # Wait for WebSocket event signaling candles arrival (asset-specific)
-            # With improved AsyncEvent, race conditions are prevented, so no sleep-based recovery needed
+            # Event is cleared before request, ensuring fresh wait for new data
             await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
         except TimeoutError:
             logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
@@ -662,6 +665,7 @@ class Quotex:
 
         """
         self.api.buy_id = None
+        self.api.buy_successful = None
         request_id = expiration.get_timestamp()
         is_fast_option = time_mode.upper() == "TIME"
         self.start_candles_stream(asset, duration)
@@ -670,10 +674,14 @@ class Quotex:
 
         self._capture_event_loop()  # Ensure event loop is captured before waiting
 
+        # Clear event state before requesting buy to prevent stale state from previous buy
+        await self.api.event_registry.clear_event('buy_confirmed')
+
         timeout = duration + 5 if duration else 30
 
         try:
             # Wait for WebSocket event signaling buy confirmation (true event-driven, no polling)
+            # Event is cleared before request, ensuring fresh wait for new confirmation
             await self.api.event_registry.wait_event('buy_confirmed', timeout=timeout)
         except TimeoutError as e:
             logger.error(str(e))
