@@ -10,17 +10,16 @@ packages = [{ include = "pyquotex" }]
 requires-python = ">=3.12,<4.0"
 
 dependencies = [
-    "websocket-client (>=1.8.0,<2.0.0)",
-    "requests (>=2.32.3,<3.0.0)",
+    "websockets (>=12.0)",
+    "httpx (>=0.27.0,<1.0.0)",
+    "orjson (>=3.9.0,<4.0.0)",
     "pyfiglet (>=1.0.2,<2.0.0)",
     "beautifulsoup4 (>=4.12.3,<5.0.0)",
     "fake-useragent (==2.2.0)",
-    "certifi (>=2024.2.2)",
-    "orjson (>=3.9.0,<4.0.0)"
+    "certifi (>=2025.1.31)",
+    "rich (>=13.7.0,<14.0.0)",
+    "numpy (>=2.0.0)"
 ]
-
-[tool.poetry.dependencies]
-numpy = { version = "^2.2.3", markers = "platform_machine != 'aarch64' and platform_machine != 'armv7l'" }
 
 [tool.poetry.group.dev.dependencies]
 python = ">=3.12,<4.0"
