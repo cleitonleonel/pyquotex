@@ -13,7 +13,6 @@ from .utils.processor import (
     process_tick,
     aggregate_candle
 )
-from .utils.optimization import optimized_wait_for_data
 from .config import (
     load_session,
     update_session,
@@ -107,6 +106,15 @@ class Quotex:
             return False
         return await self._check_connect(self.api.state)
 
+    def _capture_event_loop(self):
+        """Capture and store the current event loop for use in WebSocket thread."""
+        try:
+            loop = asyncio.get_running_loop()
+            if self.api and loop:
+                self.api.event_loop = loop
+        except RuntimeError:
+            pass
+
     def set_session(self, user_agent: str, cookies: str = None, ssid: str = None):
         session = {
             "cookies": cookies,
@@ -134,7 +142,13 @@ class Quotex:
             logger.warning("Failed to re-subscribe mood stream: %s", e)
 
     async def get_instruments(self, timeout=DEFAULT_TIMEOUT):
-        """Get instruments using optimized event-driven approach."""
+        """Get instruments using true event-driven approach (no polling).
+
+        With the improved AsyncEvent that tracks _has_fired, events can't be lost
+        to race conditions, so no sleep-based recovery is needed.
+        """
+        self._capture_event_loop()  # Ensure event loop is captured
+
         if not self.api or not await self.check_connect():
             return []
 
@@ -142,15 +156,11 @@ class Quotex:
             return self.api.instruments
 
         try:
-            await optimized_wait_for_data(
-                get_data=lambda: self.api.instruments,
-                condition=lambda i: i is not None and len(i) > 0,
-                timeout=timeout,
-                error_message=f"Timeout waiting for instruments after {timeout}s"
-            )
-            return self.api.instruments
-        except TimeoutError as e:
-            logger.error(str(e))
+            # Wait for WebSocket event signaling instruments arrival
+            await self.api.event_registry.wait_event('instruments_ready', timeout=timeout)
+            return self.api.instruments or []
+        except TimeoutError:
+            logger.error(f"Timeout waiting for instruments after {timeout}s")
             return []
 
     def get_all_asset_name(self):
@@ -189,22 +199,27 @@ class Quotex:
             end_from_time = time.time()
         index = expiration.get_timestamp()
         self.api.candles.candles_data = None
+
+        self._capture_event_loop()  # Ensure event loop is captured before waiting
+
+        # Clear event state before requesting data to prevent race with WS response
+        # If cleared after request, WS may signal event before we clear, causing stale data
+        await self.api.event_registry.clear_event(f'candles_ready_{asset}')
+
         self.start_candles_stream(asset, period)
         self.api.get_candles(asset, index, end_from_time, offset, period)
 
         try:
-            await optimized_wait_for_data(
-                get_data=lambda: self.api.candles.candles_data if self.api.candles else None,
-                condition=lambda c: c is not None,
-                timeout=timeout,
-                check_interval=0.1,
-                error_message=f"Timeout waiting for candles after {timeout}s"
-            )
-        except TimeoutError as e:
-            logger.error(str(e))
+            # Wait for WebSocket event signaling candles arrival (asset-specific)
+            # Event is cleared before request, ensuring fresh wait for new data
+            # The returned value contains the history data for this specific asset
+            history_data = await self.api.event_registry.wait_event(f'candles_ready_{asset}', timeout=timeout)
+        except TimeoutError:
+            logger.error(f"Timeout waiting for candles for {asset} after {timeout}s")
             return None
 
-        candles = self.prepare_candles(asset, period)
+        # Pass the asset-specific history directly to avoid multi-asset state races
+        candles = self.prepare_candles(asset, period, history_data)
 
         if progressive:
             return self.api.historical_candles.get("data", {})
@@ -245,18 +260,21 @@ class Quotex:
         candles = self.prepare_candles(asset, period)
         return candles
 
-    def prepare_candles(self, asset: str, period: int):
+    def prepare_candles(self, asset: str, period: int, history: list = None):
         """
         Prepare candles data for a specified asset.
 
         Args:
             asset (str): Asset name.
             period (int): Period for fetching candles.
+            history (list, optional): Historical candle data. If provided, uses this instead of shared state.
 
         Returns:
             list: List of prepared candles data.
         """
-        candles_data = calculate_candles(self.api.candles.candles_data, period)
+        # Use provided history if available (from event response), otherwise fallback to shared state
+        history_data = history if history is not None else self.api.candles.candles_data
+        candles_data = calculate_candles(history_data, period)
         candles_v2_data = process_candles_v2(self.api.candle_v2_data, asset, candles_data)
         new_candles = merge_candles(candles_v2_data)
 
@@ -324,7 +342,13 @@ class Quotex:
         return self.api.training_balance_edit_request
 
     async def get_balance(self, timeout=DEFAULT_TIMEOUT):
-        """Get account balance using optimized event-driven approach."""
+        """Get account balance using true event-driven approach (no polling).
+
+        With the improved AsyncEvent that tracks _has_fired, events can't be lost
+        to race conditions, so no sleep-based recovery is needed.
+        """
+        self._capture_event_loop()  # Ensure event loop is captured
+
         if not self.api or not await self.check_connect():
             raise RuntimeError("Not connected to Quotex")
 
@@ -334,18 +358,15 @@ class Quotex:
             return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
 
         try:
-            await optimized_wait_for_data(
-                get_data=lambda: self.api.account_balance,
-                condition=lambda b: b is not None,
-                timeout=timeout,
-                error_message=f"Timeout waiting for account balance after {timeout}s"
-            )
-            balance = self.api.account_balance.get("demoBalance") \
-                if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
-            return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
-        except TimeoutError as e:
-            logger.error(str(e))
+            # Wait for WebSocket event signaling balance arrival
+            await self.api.event_registry.wait_event('balance_ready', timeout=timeout)
+        except TimeoutError:
+            logger.error(f"Timeout waiting for balance after {timeout}s")
             raise
+
+        balance = self.api.account_balance.get("demoBalance") \
+            if self.api.account_type > 0 else self.api.account_balance.get("liveBalance")
+        return float(f"{truncate(balance + self.get_profit(), 2):.2f}")
 
     async def calculate_indicator(
             self, asset: str,
@@ -651,8 +672,16 @@ class Quotex:
 
         """
         self.api.buy_id = None
+        self.api.buy_successful = None
         request_id = expiration.get_timestamp()
         is_fast_option = time_mode.upper() == "TIME"
+
+        self._capture_event_loop()  # Ensure event loop is captured before waiting
+
+        # Clear event state before requesting buy to prevent race with WS response
+        # If cleared after request, WS may signal event before we clear, causing timeout
+        await self.api.event_registry.clear_event('buy_confirmed')
+
         self.start_candles_stream(asset, duration)
         await self.get_server_time()
         self.api.buy(amount, asset, direction, duration, request_id, is_fast_option)
@@ -660,13 +689,9 @@ class Quotex:
         timeout = duration + 5 if duration else 30
 
         try:
-            await optimized_wait_for_data(
-                get_data=lambda: self.api.buy_id,
-                condition=lambda bid: bid is not None,
-                timeout=timeout,
-                check_interval=0.2,
-                error_message=f"Timeout waiting for buy confirmation after {timeout}s"
-            )
+            # Wait for WebSocket event signaling buy confirmation (true event-driven, no polling)
+            # Event is cleared before request, ensuring fresh wait for new confirmation
+            await self.api.event_registry.wait_event('buy_confirmed', timeout=timeout)
         except TimeoutError as e:
             logger.error(str(e))
             return False, None

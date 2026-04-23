@@ -23,12 +23,12 @@ class OptimizedQuotexMixin:
     def __init__(self, *args, **kwargs):
         """Initialize event registry for optimized waits."""
         super().__init__(*args, **kwargs)
-        self._balance_event = AsyncEvent()
-        self._instruments_event = AsyncEvent()
-        self._candles_event = AsyncEvent()
-        self._buy_result_event = AsyncEvent()
-        self._sell_result_event = AsyncEvent()
-        self._pending_result_event = AsyncEvent()
+        self._balance_event = AsyncEvent(auto_reset=True)
+        self._instruments_event = AsyncEvent(auto_reset=True)
+        self._candles_event = AsyncEvent(auto_reset=True)
+        self._buy_result_event = AsyncEvent(auto_reset=True)
+        self._sell_result_event = AsyncEvent(auto_reset=True)
+        self._pending_result_event = AsyncEvent(auto_reset=True)
     
     async def get_balance_optimized(self, timeout: float = 30.0) -> float:
         """Get account balance using event-driven approach.

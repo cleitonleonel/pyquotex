@@ -6,6 +6,8 @@ import asyncio
 from typing import Tuple
 import certifi
 import logging
+import platform
+import threading
 import orjson
 import httpx
 from .global_value import ConnectionState
@@ -23,7 +25,7 @@ from .ws.objects.candles import Candles
 from .ws.objects.profile import Profile
 from .ws.objects.listinfodata import ListInfoData
 from .ws.client import WebsocketClient
-from .utils.async_utils import EventRegistry, FastJSONParser
+from .utils.async_utils import EventRegistry
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
