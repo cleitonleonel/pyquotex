@@ -1,13 +1,17 @@
+import configparser
+import json
 import os
 import sys
-import json
-import configparser
-from pathlib import Path
 import threading
+from pathlib import Path
+from typing import Any
 
 from fake_useragent import UserAgent
 
-USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
+    "Gecko/20100101 Firefox/119.0"
+)
 
 base_dir = Path.cwd()
 config_path = Path(os.path.join(base_dir, "settings/config.ini"))
@@ -15,8 +19,9 @@ config = configparser.ConfigParser(interpolation=None)
 
 session_lock = threading.Lock()
 
-def credentials():
 
+def credentials() -> tuple[str, str]:
+    """Get or prompt for user credentials from config file."""
     if not config_path.exists():
         config_path.parent.mkdir(exist_ok=True, parents=True)
         text_settings = (
@@ -39,14 +44,18 @@ def credentials():
 
 
 def resource_path(relative_path: str | Path) -> Path:
-    global base_dir
     """Get absolute path to resource, works for dev and for PyInstaller"""
+    global base_dir
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base_dir = Path(sys._MEIPASS)
     return base_dir / relative_path
 
 
-def load_session(email: str, user_agent: str = UserAgent().random):
+def load_session(email: str, user_agent: str | None = None) -> dict[str, Any]:
+    """Load session data for a specific email."""
+    if user_agent is None:
+        user_agent = UserAgent().random
+        
     output_file = Path(resource_path("session.json"))
     with session_lock:
         all_sessions = {}
@@ -69,7 +78,8 @@ def load_session(email: str, user_agent: str = UserAgent().random):
         return all_sessions.get(email)
 
 
-def update_session(email: str, d: dict):
+def update_session(email: str, d: dict[str, Any]) -> dict[str, Any]:
+    """Update and persist session data for a specific email."""
     output_file = Path(resource_path("session.json"))
     with session_lock:
         current_sessions = {}

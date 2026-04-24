@@ -1,10 +1,9 @@
 import numpy as np
-from typing import List, Dict, Union, Tuple
 
 
 class TechnicalIndicators:
     @staticmethod
-    def calculate_sma(prices: List[float], period: int) -> List[float]:
+    def calculate_sma(prices: list[float], period: int) -> list[float]:
         """Calcula la Media Móvil Simple (SMA)"""
         if len(prices) < period:
             return []
@@ -16,7 +15,7 @@ class TechnicalIndicators:
         return sma_values
 
     @staticmethod
-    def calculate_ema(prices: List[float], period: int) -> List[float]:
+    def calculate_ema(prices: list[float], period: int) -> list[float]:
         """Calcula la Media Móvil Exponencial (EMA)"""
         if len(prices) < period:
             return []
@@ -30,7 +29,7 @@ class TechnicalIndicators:
         return ema_values
 
     @staticmethod
-    def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
+    def calculate_rsi(prices: list[float], period: int = 14) -> list[float]:
         """Calcula el Índice de Fuerza Relativa (RSI)"""
         if len(prices) < period + 1:
             return []
@@ -43,16 +42,24 @@ class TechnicalIndicators:
         avg_loss = np.concatenate(([np.mean(loss[:period])], loss[period:]))
 
         for i in range(1, len(avg_gain)):
-            avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gain[period + i - 1]) / period
-            avg_loss[i] = (avg_loss[i - 1] * (period - 1) + loss[period + i - 1]) / period
+            avg_gain[i] = (
+                                  avg_gain[i - 1] * (period - 1) + gain[period + i - 1]
+                          ) / period
+            avg_loss[i] = (
+                                  avg_loss[i - 1] * (period - 1) + loss[period + i - 1]
+                          ) / period
 
         rs = avg_gain / np.where(avg_loss == 0, 0.00001, avg_loss)
         rsi = 100 - (100 / (1 + rs))
         return [round(x, 2) for x in rsi.tolist()]
 
     @staticmethod
-    def calculate_macd(prices: List[float], fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> \
-    Dict[str, List[float]]:
+    def calculate_macd(
+            prices: list[float],
+            fast_period: int = 12,
+            slow_period: int = 26,
+            signal_period: int = 9
+    ) -> dict[str, list[float] | dict[str, float | None]]:
         """Calcula el MACD (Moving Average Convergence Divergence)"""
         if len(prices) < slow_period:
             return {"macd": [], "signal": [], "histogram": []}
@@ -65,11 +72,16 @@ class TechnicalIndicators:
             macd = fast_ema[i + (len(fast_ema) - len(slow_ema))] - slow_ema[i]
             macd_line.append(round(macd, 2))
 
-        signal_line = TechnicalIndicators.calculate_ema(macd_line, signal_period)
+        signal_line = TechnicalIndicators.calculate_ema(
+            macd_line, signal_period
+        )
 
         histogram = []
         for i in range(len(signal_line)):
-            hist = macd_line[i + (len(macd_line) - len(signal_line))] - signal_line[i]
+            hist = (
+                    macd_line[i + (len(macd_line) - len(signal_line))]
+                    - signal_line[i]
+            )
             histogram.append(round(hist, 2))
 
         return {
@@ -84,7 +96,11 @@ class TechnicalIndicators:
         }
 
     @staticmethod
-    def calculate_bollinger_bands(prices: List[float], period: int = 20, num_std: float = 2) -> Dict[str, List[float]]:
+    def calculate_bollinger_bands(
+            prices: list[float],
+            period: int = 20,
+            num_std: float = 2
+    ) -> dict[str, list[float] | dict[str, float | None]]:
         """Calcula las Bandas de Bollinger"""
         if len(prices) < period:
             return {"upper": [], "middle": [], "lower": []}
@@ -96,8 +112,12 @@ class TechnicalIndicators:
             window = prices[i:(i + period)]
             std.append(np.std(window))
 
-        upper_band = [sma[i] + (std[i] * num_std) for i in range(len(sma))]
-        lower_band = [sma[i] - (std[i] * num_std) for i in range(len(sma))]
+        upper_band = [
+            sma[i] + (std[i] * num_std) for i in range(len(sma))
+        ]
+        lower_band = [
+            sma[i] - (std[i] * num_std) for i in range(len(sma))
+        ]
 
         return {
             "upper": [round(x, 2) for x in upper_band],
@@ -111,8 +131,13 @@ class TechnicalIndicators:
         }
 
     @staticmethod
-    def calculate_stochastic(prices: List[float], highs: List[float], lows: List[float], k_period: int = 14,
-                             d_period: int = 3) -> Dict[str, List[float]]:
+    def calculate_stochastic(
+            prices: list[float],
+            highs: list[float],
+            lows: list[float],
+            k_period: int = 14,
+            d_period: int = 3
+    ) -> dict[str, list[float] | dict[str, float | None]]:
         """Calcula el Oscilador Estocástico"""
         if len(prices) < k_period:
             return {"k": [], "d": []}
@@ -126,7 +151,10 @@ class TechnicalIndicators:
             if window_high == window_low:
                 k = 100
             else:
-                k = ((prices[i + k_period - 1] - window_low) / (window_high - window_low)) * 100
+                k = (
+                            (prices[i + k_period - 1] - window_low)
+                            / (window_high - window_low)
+                    ) * 100
             k_values.append(round(k, 2))
 
         d_values = TechnicalIndicators.calculate_sma(k_values, d_period)
@@ -141,7 +169,12 @@ class TechnicalIndicators:
         }
 
     @staticmethod
-    def calculate_atr(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> List[float]:
+    def calculate_atr(
+            highs: list[float],
+            lows: list[float],
+            closes: list[float],
+            period: int = 14
+    ) -> list[float]:
         """Calcula el Average True Range (ATR)"""
         if len(highs) < period:
             return []
@@ -162,14 +195,20 @@ class TechnicalIndicators:
         atr_values = [sum(true_ranges[:period]) / period]
 
         for i in range(period, len(true_ranges)):
-            atr = (atr_values[-1] * (period - 1) + true_ranges[i]) / period
+            atr = (
+                          atr_values[-1] * (period - 1) + true_ranges[i]
+                  ) / period
             atr_values.append(round(atr, 2))
 
         return atr_values
 
     @staticmethod
-    def calculate_adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> Dict[
-        str, List[float]]:
+    def calculate_adx(
+            highs: list[float],
+            lows: list[float],
+            closes: list[float],
+            period: int = 14
+    ) -> dict[str, list[float] | dict[str, float | None]]:
         """Calcula el Average Directional Index (ADX)"""
         if len(highs) < period + 1:
             return {"adx": [], "plus_di": [], "minus_di": []}
@@ -220,7 +259,10 @@ class TechnicalIndicators:
         # Calcular ADX
         dx_values = []
         for i in range(len(plus_di_avg)):
-            dx = abs(plus_di_avg[i] - minus_di_avg[i]) / (plus_di_avg[i] + minus_di_avg[i]) * 100
+            dx = (
+                    abs(plus_di_avg[i] - minus_di_avg[i])
+                    / (plus_di_avg[i] + minus_di_avg[i]) * 100
+            )
             dx_values.append(dx)
 
         adx_values = [sum(dx_values[:period]) / period]
@@ -240,10 +282,13 @@ class TechnicalIndicators:
         }
 
     @staticmethod
-    def calculate_ichimoku(highs: List[float], lows: List[float],
-                           tenkan_period: int = 9,
-                           kijun_period: int = 26,
-                           senkou_b_period: int = 52) -> Dict[str, List[float]]:
+    def calculate_ichimoku(
+            highs: list[float],
+            lows: list[float],
+            tenkan_period: int = 9,
+            kijun_period: int = 26,
+            senkou_b_period: int = 52
+    ) -> dict[str, list[float] | dict[str, float | None]]:
         """Calcula el Ichimoku Cloud"""
         if len(highs) < senkou_b_period:
             return {
@@ -254,7 +299,11 @@ class TechnicalIndicators:
                 "chikou": []
             }
 
-        def donchian(high_prices: List[float], low_prices: List[float], period: int) -> List[float]:
+        def donchian(
+                high_prices: list[float],
+                low_prices: list[float],
+                period: int
+        ) -> list[float]:
             result = []
             for i in range(len(high_prices) - period + 1):
                 highest = max(high_prices[i:i + period])

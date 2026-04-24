@@ -1,8 +1,9 @@
 # examples/monitoring_assets.py
 
-import time
 import asyncio
 import logging
+import time
+
 from pyquotex.config import credentials
 from pyquotex.stable_api import Quotex
 from pyquotex.utils.processor import process_candles, get_color
@@ -37,7 +38,7 @@ async def get_candle(client, asset, lock):
         # else:
         #    print(f"{asset} - No candles.")
 
-        print(f"\r{asset} - {time.strftime("%H:%M:%S")}", end="")
+        print(f"\r{asset} - {time.strftime('%H:%M:%S')}", end="")
         # await asyncio.sleep(0.1)
 
 

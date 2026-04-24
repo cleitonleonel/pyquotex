@@ -1,8 +1,11 @@
 from datetime import datetime
+from typing import Any
+
 from pyquotex.utils.services import group_by_period
 
 
-def get_color(candle):
+def get_color(candle: dict[str, Any]) -> str:
+    """Determine candle color based on open and close prices."""
     if candle['open'] < candle['close']:
         return 'green'
     elif candle['open'] > candle['close']:
@@ -11,7 +14,12 @@ def get_color(candle):
         return 'gray'
 
 
-def process_tick(tick, interval, candles):
+def process_tick(
+        tick: list[Any],
+        interval: int,
+        candles: dict[int, Any]
+) -> dict[int, Any]:
+    """Process a single tick into the candles dictionary."""
     symbol, timestamp, price, direction = tick
     interval_start = int(timestamp // interval * interval)
 
@@ -33,7 +41,11 @@ def process_tick(tick, interval, candles):
     return candles
 
 
-def get_last_n_candles(pair, candles, n=3):
+def get_last_n_candles(
+        pair: str,
+        candles: dict[str, dict[int, Any]],
+        n: int = 3
+) -> list[dict[str, Any]]:
     """Get last N candles with cached timestamp formatting."""
     if pair not in candles:
         return []
@@ -45,7 +57,9 @@ def get_last_n_candles(pair, candles, n=3):
     for period in sorted_periods[:n]:
         candle = candles[pair][period]
         last_n_candles.append({
-            "start_time": datetime.utcfromtimestamp(period).strftime("%Y-%m-%d %H:%M:%S"),
+            "start_time": datetime.utcfromtimestamp(period).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
             "open": candle["open"],
             "close": candle["close"],
             "high": candle["high"],
@@ -54,7 +68,11 @@ def get_last_n_candles(pair, candles, n=3):
 
     return last_n_candles
 
-def get_last_n_candles_batch(candles_dict, n=3):
+
+def get_last_n_candles_batch(
+        candles_dict: dict[str, dict[int, Any]],
+        n: int = 3
+) -> dict[str, list[dict[str, Any]]]:
     """Get last N candles for multiple pairs efficiently."""
     result = {}
     for pair, candles in candles_dict.items():
@@ -62,7 +80,8 @@ def get_last_n_candles_batch(candles_dict, n=3):
     return result
 
 
-def process_candles(history, period):
+def process_candles(history: list[Any], period: int) -> list[dict[str, Any]]:
+    """Process tick history into OHLC candles."""
     candles = []
     current_candle = {
         'open': None,
@@ -129,11 +148,12 @@ def process_candles(history, period):
     return candles[:-1] if candles else []
 
 
-def process_candles_v2(history, asset, data):
-    """Process and merge historical + realtime candles with deduplication.
-
-    Prevents adding the same candle object multiple times by time-based deduplication.
-    """
+def process_candles_v2(
+        history: dict[str, Any],
+        asset: str,
+        data: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    """Process and merge historical + realtime candles with deduplication."""
     if not history or not isinstance(history, dict):
         return data if data else []
 
@@ -143,16 +163,27 @@ def process_candles_v2(history, asset, data):
     # Combine candles and realtime data
     combined = candles + (data if data else [])
 
-    # Deduplicate by time to prevent same candle from being added multiple times
+    # Deduplicate by time to prevent same candle from being added 
+    # multiple times
     if combined:
-        candle_dict = {c.get('time'): c for c in combined if isinstance(c, dict) and 'time' in c}
+        candle_dict = {
+            c.get('time'): c for c in combined
+            if isinstance(c, dict) and 'time' in c
+        }
         return list(candle_dict.values()) if candle_dict else []
 
     return combined
 
 
-def calculate_candles(history, period):
-    if history is None:
+def calculate_candles(
+        history: list[Any] | dict[str, Any],
+        period: int
+) -> list[dict[str, Any]]:
+    """Calculate candles from tick history."""
+    if isinstance(history, dict):
+        history = history.get("history", history.get("candles", []))
+
+    if not isinstance(history, list) or not history:
         return []
 
     grouped = group_by_period(history, period)
@@ -180,27 +211,43 @@ def calculate_candles(history, period):
     return candles
 
 
-def merge_candles(candles_data):
-    """Efficiently merge candles using dict comprehension - O(n) instead of O(n²)."""
+def merge_candles(candles_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Efficiently merge candles using dict comprehension."""
     if not candles_data:
         return []
 
-    # Use dict to eliminate duplicates by time, then convert back to sorted list
-    candle_dict = {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}
-    return sorted(candle_dict.values(), key=lambda x: x['time']) if candle_dict else []
+    # Use dict to eliminate duplicates by time, then convert back to 
+    # sorted list
+    candle_dict = {
+        c['time']: c for c in candles_data
+        if isinstance(c, dict) and 'time' in c
+    }
+    return sorted(
+        candle_dict.values(), key=lambda x: x['time']
+    ) if candle_dict else []
 
-def merge_candles_fast(candles_data):
+
+def merge_candles_fast(
+        candles_data: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Ultra-fast candle merge for large datasets using dict comprehension."""
     if not candles_data:
         return []
 
     return sorted(
-        {c['time']: c for c in candles_data if isinstance(c, dict) and 'time' in c}.values(),
+        {
+            c['time']: c for c in candles_data
+            if isinstance(c, dict) and 'time' in c
+        }.values(),
         key=lambda x: x['time']
     ) or []
 
 
-def aggregate_candle(tick, candles):
+def aggregate_candle(
+        tick: dict[int, Any],
+        candles: dict[int, Any]
+) -> dict[int, Any]:
+    """Aggregate real-time ticks into candles dictionary."""
     for timestamp, data in tick.items():
         candle = candles.setdefault(timestamp, {
             'symbol': data['symbol'],

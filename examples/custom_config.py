@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+
 from pyquotex.stable_api import Quotex
 
 logging.basicConfig(
@@ -22,6 +23,11 @@ client = Quotex(
 )
 
 # client.set_session(user_agent=USER_AGENT)
+client.set_session(
+    user_agent="Mozilla/5.0...",
+    cookies="seus_cookies",  # Opcional
+    ssid="seu_ssid"  # Opcional
+)
 
 # PRACTICE mode is default / REAL mode is optional
 # client.set_account_mode("REAL")

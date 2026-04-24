@@ -63,6 +63,23 @@ A documentação está organizada nas seguintes seções:
 
 📚 A documentação está disponível aqui [Português](pt/index.md).
 
+### Obter Histórico Profundo (Deep History)
+
+Diferente do `get_candles` padrão que é limitado pelo broker, este método permite buscar grandes quantidades de velas
+retrocedendo no tempo recursivamente.
+
+```python
+# Busca 1 hora de histórico (3600 segundos) para EURUSD (1 min)
+candles = await client.get_candles_deep(
+    asset="EURUSD", 
+    amount_of_seconds=3600, 
+    period=60
+)
+
+for candle in candles:
+    print(f"Tempo: {candle['time']} | Close: {candle['close']}")
+```
+
 ---
 
 ### 🌟 Attribution | Atribución | Atribuição

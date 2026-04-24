@@ -1,4 +1,5 @@
-import json
+import orjson
+
 from pyquotex.ws.channels.base import Base
 
 
@@ -7,7 +8,14 @@ class GetCandles(Base):
 
     name = "candles"
 
-    def __call__(self, asset, index, time, offset, period):
+    async def __call__(
+            self,
+            asset: str,
+            index: int,
+            time: int,
+            offset: int,
+            period: int
+    ) -> None:
         """Method to send message to candles websocket chanel.
 
         :param asset: The active/asset identifier.
@@ -23,5 +31,5 @@ class GetCandles(Base):
             "offset": offset,
             "period": period
         }
-        data = f'42["history/load",{json.dumps(payload)}]'
-        self.send_websocket_request(data)
+        data = f'42["history/load",{orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)

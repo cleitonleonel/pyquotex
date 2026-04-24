@@ -1,17 +1,19 @@
+from typing import Any
+
 from pyquotex.ws.objects.base import Base
 
 
 class Candle(object):
     """Class for Quotex candle."""
 
-    def __init__(self, candle_data):
+    def __init__(self, candle_data: list[Any]) -> None:
         """
         :param candle_data: The list of candles data.
         """
         self.__candle_data = candle_data
 
     @property
-    def candle_time(self):
+    def candle_time(self) -> int:
         """Property to get candle time.
 
         :returns: The candle time.
@@ -19,7 +21,7 @@ class Candle(object):
         return self.__candle_data[0]
 
     @property
-    def candle_open(self):
+    def candle_open(self) -> float:
         """Property to get candle open value.
 
         :returns: The candle open value.
@@ -27,7 +29,7 @@ class Candle(object):
         return self.__candle_data[1]
 
     @property
-    def candle_close(self):
+    def candle_close(self) -> float:
         """Property to get candle close value.
 
         :returns: The candle close value.
@@ -35,7 +37,7 @@ class Candle(object):
         return self.__candle_data[2]
 
     @property
-    def candle_high(self):
+    def candle_high(self) -> float:
         """Property to get candle high value.
 
         :returns: The candle high value.
@@ -43,7 +45,7 @@ class Candle(object):
         return self.__candle_data[3]
 
     @property
-    def candle_low(self):
+    def candle_low(self) -> float:
         """Property to get candle low value.
 
         :returns: The candle low value.
@@ -51,7 +53,7 @@ class Candle(object):
         return self.__candle_data[4]
 
     @property
-    def candle_type(self):
+    def candle_type(self) -> str | None:
         """Property to get candle type value.
 
         :returns: The candle type value.
@@ -60,18 +62,19 @@ class Candle(object):
             return "green"
         elif self.candle_open > self.candle_close:
             return "red"
+        return None
 
 
 class Candles(Base):
     """Class for Quotex Candles websocket object."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super(Candles, self).__init__()
         self.__name = "candles"
-        self.__candles_data = None
+        self.__candles_data: list[Any] | None = None
 
     @property
-    def candles_data(self):
+    def candles_data(self) -> list[Any] | None:
         """Property to get candles data.
 
         :returns: The list of candles data.
@@ -79,33 +82,37 @@ class Candles(Base):
         return self.__candles_data
 
     @candles_data.setter
-    def candles_data(self, candles_data):
+    def candles_data(self, candles_data: list[Any]) -> None:
         """Method to set candles data."""
         self.__candles_data = candles_data
 
     @property
-    def first_candle(self):
+    def first_candle(self) -> Candle | None:
         """Method to get first candle.
 
         :returns: The instance of :class:`Candle
             <pyquotex.ws.objects.candles.Candle>`.
         """
-        return Candle(self.candles_data[0])
+        return Candle(self.candles_data[0]) if self.candles_data else None
 
     @property
-    def second_candle(self):
+    def second_candle(self) -> Candle | None:
         """Method to get second candle.
 
         :returns: The instance of :class:`Candle
             <pyquotex.ws.objects.candles.Candle>`.
         """
-        return Candle(self.candles_data[1])
+        return (
+            Candle(self.candles_data[1])
+            if self.candles_data and len(self.candles_data) > 1
+            else None
+        )
 
     @property
-    def current_candle(self):
+    def current_candle(self) -> Candle | None:
         """Method to get current candle.
 
         :returns: The instance of :class:`Candle
             <pyquotex.ws.objects.candles.Candle>`.
         """
-        return Candle(self.candles_data[-1])
+        return Candle(self.candles_data[-1]) if self.candles_data else None

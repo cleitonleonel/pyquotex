@@ -1,9 +1,10 @@
 """Async utilities for improved performance with event-driven architecture."""
 import asyncio
-import orjson
-import uuid
 import time
+import uuid
 from typing import Any, Dict, Optional, Callable
+
+import orjson
 
 
 class AsyncEvent:
@@ -262,3 +263,68 @@ async def gather_with_limit(
         *[sem_coro(coro) for coro in coros],
         return_exceptions=return_exceptions
     )
+
+
+class EventDispatcher:
+    """O(1) event dispatcher for Quotex WebSocket messages."""
+
+    def __init__(self, api: Any):
+        self.api = api
+        # Static routing map for common events
+        self._routes: Dict[str, Callable[[Any], Any]] = {
+            "s_authorization": self._on_auth,
+            "authorization/reject": self._on_reject,
+            "instruments/list": self._on_instruments,
+            "quotes/stream": self.api._handle_candles_v2,
+            "liveBalance": self._on_balance,
+            "demoBalance": self._on_balance,
+            "signals": self._on_signals,
+            "pending": self._on_pending,
+            "id": self._on_buy_confirmed,  # Special case for buy result
+        }
+
+    async def dispatch(self, event: str, data: Any):
+        """Dispatch event to the appropriate handler."""
+        # 1. Check static routes
+        handler = self._routes.get(event)
+        if handler:
+            if asyncio.iscoroutinefunction(handler):
+                await handler(data)
+            else:
+                handler(data)
+            return
+
+        # 2. Handle dynamic fulfillment (placeholders)
+        if isinstance(data, dict) and data.get("_placeholder"):
+            # These are definitions, handled by the dispatcher's registry logic in _on_message
+            return
+
+        # 3. Fallback to generic registry for waiting calls
+        await self.api.event_registry.set_event(event, data)
+
+    def _on_auth(self, data):
+        self.api.state.check_accepted_connection = 1
+        self.api.state.check_rejected_connection = 0
+
+    def _on_reject(self, data):
+        self.api.state.check_rejected_connection = 1
+
+    def _on_instruments(self, data):
+        self.api.state.started_listen_instruments = True
+
+    def _on_balance(self, data):
+        self.api.account_balance = data
+
+    def _on_signals(self, data):
+        # Basic signal mapping logic (can be expanded)
+        self.api.signal_data = data
+
+    def _on_pending(self, data):
+        self.api.pending_successful = data
+        self.api.pending_id = data.get("ticket")
+
+    async def _on_buy_confirmed(self, data):
+        if not data.get("ticket"):  # It's a real order ID
+            self.api.buy_successful = data
+            self.api.buy_id = data.get("id")
+            await self.api.event_registry.set_event("buy_confirmed", data)

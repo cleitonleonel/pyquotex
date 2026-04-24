@@ -1,16 +1,12 @@
-import ssl
+"""Async HTTP browser client using httpx for Quotex API communication."""
 import logging
-from requests import Session
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
+import ssl
+from typing import Any
 
-retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504, 104],
-    allowed_methods=["HEAD", "POST", "PUT", "GET", "OPTIONS"]
-)
+import certifi
+import httpx
+from bs4 import BeautifulSoup
+from typing_extensions import Self
 
 logger = logging.getLogger("Browser")
 logger.setLevel(logging.INFO)
@@ -19,152 +15,139 @@ handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
 logger.addHandler(handler)
 
 
-class CipherSuiteAdapter(HTTPAdapter):
-    __attrs__ = [
-        'ssl_context',
-        'max_retries',
-        'config',
-        '_pool_connections',
-        '_pool_maxsize',
-        '_pool_block',
-        'source_address'
-    ]
+class Browser:
+    """Async HTTP client wrapping httpx.AsyncClient with TLS, cookies, 
+    and proxy support."""
 
-    def __init__(self, *args, **kwargs):
-        self.ssl_context = kwargs.pop('ssl_context', None)
-        self.cipherSuite = kwargs.pop('cipherSuite', None)
-        self.source_address = kwargs.pop('source_address', None)
-        self.server_hostname = kwargs.pop('server_hostname', None)
-        self.ecdhCurve = kwargs.pop('ecdhCurve', 'prime256v1')
+    def __init__(self, *args: Any, **kwargs: Any):
+        self.response: httpx.Response | None = None
+        self.default_headers: dict[str, str] | None = None
+        self.source_address: Any = kwargs.pop('source_address', None)
+        self.server_hostname: str | None = kwargs.pop('server_hostname', None)
+        self.proxies: dict[str, str] | str | None = kwargs.pop('proxies', None)
+        self.debug: bool = kwargs.pop('debug', False)
 
-        if self.source_address:
-            if isinstance(self.source_address, str):
-                self.source_address = (self.source_address, 0)
-            if not isinstance(self.source_address, tuple):
-                raise TypeError("source_address deve ser uma string IP ou tupla (ip, porta)")
+        # Build SSL context
+        cert_path = certifi.where()
+        self._ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        self._ssl_context.load_verify_locations(cert_path)
+        self._ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        self._ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
 
-        if not self.ssl_context:
-            self.ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            self.ssl_context.orig_wrap_socket = self.ssl_context.wrap_socket
-            self.ssl_context.wrap_socket = self.wrap_socket
+        if self.server_hostname:
+            self._ssl_context.check_hostname = False
 
-            if self.server_hostname:
-                self.ssl_context.server_hostname = self.server_hostname
+        self.headers: dict[str, str] = self.get_headers()
 
-            self.ssl_context.set_ciphers(self.cipherSuite)
-            self.ssl_context.set_ecdh_curve(self.ecdhCurve)
-            self.ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-            self.ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
-
-        super().__init__(**kwargs)
-
-    def wrap_socket(self, *args, **kwargs):
-        if hasattr(self.ssl_context, 'server_hostname') and self.ssl_context.server_hostname:
-            kwargs['server_hostname'] = self.ssl_context.server_hostname
-            self.ssl_context.check_hostname = False
-        else:
-            self.ssl_context.check_hostname = True
-        return self.ssl_context.orig_wrap_socket(*args, **kwargs)
-
-    def init_poolmanager(self, *args, **kwargs):
-        kwargs['ssl_context'] = self.ssl_context
-        kwargs['source_address'] = self.source_address
-        return super().init_poolmanager(*args, **kwargs)
-
-    def proxy_manager_for(self, *args, **kwargs):
-        kwargs['ssl_context'] = self.ssl_context
-        kwargs['source_address'] = self.source_address
-        return super().proxy_manager_for(*args, **kwargs)
-
-
-class Browser(Session):
-
-    def __init__(self, *args, **kwargs):
-        self.response = None
-        self.default_headers = None
-        self.ecdhCurve = kwargs.pop('ecdhCurve', 'prime256v1')
-        self.cipherSuite = kwargs.pop('cipherSuite', 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384')
-        self.source_address = kwargs.pop('source_address', None)
-        self.server_hostname = kwargs.pop('server_hostname', None)
-        self.ssl_context = kwargs.pop('ssl_context', None)
-        self.proxies = kwargs.pop('proxies', None)
-        self.debug = kwargs.pop('debug', False)
-
-        super().__init__(*args, **kwargs)
-
-        self.headers.update(self.get_headers())
-
-        self.mount(
-            'https://',
-            CipherSuiteAdapter(
-                ecdhCurve=self.ecdhCurve,
-                cipherSuite=self.cipherSuite,
-                server_hostname=self.server_hostname,
-                source_address=self.source_address,
-                ssl_context=self.ssl_context,
-                max_retries=retry_strategy
-            )
+        # Build httpx.AsyncClient
+        self._client = httpx.AsyncClient(
+            verify=self._ssl_context,
+            timeout=30.0,
+            follow_redirects=True,
+            proxy=self.proxies if isinstance(self.proxies, str) else None,
         )
 
         if self.debug:
             logger.setLevel(logging.DEBUG)
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+    def __exit__(
+            self, exc_type: Any, exc_val: Any, exc_tb: Any
+    ) -> None:
+        pass
 
-    async def __aenter__(self):
-        self.__enter__()
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.__exit__(exc_type, exc_val, exc_tb)
+    async def __aexit__(
+            self, exc_type: Any, exc_val: Any, exc_tb: Any
+    ) -> None:
+        await self.close()
 
-    def get_headers(self):
+    async def close(self) -> None:
+        """Close the underlying httpx client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+
+    def get_headers(self) -> dict[str, str]:
         self.default_headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
-                          "Gecko/20100101 Firefox/119.0"
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
+                "Gecko/20100101 Firefox/119.0"
+            )
         }
-        return self.default_headers
+        return dict(self.default_headers)
 
-    def set_headers(self, headers=None):
-        self.headers.update(self.default_headers)
+    def set_headers(self, headers: dict[str, str] | None = None) -> None:
+        if self.default_headers:
+            self.headers.update(self.default_headers)
         if headers:
             self.headers.update(headers)
 
-    def get_cookies(self):
-        return '; '.join(f'{i.name}={i.value}' for i in self.cookies)
+    def get_cookies(self) -> str:
+        """Get cookies as semicolon-separated string from the httpx 
+        client jar."""
+        return '; '.join(
+            f'{name}={value}'
+            for name, value in self._client.cookies.items()
+        )
 
-    def get_soup(self):
-        if self.response and not self.response.ok:
-            raise RuntimeError(self.response.reason)
-        return BeautifulSoup(self.response.content, "html.parser")
+    def get_soup(self) -> BeautifulSoup:
+        """Parse the last response content with BeautifulSoup."""
+        if self.response and self.response.status_code >= 400:
+            raise RuntimeError(
+                f"HTTP {self.response.status_code}: "
+                f"{self.response.reason_phrase}"
+            )
+        return BeautifulSoup(
+            self.response.content if self.response else b"",
+            "html.parser"
+        )
 
-    def get_json(self):
-        if self.response and not self.response.ok:
-            raise RuntimeError(self.response.reason)
+    def get_json(self) -> Any:
+        """Parse last response as JSON."""
+        if self.response and self.response.status_code >= 400:
+            raise RuntimeError(
+                f"HTTP {self.response.status_code}: "
+                f"{self.response.reason_phrase}"
+            )
         try:
-            return self.response.json()
+            return self.response.json() if self.response else None
         except Exception:
             return None
 
-    def send_request(self, method, url, headers=None, **kwargs):
-        merged_headers = self.headers.copy()
+    async def send_request(
+            self,
+            method: str,
+            url: str,
+            headers: dict[str, str] | None = None,
+            **kwargs: Any
+    ) -> httpx.Response:
+        """Send an async HTTP request using httpx.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            url: Target URL
+            headers: Optional additional headers
+            **kwargs: Additional httpx request arguments (data, json, 
+                      params, etc.)
+
+        Returns:
+            httpx.Response object
+        """
+        merged_headers = dict(self.headers)
         if headers:
             merged_headers.update(headers)
 
-        if self.proxies:
-            kwargs['proxies'] = self.proxies
-
         logger.debug("Using proxies: %s", self.proxies)
 
-        self.response = self.request(
+        self.response = await self._client.request(
             method,
             url,
             headers=merged_headers,
-            **kwargs
+            **kwargs,
         )
 
         if self.debug:
@@ -173,7 +156,9 @@ class Browser(Session):
             logger.debug(f"Headers enviados: {merged_headers}")
             logger.debug(f"Headers recebidos: {dict(self.response.headers)}")
             logger.debug(f"Cookies: {self.get_cookies()}")
-            content_preview = self.response.text[:250].strip().replace('\n', '')
+            content_preview = (
+                self.response.text[:250].strip().replace('\n', '')
+            )
             logger.debug(f"Body (preview): {content_preview} [...]")
 
         return self.response

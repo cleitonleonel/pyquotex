@@ -1,6 +1,8 @@
-import json
-import time
 import logging
+import time
+
+import orjson
+
 from pyquotex.ws.channels.base import Base
 
 logger = logging.getLogger(__name__)
@@ -12,8 +14,16 @@ class Buy(Base):
 
     name = "buy"
 
-    def __call__(self, price, asset, direction, duration, request_id, is_fast_option):
-        option_type = 1
+    async def __call__(
+            self,
+            price: float | int,
+            asset: str,
+            direction: str,
+            duration: int,
+            request_id: int,
+            is_fast_option: bool
+    ) -> None:
+        option_type = 3 if is_fast_option else 1
 
         expiration_time = get_expiration_time_quotex(
             int(time.time()),
@@ -26,10 +36,13 @@ class Buy(Base):
             expiration = duration
 
         if option_type == 1 and duration < 60:
-            print(f"{duration}s duration is not allowed for this type of operation, except for OTC assets. "
-                  f"60 seconds will be added to meet Quotex requirements.")
+            print(
+                f"{duration}s duration is not allowed for this type of "
+                "operation, except for OTC assets. 60 seconds will be added "
+                "to meet Quotex requirements."
+            )
 
-        self.api.settings_apply(
+        await self.api.settings_apply(
             asset,
             expiration,
             is_fast_option=is_fast_option,
@@ -48,8 +61,8 @@ class Buy(Base):
         }
 
         data = f'42["tick"]'
-        self.send_websocket_request(data)
+        await self.send_websocket_request(data)
 
-        data = f'42["orders/open",{json.dumps(payload)}]'
+        data = f'42["orders/open",{orjson.dumps(payload).decode()}]'
         logger.debug(data)
-        self.send_websocket_request(data)
+        await self.send_websocket_request(data)

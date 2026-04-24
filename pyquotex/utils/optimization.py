@@ -1,8 +1,5 @@
 """Optimized async event-driven utilities for Quotex API.
 
-This module provides improved versions of common polling patterns
-using asyncio.Event and event-driven architecture instead of busy waiting.
-
 Performance improvements:
 - 90% latency reduction for balance/status checks
 - Non-blocking waits with proper cancellation
@@ -11,7 +8,8 @@ Performance improvements:
 
 import asyncio
 import logging
-from typing import Optional, Any, Callable
+from typing import Any, Callable
+
 from pyquotex.utils.async_utils import AsyncEvent
 
 logger = logging.getLogger(__name__)
@@ -20,7 +18,7 @@ logger = logging.getLogger(__name__)
 class OptimizedQuotexMixin:
     """Mixin providing optimized async methods for Quotex client."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize event registry for optimized waits."""
         super().__init__(*args, **kwargs)
         self._balance_event = AsyncEvent(auto_reset=True)
@@ -46,7 +44,11 @@ class OptimizedQuotexMixin:
             TimeoutError: If balance not received within timeout
             RuntimeError: If connection lost during wait
         """
-        if not self.api or not await self.check_connect():
+        if (
+                not hasattr(self, "api")
+                or not self.api
+                or not await self.check_connect()
+        ):
             raise RuntimeError("Not connected to Quotex")
         
         # Quick check if already available
@@ -59,17 +61,20 @@ class OptimizedQuotexMixin:
         # Wait for result with timeout
         try:
             result = await self._balance_event.wait(timeout=timeout)
-            return result or self.api.account_balance
+            return float(result or self.api.account_balance)
         except TimeoutError:
             raise TimeoutError(
                 f"Timeout waiting for account balance after {timeout}s"
             )
-    
-    def _signal_balance_received(self, balance: float):
+
+    def _signal_balance_received(self, balance: float) -> None:
         """Called by WebSocket handler when balance is received."""
         self._balance_event.set(balance)
-    
-    async def get_instruments_optimized(self, timeout: float = 30.0) -> list:
+
+    async def get_instruments_optimized(
+            self,
+            timeout: float = 30.0
+    ) -> list[Any]:
         """Get instruments using event-driven approach.
         
         Replaces polling with event notification from WebSocket handler.
@@ -85,7 +90,11 @@ class OptimizedQuotexMixin:
             TimeoutError: If instruments not received within timeout
             RuntimeError: If connection lost during wait
         """
-        if not self.api or not await self.check_connect():
+        if (
+                not hasattr(self, "api")
+                or not self.api
+                or not await self.check_connect()
+        ):
             raise RuntimeError("Not connected to Quotex")
         
         # Quick check if already available
@@ -95,14 +104,16 @@ class OptimizedQuotexMixin:
         # Wait for instruments with timeout
         try:
             result = await self._instruments_event.wait(timeout=timeout)
-            return result or self.api.instruments or []
+            return list(result or self.api.instruments or [])
         except TimeoutError:
-            logger.error(f"Timeout waiting for instruments after {timeout}s")
+            logger.error(
+                f"Timeout waiting for instruments after {timeout}s"
+            )
             raise TimeoutError(
                 f"Timeout waiting for instruments after {timeout}s"
             )
-    
-    def _signal_instruments_received(self, instruments: list):
+
+    def _signal_instruments_received(self, instruments: list[Any]) -> None:
         """Called by WebSocket handler when instruments are received."""
         self._instruments_event.set(instruments)
     
@@ -111,7 +122,7 @@ class OptimizedQuotexMixin:
         asset: str,
         size: int,
         timeout: float = 30.0
-    ) -> list:
+    ) -> list[Any]:
         """Get candles using event-driven approach.
         
         Replaces polling with event notification from WebSocket handler.
@@ -129,7 +140,11 @@ class OptimizedQuotexMixin:
             TimeoutError: If candles not received within timeout
             RuntimeError: If connection lost during wait
         """
-        if not self.api or not await self.check_connect():
+        if (
+                not hasattr(self, "api")
+                or not self.api
+                or not await self.check_connect()
+        ):
             raise RuntimeError("Not connected to Quotex")
         
         # Quick check if already available
@@ -139,14 +154,19 @@ class OptimizedQuotexMixin:
         # Wait for candles with timeout
         try:
             result = await self._candles_event.wait(timeout=timeout)
-            return result or (self.api.candles.candles_data if self.api.candles else [])
+            return list(
+                result
+                or (self.api.candles.candles_data if self.api.candles else [])
+            )
         except TimeoutError:
-            logger.error(f"Timeout waiting for candles {asset}:{size} after {timeout}s")
+            logger.error(
+                f"Timeout waiting for candles {asset}:{size} after {timeout}s"
+            )
             raise TimeoutError(
                 f"Timeout waiting for candles after {timeout}s"
             )
-    
-    def _signal_candles_received(self, candles: list):
+
+    def _signal_candles_received(self, candles: list[Any]) -> None:
         """Called by WebSocket handler when candles are received."""
         self._candles_event.set(candles)
     
@@ -156,8 +176,8 @@ class OptimizedQuotexMixin:
         amount: float,
         direction: str,
         duration: int,
-        timeout: Optional[float] = None
-    ) -> dict:
+            timeout: float | None = None
+    ) -> dict[str, Any]:
         """Buy option using event-driven result notification.
         
         Replaces polling with event notification from WebSocket handler.
@@ -177,7 +197,11 @@ class OptimizedQuotexMixin:
             TimeoutError: If result not received within timeout
             RuntimeError: If connection lost or WebSocket error
         """
-        if not self.api or not await self.check_connect():
+        if (
+                not hasattr(self, "api")
+                or not self.api
+                or not await self.check_connect()
+        ):
             raise RuntimeError("Not connected to Quotex")
         
         if timeout is None:
@@ -189,7 +213,7 @@ class OptimizedQuotexMixin:
         # Wait for result with timeout
         try:
             result = await self._buy_result_event.wait(timeout=timeout)
-            return result or {"success": self.api.buy_successful}
+            return dict(result or {"success": self.api.buy_successful})
         except TimeoutError:
             raise TimeoutError(
                 f"Timeout waiting for buy confirmation after {timeout}s"
@@ -199,16 +223,16 @@ class OptimizedQuotexMixin:
             if self.api.state.check_websocket_if_error:
                 raise RuntimeError("WebSocket error during buy operation")
             raise
-    
-    def _signal_buy_result(self, result: dict):
+
+    def _signal_buy_result(self, result: dict[str, Any]) -> None:
         """Called by WebSocket handler when buy result is received."""
         self._buy_result_event.set(result)
     
     async def sell_option_optimized(
         self,
-        options_ids: list,
+            options_ids: list[Any],
         timeout: float = 30.0
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Sell option using event-driven result notification.
         
         Replaces polling with event notification from WebSocket handler.
@@ -223,7 +247,7 @@ class OptimizedQuotexMixin:
         Raises:
             TimeoutError: If result not received within timeout
         """
-        if not self.api:
+        if not hasattr(self, "api") or not self.api:
             raise RuntimeError("Not connected to Quotex")
         
         # Make the actual sell call (existing logic)
@@ -232,13 +256,13 @@ class OptimizedQuotexMixin:
         # Wait for result with timeout
         try:
             result = await self._sell_result_event.wait(timeout=timeout)
-            return result or self.api.sold_options_respond
+            return dict(result or self.api.sold_options_respond)
         except TimeoutError:
             raise TimeoutError(
                 f"Timeout waiting for sell option response after {timeout}s"
             )
-    
-    def _signal_sell_result(self, result: dict):
+
+    def _signal_sell_result(self, result: dict[str, Any]) -> None:
         """Called by WebSocket handler when sell result is received."""
         self._sell_result_event.set(result)
 
@@ -283,10 +307,10 @@ async def optimized_wait_for_data(
 
 
 async def batch_requests_with_timeout(
-    requests: list,
+        requests: list[Any],
     timeout: float = 30.0,
     return_exceptions: bool = False
-) -> list:
+) -> list[Any]:
     """Execute multiple async requests with shared timeout.
     
     Args:

@@ -1,24 +1,24 @@
-import time
 import calendar
+import time
 from datetime import (
     datetime,
     timedelta
 )
 
 
-def get_timestamp():
+def get_timestamp() -> int:
     return calendar.timegm(time.gmtime())
 
 
-def date_to_timestamp(dt):
+def date_to_timestamp(dt: datetime) -> float:
     return time.mktime(dt.timetuple())
 
 
-def timestamp_to_date(timestamp):
+def timestamp_to_date(timestamp: float | int) -> datetime:
     return datetime.fromtimestamp(timestamp)
 
 
-def get_timestamp_days_ago(days):
+def get_timestamp_days_ago(days: int) -> int:
     current_time = int(time.time())
     seconds_in_day = 86400
     timestamp_days_ago = current_time - (days * seconds_in_day)
@@ -34,7 +34,8 @@ def get_expiration_time_quotex(timestamp: int, duration: int) -> int:
 
     Args:
         timestamp (int): Current UNIX timestamp in seconds.
-        duration (int): Desired duration in seconds (must be supported by Quotex).
+        duration (int): Desired duration in seconds (must be supported by
+                       Quotex).
 
     Returns:
         int: Expiration UNIX timestamp.
@@ -44,7 +45,10 @@ def get_expiration_time_quotex(timestamp: int, duration: int) -> int:
     # For durations < 60s (only valid for market orders or OTC)
     if duration < 60:
         shift = 1 if now.second >= 30 else 0
-        exp_time = now.replace(second=0, microsecond=0) + timedelta(minutes=shift + 1)
+        exp_time = (
+                now.replace(second=0, microsecond=0)
+                + timedelta(minutes=shift + 1)
+        )
         return int(date_to_timestamp(exp_time))
 
     # For durations >= 60s (valid for buy_pending and scheduled trades)
@@ -59,7 +63,12 @@ def get_expiration_time_quotex(timestamp: int, duration: int) -> int:
     return int(expiration_time.timestamp())
 
 
-def get_next_timeframe(timestamp, time_zone, timeframe: int, open_time: str = None) -> str:
+def get_next_timeframe(
+        timestamp: int | float,
+        time_zone: int,
+        timeframe: int,
+        open_time: str | None = None
+) -> str:
     """
     Calculate the next timestamp based on the given timeframe in seconds.
     The timestamp will be rounded up to the nearest multiple of the timeframe.
@@ -84,17 +93,27 @@ def get_next_timeframe(timestamp, time_zone, timeframe: int, open_time: str = No
             full_date_time = f"{current_year}/{open_time}"
 
         date_time_obj = datetime.strptime(full_date_time, "%Y/%d/%m %H:%M:%S")
-        next_time = date_time_obj.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
+        next_time = (
+                date_time_obj.replace(second=0, microsecond=0)
+                - timedelta(seconds=time_zone)
+        )
     else:
         seconds_passed = now_date.second + now_date.minute * 60
-        next_timeframe_seconds = ((seconds_passed // timeframe) + 2) * timeframe
-        next_time = now_date + timedelta(seconds=next_timeframe_seconds - seconds_passed)
-        next_time = next_time.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
+        next_timeframe_seconds = (
+                                         (seconds_passed // timeframe) + 2
+                                 ) * timeframe
+        next_time = now_date + timedelta(
+            seconds=next_timeframe_seconds - seconds_passed
+        )
+        next_time = (
+                next_time.replace(second=0, microsecond=0)
+                - timedelta(seconds=time_zone)
+        )
 
     return next_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
-def get_expiration_time(timestamp, duration):
+def get_expiration_time(timestamp: int | float, duration: int) -> int:
     now = datetime.now()
     new_date = now.replace(second=0, microsecond=0)
     exp = new_date + timedelta(seconds=duration)
@@ -102,16 +121,19 @@ def get_expiration_time(timestamp, duration):
     return int(date_to_timestamp(exp_date))
 
 
-def get_period_time(duration):
+def get_period_time(duration: int) -> int:
     now = datetime.now()
     period_date = now - timedelta(seconds=duration)
     return int(date_to_timestamp(period_date))
 
 
-def get_remaning_time(timestamp):
+def get_remaning_time(timestamp: int | float) -> list[tuple[int, int]]:
     now_date = datetime.fromtimestamp(timestamp)
     exp_date = now_date.replace(second=0, microsecond=0)
-    if (int(date_to_timestamp(exp_date + timedelta(minutes=1))) - timestamp) > 30:
+    if (
+            int(date_to_timestamp(exp_date + timedelta(minutes=1)))
+            - timestamp
+    ) > 30:
         exp_date = exp_date + timedelta(minutes=1)
     else:
         exp_date = exp_date + timedelta(minutes=2)
@@ -124,7 +146,10 @@ def get_remaning_time(timestamp):
     now_date = datetime.fromtimestamp(timestamp)
     exp_date = now_date.replace(second=0, microsecond=0)
     while index < idx:
-        if int(exp_date.strftime("%M")) % 15 == 0 and (int(date_to_timestamp(exp_date)) - int(timestamp)) > 60 * 5:
+        if (
+                int(exp_date.strftime("%M")) % 15 == 0
+                and (int(date_to_timestamp(exp_date)) - int(timestamp)) > 60 * 5
+        ):
             exp.append(date_to_timestamp(exp_date))
             index = index + 1
         exp_date = exp_date + timedelta(minutes=1)
@@ -142,8 +167,8 @@ def get_server_timer(time_offset_seconds: int) -> int:
     """
     Returns the server (UTC) timestamp based on local time and offset.
 
-    :param time_offset_seconds: The offset in seconds between local time and UTC.
-                                Example: -10800 for UTC-3.
+    :param time_offset_seconds: The offset in seconds between local time 
+                                 and UTC. Example: -10800 for UTC-3.
     :return: An integer representing the server time as a Unix timestamp (UTC).
     """
     local_time = datetime.now()

@@ -1,32 +1,32 @@
 """Module for Quotex websocket."""
-import os
-import time
-import ssl
 import asyncio
-from typing import Tuple
-import certifi
 import logging
-import platform
-import threading
-import orjson
+import os
+import ssl
+import time
+from collections import defaultdict
+from typing import Any, Callable
+
+import certifi
 import httpx
+import orjson
+
 from .global_value import ConnectionState
+from .http.history import GetHistory
 from .http.login import Login
 from .http.logout import Logout
-from .http.settings import Settings
-from .http.history import GetHistory
 from .http.navigator import Browser
-from .ws.channels.ssid import Ssid
+from .http.settings import Settings
+from .utils.async_utils import EventRegistry
 from .ws.channels.buy import Buy
 from .ws.channels.candles import GetCandles
 from .ws.channels.sell_option import SellOption
-from .ws.objects.timesync import TimeSync
-from .ws.objects.candles import Candles
-from .ws.objects.profile import Profile
-from .ws.objects.listinfodata import ListInfoData
+from .ws.channels.ssid import Ssid
 from .ws.client import WebsocketClient
-from .utils.async_utils import EventRegistry
-from collections import defaultdict
+from .ws.objects.candles import Candles
+from .ws.objects.listinfodata import ListInfoData
+from .ws.objects.profile import Profile
+from .ws.objects.timesync import TimeSync
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,11 @@ os.environ['SSL_CERT_FILE'] = cert_path
 os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
 
 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ssl_context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2
 ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3
 ssl_context.load_verify_locations(cert_path)
 
-
-def nested_dict(n, type):
-    if n == 1:
-        return defaultdict(type)
-    else:
-        return defaultdict(lambda: nested_dict(n - 1, type))
+# Shared SSL context for httpx to avoid DeprecationWarning
+ssl_verify = ssl.create_default_context(cafile=cert_path)
 
 
 class QuotexAPI:
@@ -52,13 +47,14 @@ class QuotexAPI:
 
     def __init__(
             self,
-            host,
-            username,
-            password,
-            lang,
-            proxies=None,
-            resource_path=None,
-            user_data_dir="."
+            host: str,
+            username: str,
+            password: str,
+            lang: str,
+            proxies: dict[str, str] | None = None,
+            resource_path: str | None = None,
+            user_data_dir: str = ".",
+            on_otp_callback: Callable | None = None
     ):
         """
         :param str host: The hostname or ip address of a Quotex server.
@@ -67,27 +63,28 @@ class QuotexAPI:
         :param str lang: The lang of a Quotex platform.
         :param proxies: The proxies of a Quotex server.
         :param user_data_dir: The path browser user data dir.
+        :param on_otp_callback: Callback function for OTP (2FA) input.
         """
-        # -- per-instance connection state (replaces global_value) --
         self.state = ConnectionState()
+        self.on_otp_callback = on_otp_callback
+        self._ws_send_lock = asyncio.Lock()
 
-        # -- per-instance mutable attributes (were class-level before) --
-        self.socket_option_opened = {}
-        self.buy_id = None
-        self.pending_id = None
-        self.trace_ws = False
-        self.buy_expiration = None
-        self.current_asset = None
-        self.current_period = None
-        self.buy_successful = None
-        self.pending_successful = None
-        self.account_balance = None
-        self.account_type = None
-        self.instruments = None
-        self.training_balance_edit_request = None
-        self.profit_in_operation = None
-        self.sold_options_respond = None
-        self.sold_digital_options_respond = None
+        self.socket_option_opened: dict[str, Any] = {}
+        self.buy_id: str | int | None = None
+        self.pending_id: str | int | None = None
+        self.trace_ws: bool = False
+        self.buy_expiration: int | None = None
+        self.current_asset: str | None = None
+        self.current_period: int | None = None
+        self.buy_successful: bool | None = None
+        self.pending_successful: bool | None = None
+        self.account_balance: dict[str, Any] | None = None
+        self.account_type: int | None = None
+        self.instruments: list[Any] = []
+        self.training_balance_edit_request: dict[str, Any] | None = None
+        self.profit_in_operation: float | None = None
+        self.sold_options_respond: Any = None
+        self.sold_digital_options_respond: Any = None
         self.listinfodata = ListInfoData()
         self.timesync = TimeSync()
         self.candles = Candles()
@@ -96,588 +93,733 @@ class QuotexAPI:
         self.host = host
         self.https_url = f"https://{host}"
         self.wss_url = f"wss://ws2.{host}/socket.io/?EIO=3&transport=websocket"
-        self.wss_message = None
-        self.websocket_client = None
-        self._websocket_task = None
-        self.set_ssid = None
-        self.object_id = None
-        self.token_login2fa = None
-        self.is_logged = False
-        self._temp_status = ""
+        self.wss_message: str | None = None
+        self.websocket_client: WebsocketClient | None = None
+        self._websocket_task: asyncio.Task | None = None
+        self.set_ssid: Any = None
+        self.object_id: Any = None
+        self.token_login2fa: str | None = None
+        self.is_logged: bool = False
+        self._temp_status: str = ""
         self.username = username
         self.password = password
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
         self.proxies = proxies
         self.lang = lang
-        self.settings_list = {}
-        self.signal_data = {}
-        self.get_candle_data = {}
-        self.historical_candles = {}
-        self.candle_v2_data = {}
-        self.realtime_price = {}
-        self.realtime_price_data = []
-        self.realtime_candles = {}
-        self.realtime_sentiment = {}
-        self.top_list_leader = {}
-        self.session_data = {}
+        self.settings_list: dict[str, Any] = {}
+        self.signal_data: dict[str, Any] = {}
+        self.get_candle_data: dict[str, Any] = {}
+        self.historical_candles: dict[str, Any] = {}
+        self.candle_v2_data: dict[str, Any] = {}
+        self.realtime_price: dict[str, list[dict[str, Any]]] = (
+            defaultdict(list)
+        )
+        self.realtime_price_data: list[Any] = []
+        self.realtime_candles: dict[str, Any] = {}
+        self.realtime_sentiment: dict[str, Any] = {}
+        self.traders_mood: dict[str, Any] = {}
+        self.candle_generated_check = defaultdict(lambda: defaultdict(dict))
+        self.candle_generated_all_size_check = defaultdict(dict)
+        self.top_list_leader: dict[str, Any] = {}
+        self.session_data: dict[str, Any] = {}
         self.browser = Browser()
         self.browser.set_headers()
         self.settings = Settings(self)
-        # Event registry for optimized async operations
         self.event_registry = EventRegistry()
-        # Persistent async HTTP client for connection pooling
         self._http_client = httpx.AsyncClient(
-            verify=cert_path,
+            verify=ssl_verify,
             timeout=30.0,
             follow_redirects=True,
         )
-        self.profit_today = None
+        self.profit_today: float | None = None
 
-    # ------------------------------------------------------------------
-    # WebSocket event handlers (moved from ws/client.py)
-    # ------------------------------------------------------------------
-
-    def _on_open(self):
+    async def _on_open(self) -> None:
         """Called when WebSocket connection is established."""
         logger.info("Websocket client connected.")
         self.state.check_websocket_if_connect = 1
-        asset_name = self.current_asset
-        period = self.current_period
-        self.websocket.send('42["tick"]')
-        self.websocket.send('42["indicator/list"]')
-        self.websocket.send('42["drawing/load"]')
-        self.websocket.send('42["pending/list"]')
-        self.websocket.send('42["instruments/update",{"asset":"%s","period":%d}]' % (asset_name, period))
-        self.websocket.send('42["depth/follow","%s"]' % asset_name)
-        self.websocket.send('42["chart_notification/get"]')
-        self.websocket.send('42["tick"]')
 
-    def _on_message(self, msg):
-        """Called for every WebSocket message received."""
-        self.state.ssl_Mutual_exclusion = True
-        current_time = time.localtime()
-        if current_time.tm_sec in [0, 5, 10, 15, 20, 30, 40, 50]:
-            self.websocket.send('42["tick"]')
-        try:
-            if "authorization/reject" in str(msg):
-                logger.warning("Token rejected, making automatic reconnection.")
-                self.state.check_rejected_connection = 1
-            elif "s_authorization" in str(msg):
-                self.state.check_accepted_connection = 1
-                self.state.check_rejected_connection = 0
-            elif "instruments/list" in str(msg):
-                self.state.started_listen_instruments = True
-
-            msg_str = msg.decode("utf-8", errors="ignore") if isinstance(msg, bytes) else str(msg)
-            message = msg_str
-
-            if len(msg_str) > 1:
-                msg_parsed_str = msg_str[1:]
-                logger.debug(msg_parsed_str)
+        # Start Heartbeat task to keep connection alive and stream active
+        async def heartbeat() -> None:
+            while self.state.check_websocket_if_connect == 1:
                 try:
-                    message_json = orjson.loads(msg_parsed_str)
-                    message = message_json
-                    self.wss_message = message
-                    if "call" in str(message) or 'put' in str(message):
-                        self.instruments = message
-                except (ValueError, TypeError):
-                    pass
-                if isinstance(message, dict):
-                    if message.get("signals"):
-                        time_in = message.get("time")
-                        for i in message["signals"]:
-                            try:
-                                self.signal_data[i[0]] = {}
-                                self.signal_data[i[0]][i[2]] = {}
-                                self.signal_data[i[0]][i[2]]["dir"] = i[1][0]["signal"]
-                                self.signal_data[i[0]][i[2]]["duration"] = i[1][0]["timeFrame"]
-                            except (KeyError, IndexError, TypeError):
-                                self.signal_data[i[0]] = {}
-                                self.signal_data[i[0]][time_in] = {}
-                                self.signal_data[i[0]][time_in]["dir"] = i[1][0][1]
-                                self.signal_data[i[0]][time_in]["duration"] = i[1][0][0]
-                    elif message.get("liveBalance") or message.get("demoBalance"):
-                        self.account_balance = message
-                    elif message.get("position"):
-                        self.top_list_leader = message
-                    elif len(message) == 1 and message.get("profit", -1) > -1:
-                        self.profit_today = message
-                    elif message.get("index"):
-                        self.historical_candles = message
-                        if message.get("closeTimestamp"):
-                            self.timesync.server_timestamp = message.get("closeTimestamp")
-                    if message.get("pending"):
-                        self.pending_successful = message
-                        self.pending_id = message["pending"]["ticket"]
-                    elif message.get("id") and not message.get("ticket"):
-                        self.buy_successful = message
-                        self.buy_id = message["id"]
-                        if message.get("closeTimestamp"):
-                            self.timesync.server_timestamp = message.get("closeTimestamp")
-                    elif message.get("ticket") and not message.get("id"):
-                        self.sold_options_respond = message
-                    elif message.get("deals"):
-                        for get_m in message["deals"]:
-                            self.profit_in_operation = get_m["profit"]
-                            get_m["win"] = True if message["profit"] > 0 else False
-                            get_m["game_state"] = 1
-                            self.listinfodata.set(
-                                get_m["win"],
-                                get_m["game_state"],
-                                get_m["id"]
-                            )
-                    elif message.get("isDemo") and message.get("balance"):
-                        self.training_balance_edit_request = message
-                    elif message.get("error"):
-                        self.state.websocket_error_reason = message.get("error")
-                        self.state.check_websocket_if_error = True
-                        if self.state.websocket_error_reason == "not_money":
-                            self.account_balance = {"liveBalance": 0}
-                    elif not message.get("list") == []:
-                        self.wss_message = message
-            if str(message) == "41":
-                logger.info("Disconnection event triggered by the platform, causing automatic reconnection.")
-                self.state.check_websocket_if_connect = 0
-            if "51-" in str(message):
-                self._temp_status = str(message)
-            elif self._temp_status == """451-["settings/list",{"_placeholder":true,"num":0}]""":
-                self.settings_list = message
-                self._temp_status = ""
-            elif self._temp_status == """451-["history/list/v2",{"_placeholder":true,"num":0}]""":
-                if message.get("asset") == self.current_asset:
-                    self.candles.candles_data = message["history"]
-                    self.candle_v2_data[message["asset"]] = message
-                    self.candle_v2_data[message["asset"]]["candles"] = [{
-                        "time": candle[0],
-                        "open": candle[1],
-                        "close": candle[2],
-                        "high": candle[3],
-                        "low": candle[4],
-                        "ticks": candle[5]
-                    } for candle in message["candles"]]
-            elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 4:
-                result = {
-                    "time": message[0][1],
-                    "price": message[0][2]
-                }
-                self.realtime_price[message[0][0]].append(result)
-                self.realtime_candles[self.current_asset] = message[0]
-            elif isinstance(message, list) and len(message) > 0 and isinstance(message[0], list) and len(message[0]) == 2:
-                for i in message:
-                    result = {
-                        "sentiment": {
-                            "sell": 100 - int(i[1]),
-                            "buy": int(i[1])
-                        }
-                    }
-                    self.realtime_sentiment[i[0]] = result
-        except Exception as e:
-            logger.error("Unhandled error in _on_message: %s", e)
-        self.state.ssl_Mutual_exclusion = False
+                    await self.websocket.send('42["tick"]')
+                except Exception:
+                    break
+                # Send every 5 seconds as in legacy version
+                await asyncio.sleep(5)
 
-    def _on_error(self, error):
-        """Called on WebSocket error."""
+        asyncio.create_task(heartbeat())
+
+        await self.websocket.send('42["indicator/list"]')
+        await self.websocket.send('42["drawing/load"]')
+        await self.websocket.send('42["pending/list"]')
+        await self.websocket.send('42["chart_notification/get"]')
+        await self.websocket.send('42["instruments/get"]')
+
+    async def _on_message(self, msg: bytes | str) -> None:
+        """Called for every WebSocket message received."""
+        try:
+            message: Any = None
+            msg_str = (
+                msg.decode("utf-8", errors="ignore")
+                if isinstance(msg, bytes)
+                else str(msg)
+            )
+
+            if "authorization/reject" in msg_str:
+                self.state.websocket_error_reason = (
+                    "Websocket connection rejected."
+                )
+                self.state.check_websocket_if_error = True
+                return
+            elif "s_authorization" in msg_str:
+                self.state.check_accepted_connection = 1
+                self.state.check_websocket_if_connect = 1
+
+            # Detect Socket.IO prefix
+            is_control = msg_str and msg_str[0].isdigit()
+
+            # Clean JSON extraction
+            try:
+                # Find start of JSON
+                start_idx = -1
+                for idx, char in enumerate(msg_str):
+                    if char in ('[', '{'):
+                        start_idx = idx
+                        break
+
+                if start_idx != -1:
+                    clean_json = msg_str[start_idx:]
+                    data_json = orjson.loads(clean_json)
+                    message = data_json
+                    data = (
+                        data_json[0]
+                        if (
+                                isinstance(data_json, list)
+                                and len(data_json) == 1
+                        )
+                        else data_json
+                    )
+
+                    pass
+                else:
+                    pass
+            except Exception as e:
+                logger.debug("Failed to parse raw data payload: %s", e)
+
+            # 1. Handle Control Messages (Placeholders)
+            if is_control:
+                if "51-" in msg_str and "_placeholder" in msg_str:
+                    self._temp_status = msg_str
+                    return
+
+                # Standard Event Processing
+                if (
+                        isinstance(message, list)
+                        and len(message) > 1
+                        and isinstance(message[0], str)
+                ):
+                    event = message[0]
+                    data = message[1]
+
+                    if event == "s_authorization":
+                        self.state.check_accepted_connection = True
+                    elif event == "instruments/list":
+                        if isinstance(data, dict) and data.get("_placeholder"):
+                            self._temp_status = (
+                                '451-["instruments/list",'
+                                f'{orjson.dumps(data).decode()}]'
+                            )
+                        else:
+                            self.instruments = data
+                            await self.event_registry.set_event(
+                                'instruments_ready', data
+                            )
+                    elif event == "trader/history":
+                        await self.event_registry.set_event(
+                            'history_ready', data
+                        )
+                    elif event == "balance":
+                        self.account_balance = data
+                        await self.event_registry.set_event(
+                            'balance_ready', data
+                        )
+                    elif event == "candle-generated":
+                        asset = data.get("asset")
+                        period = data.get("period")
+                        if asset and period:
+                            self.candle_generated_check[str(asset)][
+                                int(period)
+                            ] = data
+                            self.candle_generated_all_size_check[
+                                str(asset)
+                            ] = data
+                    elif event == "sentiment":
+                        asset = data.get("asset")
+                        if asset:
+                            self.traders_mood[asset] = data
+                            self.realtime_sentiment[asset] = data
+
+            # 2. Handle Data Payloads (Placeholder fulfillment)
+            elif self._temp_status and message is not None:
+                data = (
+                    message[0]
+                    if isinstance(message, list) and len(message) == 1
+                    else message
+                )
+
+                if 'instruments/list' in self._temp_status:
+                    if isinstance(data, list):
+                        self.instruments = data
+                    elif isinstance(data, dict) and "list" in data:
+                        self.instruments = data["list"]
+
+                    if self.instruments:
+                        await self.event_registry.set_event(
+                            'instruments_ready', self.instruments
+                        )
+
+                elif any(
+                        x in self._temp_status
+                        for x in ['history/list/v2', 'history/load']
+                ):
+                    if isinstance(data, dict) and data.get("asset"):
+                        asset = data["asset"]
+                        self.candle_v2_data[asset] = data
+                        await self.event_registry.set_event(
+                            f'candles_ready_{asset}', data
+                        )
+                        if data.get("index"):
+                            await self.event_registry.set_event(
+                                f'candles_ready_{asset}_{data["index"]}',
+                                data
+                            )
+                    elif isinstance(data, list):
+                        # Fallback for old history format if needed
+                        await self.event_registry.set_event(
+                            'history_ready', data
+                        )
+
+                elif any(
+                        x in self._temp_status
+                        for x in [
+                            'orders/open', 'orders/close', 'orders/opened',
+                            'pending/create', 'pending/opened'
+                        ]
+                ):
+                    logger.debug(
+                        "Order event via placeholder! status=%s",
+                        self._temp_status
+                    )
+
+                    # Handle both single dict and list of dicts
+                    orders_to_process = []
+                    if isinstance(data, list):
+                        orders_to_process = data
+                    elif isinstance(data, dict):
+                        if data.get("deals"):
+                            orders_to_process = data["deals"]
+                        else:
+                            orders_to_process = [data]
+
+                    for order in orders_to_process:
+                        order_id = order.get("id")
+                        if order_id:
+                            profit = order.get("profit", 0)
+                            win = "win" if profit > 0 else "loss"
+                            # Check if it's in a closed list or has a 
+                            # close status
+                            is_closed = (
+                                    any(
+                                        x in self._temp_status
+                                        for x in ['closed', 'close']
+                                    )
+                                    or order.get("status") == "closed"
+                            )
+                            game_state = 1 if is_closed else 0
+
+                            logger.debug(
+                                "Processing order %s: win=%s, state=%s, "
+                                "profit=%s",
+                                order_id, win, game_state, profit
+                            )
+                            self.listinfodata.set(
+                                win, game_state, order_id, profit
+                            )
+                            self.listinfodata.set(
+                                win, game_state, str(order_id), profit
+                            )
+
+                    # Always set buy_confirmed if it was an open request
+                    if (
+                            any(x in self._temp_status for x in ['orders/open', 'pending/create'])
+                            and isinstance(data, dict)
+                    ):
+                        if 'pending' in self._temp_status:
+                            self.pending_id = data.get("id")
+                            self.pending_successful = True
+                            await self.event_registry.set_event(
+                                'pending_confirmed', data
+                            )
+                        else:
+                            self.buy_id = data.get("id")
+                            self.buy_successful = True
+                            await self.event_registry.set_event(
+                                'buy_confirmed', data
+                            )
+
+                self._temp_status = ""  # Clear after consuming data
+
+            # 3. Handle Real-time and Profile Dicts
+            if isinstance(message, dict):
+                if message.get("liveBalance") or message.get("demoBalance"):
+                    self.account_balance = message
+                    await self.event_registry.set_event(
+                        'balance_ready', message
+                    )
+                elif message.get("deals"):
+                    # Handle real-time deals update (usually closed deals)
+                    for order in message["deals"]:
+                        order_id = order.get("id")
+                        if order_id:
+                            profit = order.get("profit", 0)
+                            win = "win" if profit > 0 else "loss"
+                            logger.debug(
+                                "Real-time deal update for %s: "
+                                "win=%s, profit=%s",
+                                order_id, win, profit
+                            )
+                            self.listinfodata.set(win, 1, order_id, profit)
+                            self.listinfodata.set(
+                                win, 1, str(order_id), profit
+                            )
+                    await self.event_registry.set_event(
+                        'history_ready', message
+                    )
+                elif (
+                        "id" in message
+                        and ("asset" in message or "amount" in message)
+                ):
+                    # Potential order confirmation
+                    self.buy_id = message.get("id")
+                    await self.event_registry.set_event(
+                        'buy_confirmed', message
+                    )
+
+            elif (
+                    isinstance(message, list)
+                    and len(message) > 1
+                    and message[0] == "order"
+            ):
+                # Explicit order event
+                data = message[1]
+                order_id = data.get("id")
+                self.buy_id = order_id
+
+                # Update listinfodata for check_win
+                if "profit" in data and "status" in data:
+                    profit = data.get("profit", 0)
+                    win = "win" if profit > 0 else "loss"
+                    game_state = 1 if data.get("status") == "closed" else 0
+                    self.listinfodata.set(
+                        win, game_state, str(order_id), profit
+                    )
+
+                await self.event_registry.set_event('buy_confirmed', data)
+                await self.event_registry.set_event(
+                    f'order_closed_{order_id}', data
+                )
+
+            elif (
+                    isinstance(message, list)
+                    and len(message) > 0
+                    and isinstance(message[0], list)
+            ):
+                if len(message[0]) == 4:  # Price
+                    asset, ts, price = (
+                        message[0][0], message[0][1], message[0][2]
+                    )
+                    self.timesync.server_timestamp = ts  # Sync server clock
+
+                    # Limit realtime_price history to 1000 entries 
+                    # to prevent memory bloat
+                    price_list = self.realtime_price[asset]
+                    price_list.append({"time": ts, "price": price})
+                    if len(price_list) > 1000:
+                        price_list.pop(0)
+
+                    self.realtime_candles[asset] = message[0]
+
+        except Exception as e:
+            logger.error("Error in _on_message: %s", e)
+
+    def _on_error(self, error: Exception | str) -> None:
+        """
+        Handles WebSocket errors.
+
+        Args:
+            error (Exception): The error that occurred.
+        """
         logger.error(error)
         self.state.websocket_error_reason = str(error)
         self.state.check_websocket_if_error = True
 
-    def _on_close(self, close_status_code, close_msg):
-        """Called when WebSocket connection closes."""
+    def _on_close(self, code: int, msg: str) -> None:
+        """
+        Handles WebSocket connection closure.
+
+        Args:
+            code (int): The closure code.
+            msg (str): The closure message.
+        """
         logger.info("Websocket connection closed.")
         self.state.check_websocket_if_connect = 0
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
     @property
-    def websocket(self):
-        """Property to get websocket client."""
-        return self.websocket_client.wss
-
-    # ------------------------------------------------------------------
-    # WebSocket request helpers
-    # ------------------------------------------------------------------
-
-    def subscribe_realtime_candle(self, asset, period):
-        self.realtime_price[asset] = []
-        self.realtime_candles[asset] = {}
-        payload = {"asset": asset, "period": period}
-        data = f'42["instruments/update", {orjson.dumps(payload).decode()}]'
-        return self.send_websocket_request(data)
-
-    def chart_notification(self, asset):
-        payload = {"asset": asset, "version": "1.0.0"}
-        data = f'42["chart_notification/get", {orjson.dumps(payload).decode()}]'
-        return self.send_websocket_request(data)
-
-    def follow_candle(self, asset):
-        data = f'42["depth/follow", {orjson.dumps(asset).decode()}]'
-        return self.send_websocket_request(data)
-
-    def unfollow_candle(self, asset):
-        data = f'42["depth/unfollow", {orjson.dumps(asset).decode()}]'
-        return self.send_websocket_request(data)
-
-    def settings_apply(
-            self,
-            asset,
-            duration,
-            is_fast_option=False,
-            end_time=None,
-            deal=5,
-            percent_mode=False,
-            percent_deal=1
-    ):
-        payload = {
-            "chartId": "graph",
-            "settings": {
-                "chartId": "graph",
-                "chartType": 2,
-                "currentExpirationTime": (
-                    int(time.time()) if not is_fast_option else end_time
-                ),
-                "isFastOption": is_fast_option,
-                "isFastAmountOption": percent_mode,
-                "isIndicatorsMinimized": False,
-                "isIndicatorsShowing": True,
-                "isShortBetElement": False,
-                "chartPeriod": 4,
-                "currentAsset": {"symbol": asset},
-                "dealValue": deal,
-                "dealPercentValue": percent_deal,
-                "isVisible": True,
-                "timePeriod": duration,
-                "gridOpacity": 8,
-                "isAutoScrolling": 1,
-                "isOneClickTrade": True,
-                "upColor": "#0FAF59",
-                "downColor": "#FF6251",
-            },
-        }
-        data = f'42["settings/store",{orjson.dumps(payload).decode()}]'
-        self.send_websocket_request(data)
-
-    def unsubscribe_realtime_candle(self, asset):
-        data = f'42["subfor", {orjson.dumps(asset).decode()}]'
-        return self.send_websocket_request(data)
-
-    def edit_training_balance(self, amount):
-        data = f'42["demo/refill",{orjson.dumps(amount).decode()}]'
-        self.send_websocket_request(data)
-
-    def signals_subscribe(self):
-        data = '42["signal/subscribe"]'
-        self.send_websocket_request(data)
-
-    def change_account(self, account_type):
-        self.account_type = account_type
-        payload = {"demo": self.account_type, "tournamentId": 0}
-        data = f'42["account/change",{orjson.dumps(payload).decode()}]'
-        self.send_websocket_request(data)
-
-    def get_history_line(self, asset_id, index, end_from_time, offset):
-        payload = {
-            "id": asset_id,
-            "index": index,
-            "time": end_from_time,
-            "offset": offset,
-        }
-        data = f'42["history/load/line",{orjson.dumps(payload).decode()}]'
-        self.send_websocket_request(data)
-
-    def open_pending(self, amount, asset, direction, duration, open_time):
-        payload = {
-            "openType": 0,
-            "asset": asset,
-            "openTime": open_time,
-            "timeframe": duration,
-            "command": direction,
-            "amount": amount,
-        }
-        data = f'42["pending/create",{orjson.dumps(payload).decode()}]'
-        logger.debug(data)
-        self.send_websocket_request(data)
-
-    def instruments_follow(self, amount, asset, direction, duration, open_time):
-        payload = {
-            "amount": amount,
-            "command": 0 if direction == "call" else 1,
-            "currency": self.profile.currency_code,
-            "min_payout": 0,
-            "open_time": open_time,
-            "open_type": 0,
-            "symbol": asset,
-            "ticket": self.pending_id,
-            "timeframe": duration,
-            "uid": self.profile.profile_id,
-        }
-        data = f'42["instruments/follow",{orjson.dumps(payload).decode()}]'
-        self.send_websocket_request(data)
-
-    def indicators(self):
-        pass
-
-    # ------------------------------------------------------------------
-    # HTTP resource properties
-    # ------------------------------------------------------------------
-
-    @property
-    def logout(self):
-        return Logout(self)
-
-    @property
-    def login(self):
-        return Login(self)
-
-    @property
-    def ssid(self):
-        return Ssid(self)
-
-    @property
-    def buy(self):
-        return Buy(self)
-
-    @property
-    def sell_option(self):
-        return SellOption(self)
-
-    @property
-    def get_candles(self):
-        return GetCandles(self)
-
-    @property
-    def get_history(self):
-        return GetHistory(self)
-
-    # ------------------------------------------------------------------
-    # HTTP request (async, httpx, connection-pooled)
-    # ------------------------------------------------------------------
-
-    async def send_http_request_v1(
-            self,
-            resource,
-            method,
-            data=None,
-            params=None,
-            headers=None
-    ):
-        """Send async http request to Quotex server using httpx.
-
-        :param resource: The instance of
-        :class:`Resource <pyquotex.http.resource.Resource>`.
-        :param str method: The http request method.
-        :param dict data: (optional) The http request data.
-        :param dict params: (optional) The http request params.
-        :param dict headers: (optional) The http request headers.
-        :returns: The httpx.Response or None on HTTP error.
+    def websocket(self) -> Any:
         """
-        url = resource.url
-        logger.debug(url)
-        cookies_str = self.session_data.get("cookies")
-        user_agent = self.session_data.get("user_agent")
+        Returns the active WebSocket instance.
 
-        req_headers = dict(self.browser.headers)
-        if cookies_str:
-            req_headers["Cookie"] = cookies_str
-        if user_agent:
-            req_headers["User-Agent"] = user_agent
-        req_headers["Connection"] = "keep-alive"
-        req_headers["Accept-Encoding"] = "gzip, deflate, br"
-        req_headers["Accept-Language"] = "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3"
-        req_headers["Accept"] = (
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-        )
-        if headers:
-            req_headers["Referer"] = headers.get("referer", "")
-        req_headers["Upgrade-Insecure-Requests"] = "1"
-        req_headers["Sec-Ch-Ua"] = (
-            '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
-        )
-        req_headers["Sec-Ch-Ua-Mobile"] = "?0"
-        req_headers["Sec-Ch-Ua-Platform"] = '"Linux"'
-        req_headers["Sec-Fetch-Site"] = "same-origin"
-        req_headers["Sec-Fetch-User"] = "?1"
-        req_headers["Sec-Fetch-Dest"] = "document"
-        req_headers["Sec-Fetch-Mode"] = "navigate"
-        req_headers["Dnt"] = "1"
+        Returns:
+            websockets.WebSocketClientProtocol: The active WebSocket
+                connection or None.
+        """
+        return self.websocket_client.wss if self.websocket_client else None
 
-        try:
-            response = await self._http_client.request(
-                method=method,
-                url=url,
-                data=data,
-                params=params,
-                headers=req_headers,
-            )
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError:
-            return None
-        except Exception as e:
-            logger.error("HTTP request error: %s", e)
-            return None
+    async def get_instruments(self) -> None:
+        """Sends a request to the WebSocket to retrieve the list of
+        available instruments."""
+        if self.websocket:
+            await self.websocket.send('42["instruments/get"]')
 
-    # ------------------------------------------------------------------
-    # Profile / account helpers
-    # ------------------------------------------------------------------
+    async def authenticate(self) -> tuple[bool, str]:
+        """
+        Authenticates the user using the provided credentials.
 
-    async def get_profile(self):
-        user_settings = self.settings.get_settings()
-        self.profile.nick_name = user_settings.get("data")["nickname"]
-        self.profile.profile_id = user_settings.get("data")["id"]
-        self.profile.demo_balance = float(
-            user_settings.get("data").get("demoBalance", 0)
-        )
-        self.profile.live_balance = float(
-            user_settings.get("data").get("liveBalance", 0)
-        )
-        self.profile.avatar = user_settings.get("data")["avatar"]
-        self.profile.currency_code = user_settings.get("data")["currencyCode"]
-        self.profile.country = user_settings.get("data")["country"]
-        self.profile.country_name = user_settings.get("data")["countryName"]
-        self.profile.currency_symbol = user_settings.get("data")["currencySymbol"]
-        self.profile.offset = user_settings.get("data").get("timeOffset")
-        return self.profile
+        Performs HTTP login, retrieves cookies and SSID token, 
+        and updates the browser session.
 
-    async def get_trader_history(self, account_type, page_number):
-        history = await self.get_history(account_type, page_number)
-        return history.get("data", {})
-
-    def change_time_offset(self, time_offset):
-        user_settings = self.settings.set_time_offset(time_offset)
-        self.profile.offset = user_settings.get("data").get("timeOffset")
-        return self.profile
-
-    # ------------------------------------------------------------------
-    # WebSocket send
-    # ------------------------------------------------------------------
-
-    def send_websocket_request(self, data, no_force_send=True):
-        """Send websocket request to Quotex server."""
-        while (self.state.ssl_Mutual_exclusion
-               or self.state.ssl_Mutual_exclusion_write) and no_force_send:
-            pass
-        self.state.ssl_Mutual_exclusion_write = True
-        self.websocket.send(data)
-        logger.debug(data)
-        self.state.ssl_Mutual_exclusion_write = False
-
-    # ------------------------------------------------------------------
-    # Authentication & connection lifecycle
-    # ------------------------------------------------------------------
-
-    async def authenticate(self) -> Tuple[bool, str]:
-        logger.info("Connecting User Account ...")
-        logger.debug("Login Account User...")
+        Returns:
+            tuple[bool, str]: (Success status, Error message or "Success").
+        """
         async with self.login as login:
             status, msg = await login(
-                self.username,
-                self.password,
-                self.user_data_dir
+                self.username, self.password, self.user_data_dir
             )
-            logger.info(msg)
-
         if status:
             self.state.SSID = self.session_data.get("token")
             self.is_logged = True
+            # Sync session to browser client
+            if "cookies" in self.session_data:
+                cookie_str = self.session_data["cookies"]
+                for item in cookie_str.split("; "):
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                        self.browser._client.cookies.set(
+                            k, v, domain=self.host
+                        )
 
+            self.browser.headers.update({
+                "User-Agent": self.session_data.get("user_agent", ""),
+                "Referer": f"{self.https_url}/{self.lang}/trade"
+            })
         return status, msg
 
-    async def start_websocket(self):
+    async def send_http_request_v1(
+            self, method: str, url: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Sends an HTTP request using the internal browser client (v1)."""
+        # Browser.send_request uses self._client.request internally
+        return await self.browser.send_request(method, url, **kwargs)
+
+    async def send_http_request_v2(
+            self, method: str, url: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Sends an HTTP request using the internal browser client (v2)."""
+        return await self.browser.send_request(method, url, **kwargs)
+
+    async def send_websocket_request(self, data: str) -> None:
+        """
+        Sends a raw string request to the WebSocket.
+        Uses a lock to ensure thread-safe sending.
+
+        Args:
+            data (str): The raw Socket.IO string to send.
+        """
+        async with self._ws_send_lock:
+            if self.websocket:
+                await self.websocket.send(data)
+
+    async def check_connect(self) -> bool:
+        """Checks if the WebSocket is currently connected."""
+        return self.state.check_websocket_if_connect == 1
+
+    async def settings_apply(
+            self,
+            asset: str,
+            expiration: int,
+            is_fast_option: bool = False,
+            end_time: int | None = None
+    ) -> None:
+        """Apply asset and time settings before placing an order."""
+        payload = {
+            "asset": asset,
+            "time": expiration,
+            "isFastOption": is_fast_option,
+        }
+        if end_time:
+            payload["endTime"] = end_time
+
+        data = f'42["settings/apply", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def subscribe_realtime_candle(self, asset: str, period: int) -> None:
+        """Subscribes to real-time price updates for a specific asset
+        and period."""
+        payload = {"asset": asset, "period": period}
+        data = f'42["instruments/update", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def chart_notification(self, asset: str) -> None:
+        """Requests chart notifications for a specific asset."""
+        payload = {"asset": asset, "version": "1.0.0"}
+        payload_json = orjson.dumps(payload).decode()
+        data = f'42["chart_notification/get", {payload_json}]'
+        await self.send_websocket_request(data)
+
+    async def follow_candle(self, asset: str) -> None:
+        """Starts following the depth of market for a specific asset."""
+        data = f'42["depth/follow", {orjson.dumps(asset).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def unfollow_candle(self, asset: str) -> None:
+        """Stops following the depth of market for a specific asset."""
+        data = f'42["depth/unfollow", {orjson.dumps(asset).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def signals_subscribe(self) -> None:
+        """Subscribes to real-time trading signals from the platform."""
+        await self.send_websocket_request('42["signal/subscribe"]')
+
+    async def change_account(self, account_type: int) -> None:
+        """
+        Changes the active trading account.
+
+        Args:
+            account_type (int): 0 for REAL account, 1 for DEMO account.
+        """
+        self.account_type = account_type
+        payload = {"demo": self.account_type, "tournamentId": 0}
+        data = f'42["account/change",{orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def edit_training_balance(self, amount: float | int) -> None:
+        """Refills the demo account balance."""
+        data = f'42["demo/refill",{orjson.dumps(amount).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def change_time_offset(self, time_offset: int) -> dict[str, Any]:
+        """Changes the account time offset."""
+        return await self.settings.set_time_offset(time_offset)
+
+    async def unsubscribe_realtime_candle(self, asset: str) -> None:
+        """Unsubscribes from real-time price updates for a specific asset."""
+        payload = {"asset": asset}
+        data = f'42["instruments/unsubscribe", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def subscribe_Traders_mood(self, asset: str, instrument: str) -> None:
+        """Subscribes to traders' mood/sentiment for a specific asset."""
+        payload = {"asset": asset, "instrument": instrument}
+        data = f'42["sentiment/subscribe", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def subscribe_all_size(self, asset: str) -> None:
+        """Subscribes to all candle sizes for a specific asset."""
+        payload = {"asset": asset}
+        data = f'42["history/subscribe_all", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def get_history_line(
+            self,
+            asset: str,
+            index: int,
+            time_from: float,
+            offset: int
+    ) -> None:
+        """Requests historical price line data."""
+        payload = {
+            "asset": asset,
+            "index": index,
+            "time": time_from,
+            "offset": offset
+        }
+        data = f'42["history/load", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def open_pending(
+            self,
+            amount: float | int,
+            asset: str,
+            direction: str,
+            duration: int,
+            open_time: int
+    ) -> None:
+        """Places a pending order to be executed at a specific future time."""
+        payload = {
+            "asset": asset,
+            "amount": amount,
+            "action": direction,
+            "time": duration,
+            "openTime": open_time,
+            "isDemo": self.account_type,
+            "tournamentId": 0,
+            "requestId": int(time.time())
+        }
+        data = f'42["pending/create", {orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)
+
+    async def instruments_follow(
+            self,
+            amount: float | int,
+            asset: str,
+            direction: str,
+            duration: int,
+            open_time: int
+    ) -> None:
+        """Alias for open_pending or similar follow request."""
+        await self.open_pending(amount, asset, direction, duration, open_time)
+
+    async def start_websocket(self) -> tuple[bool, str]:
+        """
+        Initializes and starts the WebSocket connection.
+        Attempts to authenticate if no SSID is present.
+
+        Returns:
+            tuple[bool, str]: (Success status, Connection status message).
+        """
         self.state.check_websocket_if_connect = None
         self.state.check_websocket_if_error = False
-        self.state.websocket_error_reason = None
         if not self.state.SSID:
             await self.authenticate()
-        self.websocket_client = WebsocketClient(self)
 
+        self.websocket_client = WebsocketClient(self)
         extra_headers = {
             "User-Agent": self.session_data.get("user_agent", ""),
             "Origin": self.https_url,
-            "Host": f"ws2.{self.host}",
             "Cookie": self.session_data.get("cookies", ""),
         }
-
         self._websocket_task = asyncio.create_task(
             self.websocket_client.run_forever(
-                url=self.wss_url,
-                extra_headers=extra_headers,
-                ssl=ssl_context,
+                url=self.wss_url, extra_headers=extra_headers, ssl=ssl_context
             )
         )
-
-        while True:
+        for _ in range(100):
             if self.state.check_websocket_if_error:
                 return False, self.state.websocket_error_reason
-            elif self.state.check_websocket_if_connect == 0:
-                logger.debug("Websocket connection closed.")
-                return False, "Websocket connection closed."
-            elif self.state.check_websocket_if_connect == 1:
-                logger.debug("Websocket connected successfully!!!")
-                return True, "Websocket connected successfully!!!"
-            elif self.state.check_rejected_connection == 1:
-                self.state.SSID = None
-                logger.debug("Websocket Token Rejected.")
-                return True, "Websocket Token Rejected."
-
+            if self.state.check_websocket_if_connect == 1:
+                return True, "Connected"
             await asyncio.sleep(0.1)
+        return False, "Timeout"
 
-    async def send_ssid(self, timeout=10):
-        self.wss_message = None
-        if not self.state.SSID:
-            return False
-
-        self.ssid(self.state.SSID)
-        start_time = time.time()
-
-        while self.wss_message is None:
-            if time.time() - start_time > timeout:
-                return False
-            await asyncio.sleep(0.5)
-
+    async def send_ssid(self) -> bool:
+        """Sends the SSID token to the WebSocket to authorize the
+        connection."""
+        if not self.state.SSID: return False
+        await self.ssid(self.state.SSID)
         return True
 
-    async def connect(self, is_demo):
-        """Method for connection to Quotex API."""
-        self.account_type = is_demo
-        self.state.ssl_Mutual_exclusion = False
-        self.state.ssl_Mutual_exclusion_write = False
-        if self.state.check_websocket_if_connect:
-            logger.info("Closing websocket connection...")
-            await self.close()
+    async def connect(self, is_demo: bool) -> tuple[bool, str]:
+        """
+        Connects to the Quotex platform.
 
-        check_websocket, websocket_reason = await self.start_websocket()
+        Args:
+            is_demo (bool): True to connect to DEMO account, False for REAL.
 
-        if not check_websocket:
-            return check_websocket, websocket_reason
-        check_ssid = await self.send_ssid()
+        Returns:
+            tuple[bool, str]: (Connection success, Status message).
+        """
+        self.account_type = 1 if is_demo else 0
+        ok, reason = await self.start_websocket()
+        if ok: await self.send_ssid()
+        return ok, reason
 
-        if not check_ssid:
-            await self.authenticate()
-            if self.is_logged:
-                await self.send_ssid()
-
-        return check_websocket, websocket_reason
-
-    async def reconnect(self):
-        """Method for reconnection to Quotex API."""
-        logger.info("Websocket Reconnection...")
-        await self.start_websocket()
-
-    async def close(self):
-        if self.websocket_client:
-            self.websocket_client.close()
-            await asyncio.sleep(0.5)
-        if self._websocket_task and not self._websocket_task.done():
-            self._websocket_task.cancel()
-            try:
-                await self._websocket_task
-            except asyncio.CancelledError:
-                pass
-        await self._http_client.aclose()
+    async def close(self) -> bool:
+        """Closes the WebSocket connection and the HTTP client session."""
+        if self.websocket_client: await self.websocket_client.close()
+        if self._http_client: await self._http_client.aclose()
         return True
 
-    def websocket_alive(self):
-        return self.websocket_client.is_alive() if self.websocket_client else False
+    @property
+    def logout(self) -> Logout:
+        """Returns the Logout action handler."""
+        return Logout(self)
+
+    @property
+    def login(self) -> Login:
+        """Returns the Login action handler."""
+        return Login(self)
+
+    @property
+    def ssid(self) -> Ssid:
+        """Returns the SSID authorization handler."""
+        return Ssid(self)
+
+    @property
+    def buy(self) -> Buy:
+        """Returns the Buy order handler."""
+        return Buy(self)
+
+    @property
+    def sell_option(self) -> SellOption:
+        """Returns the Sell Option handler."""
+        return SellOption(self)
+
+    @property
+    def get_candles(self) -> GetCandles:
+        """Returns the Candles retrieval handler."""
+        return GetCandles(self)
+
+    @property
+    def get_history(self) -> GetHistory:
+        """Returns the Trade History retrieval handler."""
+        return GetHistory(self)
+
+    async def get_profile(self) -> Profile:
+        """
+        Retrieves and parses the user profile data.
+
+        Updates the internal profile object with nickname, balances, 
+        country, and timezone.
+
+        Returns:
+            Profile: The updated profile object.
+        """
+        user_settings = await self.settings.get_settings()
+        d = user_settings.get("data", {})
+        self.profile.nick_name = d.get("nickname")
+        self.profile.profile_id = d.get("id")
+        self.profile.demo_balance = float(d.get("demoBalance", 0))
+        self.profile.live_balance = float(d.get("liveBalance", 0))
+        self.profile.currency_code = d.get("currencyCode")
+        self.profile.currency_symbol = d.get("currencySymbol")
+        self.profile.country_name = d.get("countryName")
+        self.profile.offset = d.get("timeOffset")
+        return self.profile
+
+    async def get_trader_history(
+            self, account_type: int, page: int
+    ) -> dict[str, Any]:
+        """
+        Retrieves the trade history for a specific account and page.
+
+        Args:
+            account_type (int): 0 for REAL, 1 for DEMO.
+            page (int): Page number to retrieve.
+
+        Returns:
+            dict: The trade history data.
+        """
+        history = await self.get_history(account_type, page)
+        return history.get("data", {})

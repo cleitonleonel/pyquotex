@@ -13,8 +13,6 @@ class ConnectionState:
 
     SSID: str | None = None
     check_websocket_if_connect: int | None = None
-    ssl_Mutual_exclusion: bool = False
-    ssl_Mutual_exclusion_write: bool = False
     started_listen_instruments: bool = True
     check_rejected_connection: bool = False
     check_accepted_connection: bool = False

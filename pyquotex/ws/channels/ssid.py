@@ -1,4 +1,5 @@
-import json
+import orjson
+
 from pyquotex.ws.channels.base import Base
 
 
@@ -7,7 +8,7 @@ class Ssid(Base):
 
     name = "ssid"
 
-    def __call__(self, ssid):
+    async def __call__(self, ssid: str) -> None:
         """Method to send message to ssid websocket channel.
 
         :param ssid: The session identifier.
@@ -17,5 +18,5 @@ class Ssid(Base):
             "isDemo": self.api.account_type,
             "tournamentId": 0
         }
-        data = f'42["authorization",{json.dumps(payload)}]'
-        self.send_websocket_request(data)
+        data = f'42["authorization",{orjson.dumps(payload).decode()}]'
+        await self.send_websocket_request(data)

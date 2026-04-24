@@ -1,18 +1,20 @@
-import time
 import datetime
+import time
+
 from pyquotex.ws.objects.base import Base
+
 
 class TimeSync(Base):
     """Class to manage time synchronization for Quotex WebSocket."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.__name = "timeSync"
-        self.__server_timestamp = time.time()
-        self.__expiration_time_minutes = 1
+        self.__server_timestamp: float = time.time()
+        self.__expiration_time_minutes: float | int = 1
 
     @property
-    def server_timestamp(self):
+    def server_timestamp(self) -> float:
         """Get the server timestamp.
 
         :returns: The server timestamp.
@@ -20,17 +22,17 @@ class TimeSync(Base):
         return self.__server_timestamp
 
     @server_timestamp.setter
-    def server_timestamp(self, timestamp):
+    def server_timestamp(self, timestamp: float | int) -> None:
         """Set the server timestamp.
 
         :param timestamp: New timestamp to set.
         """
         if not isinstance(timestamp, (int, float)):
             raise ValueError("The timestamp must be a number.")
-        self.__server_timestamp = timestamp
+        self.__server_timestamp = float(timestamp)
 
     @property
-    def server_datetime(self):
+    def server_datetime(self) -> datetime.datetime:
         """Get the server date and time based on the timestamp.
 
         :returns: The server date and time.
@@ -38,7 +40,7 @@ class TimeSync(Base):
         return datetime.datetime.fromtimestamp(self.server_timestamp)
 
     @property
-    def expiration_time(self):
+    def expiration_time(self) -> float | int:
         """Get the expiration time in minutes.
 
         :returns: The expiration time in minutes.
@@ -46,7 +48,7 @@ class TimeSync(Base):
         return self.__expiration_time_minutes
 
     @expiration_time.setter
-    def expiration_time(self, minutes):
+    def expiration_time(self, minutes: float | int) -> None:
         """Set the expiration time in minutes.
 
         :param minutes: Expiration time in minutes.
@@ -56,15 +58,19 @@ class TimeSync(Base):
         self.__expiration_time_minutes = minutes
 
     @property
-    def expiration_datetime(self):
-        """Get the expiration date and time based on the expiration time and server timestamp.
+    def expiration_datetime(self) -> datetime.datetime:
+        """Get the expiration date and time based on the expiration time 
+        and server timestamp.
 
         :returns: The expiration date and time.
         """
-        return self.server_datetime + datetime.timedelta(minutes=self.expiration_time)
+        return (
+                self.server_datetime
+                + datetime.timedelta(minutes=self.expiration_time)
+        )
 
     @property
-    def expiration_timestamp(self):
+    def expiration_timestamp(self) -> float:
         """Get the expiration timestamp.
 
         :returns: The expiration timestamp.
