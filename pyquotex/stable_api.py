@@ -364,6 +364,8 @@ class Quotex:
                 parsed.append(c)
         return parsed
 
+    # https://t.me/pyquotex/1/16064
+    # https://github.com/usmanch96/quotex-historical-data
     async def get_historical_candles(
             self,
             asset: str,
