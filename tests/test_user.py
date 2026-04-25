@@ -1,4 +1,7 @@
 import asyncio
+
+import pytest
+
 from pyquotex.stable_api import Quotex
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
@@ -27,13 +30,14 @@ class QuotexExchange:
         self.client.close()
 
     async def check_connect(self):
-        return self.client.check_connect()
+        return await self.client.check_connect()
 
     async def get_balance(self):
         return await self.client.get_balance()
 
 
-async def main():
+@pytest.mark.asyncio
+async def test_user():
     params = {
         "email": "email@gmail.com",
         "password": "password",
@@ -42,6 +46,8 @@ async def main():
     trade = QuotexExchange(**params)
     await trade.connect()
     is_connected = await trade.check_connect()
+    if not is_connected:
+        pytest.skip("Not connected to Quotex")
     if is_connected:
         print(f"Connected: {is_connected}")
         balance = await trade.get_balance()
@@ -54,7 +60,7 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(main())
+        loop.run_until_complete(test_user())
     except KeyboardInterrupt:
         print("Exiting...")
     finally:

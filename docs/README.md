@@ -78,6 +78,15 @@ candles = await client.get_candles_deep(
 
 for candle in candles:
     print(f"Tempo: {candle['time']} | Close: {candle['close']}")
+
+### Torneios (Tournaments)
+
+Para participar de torneios, use o método `change_account` informando o `tournament_id`:
+
+```python
+# Mudar para conta de torneio / Switch to tournament account
+await client.change_account("PRACTICE", tournament_id=12345)
+```
 ```
 
 ---

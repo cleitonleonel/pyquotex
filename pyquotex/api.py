@@ -12,11 +12,12 @@ import httpx
 import orjson
 
 from .global_value import ConnectionState
-from .http.history import GetHistory
-from .http.login import Login
-from .http.logout import Logout
-from .http.navigator import Browser
-from .http.settings import Settings
+from .network.history import GetHistory
+from .network.login import Login
+from .network.logout import Logout
+from .network.navigator import Browser
+from .network.settings import Settings
+from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
 from .ws.channels.buy import Buy
 from .ws.channels.candles import GetCandles
@@ -79,7 +80,8 @@ class QuotexAPI:
         self.buy_successful: bool | None = None
         self.pending_successful: bool | None = None
         self.account_balance: dict[str, Any] | None = None
-        self.account_type: int | None = None
+        self.account_type: int | None = AccountType.DEMO
+        self.tournament_id: int = 0
         self.instruments: list[Any] = []
         self.training_balance_edit_request: dict[str, Any] | None = None
         self.profit_in_operation: float | None = None
@@ -594,7 +596,7 @@ class QuotexAPI:
         await self.send_websocket_request(data)
 
     async def unfollow_candle(self, asset: str) -> None:
-        """Stops following the depth of market for a specific asset."""
+        """Stops following the depth of the market for a specific asset."""
         data = f'42["depth/unfollow", {orjson.dumps(asset).decode()}]'
         await self.send_websocket_request(data)
 
@@ -602,16 +604,33 @@ class QuotexAPI:
         """Subscribes to real-time trading signals from the platform."""
         await self.send_websocket_request('42["signal/subscribe"]')
 
-    async def change_account(self, account_type: int) -> None:
+    async def change_account(
+            self,
+            account_type: AccountType,
+            tournament_id: int = 0
+    ) -> None:
         """
-        Changes the active trading account.
+        Change active trading account.
 
         Args:
-            account_type (int): 0 for REAL account, 1 for DEMO account.
+            account_type:
+                REAL or DEMO account.
+
+            tournament_id:
+                Tournament/training id.
+                Default 0 disables tournament mode.
         """
+
         self.account_type = account_type
-        payload = {"demo": self.account_type, "tournamentId": 0}
+        self.tournament_id = tournament_id
+
+        payload = {
+            "demo": int(account_type),
+            "tournamentId": tournament_id
+        }
+
         data = f'42["account/change",{orjson.dumps(payload).decode()}]'
+
         await self.send_websocket_request(data)
 
     async def edit_training_balance(self, amount: float | int) -> None:
@@ -673,8 +692,8 @@ class QuotexAPI:
             "action": direction,
             "time": duration,
             "openTime": open_time,
-            "isDemo": self.account_type,
-            "tournamentId": 0,
+            "isDemo": int(self.account_type) if self.account_type is not None else AccountType.DEMO,
+            "tournamentId": self.tournament_id,
             "requestId": int(time.time())
         }
         data = f'42["pending/create", {orjson.dumps(payload).decode()}]'
@@ -735,12 +754,14 @@ class QuotexAPI:
         Connects to the Quotex platform.
 
         Args:
-            is_demo (bool): True to connect to DEMO account, False for REAL.
+            is_demo (bool): True to connect to a DEMO account, False for REAL.
 
         Returns:
             tuple[bool, str]: (Connection success, Status message).
         """
-        self.account_type = 1 if is_demo else 0
+        self.account_type = (
+            AccountType.DEMO if is_demo else AccountType.REAL
+        )
         ok, reason = await self.start_websocket()
         if ok: await self.send_ssid()
         return ok, reason
@@ -815,7 +836,7 @@ class QuotexAPI:
         Retrieves the trade history for a specific account and page.
 
         Args:
-            account_type (int): 0 for REAL, 1 for DEMO.
+            account_type (int): AccountType.REAL or AccountType.DEMO.
             page (int): Page number to retrieve.
 
         Returns:

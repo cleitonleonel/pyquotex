@@ -76,6 +76,11 @@ client = Quotex(
 
 await client.connect()
 print(await client.get_balance())
+
+# Usar conta de torneio / Use tournament account
+from pyquotex.utils.account_type import AccountType
+await client.change_account("PRACTICE", tournament_id=12345)
+
 await client.close()
 ```
 
@@ -83,15 +88,16 @@ await client.close()
 
 ## 💡 Recursos Principais
 
-| Função                     | Descrição                              |
-| -------------------------- | -------------------------------------- |
-| `connect()`                | Conecta via WebSocket com reconexão    |
-| `get_balance()`            | Retorna o saldo da conta               |
-| `buy()`                    | Realiza uma operação de compra         |
-| `check_win()`              | Verifica o resultado de uma operação   |
-| `get_candles()`            | Retorna candles históricos             |
-| `get_realtime_sentiment()` | Sentimento em tempo real do ativo      |
-| `edit_practice_balance()`  | Recarrega a conta demo                 |
+| Função                     | Descrição                            |
+|----------------------------|--------------------------------------|
+| `connect()`                | Conecta via WebSocket com reconexão  |
+| `get_balance()`            | Retorna o saldo da conta             |
+| `buy()`                    | Realiza uma operação de compra       |
+| `check_win()`              | Verifica o resultado de uma operação |
+| `get_candles()`            | Retorna candles históricos           |
+| `get_realtime_sentiment()` | Sentimento em tempo real do ativo    |
+| `edit_practice_balance()`  | Recarrega a conta demo               |
+| `change_account()`         | Alterna entre Real, Demo e Torneios  |
 
 ---
 

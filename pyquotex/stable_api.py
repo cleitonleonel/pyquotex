@@ -13,6 +13,7 @@ from .config import (
     update_session,
     resource_path
 )
+from .utils.account_type import AccountType
 from .utils.indicators import TechnicalIndicators
 from .utils.processor import (
     calculate_candles,
@@ -79,7 +80,7 @@ class Quotex:
         self.subscribe_candle: list[str] = []
         self.subscribe_candle_all_size: list[str] = []
         self.subscribe_mood: list[str] = []
-        self.account_is_demo: int = 1
+        self.account_is_demo: int = AccountType.DEMO
         self.suspend: float = 0.2
         self.codes_asset: dict[str, str] = {}
         self.api: QuotexAPI | None = None
@@ -567,7 +568,7 @@ class Quotex:
             if not check:
                 return check, reason
 
-        check, reason = await self.api.connect(self.account_is_demo == 1)
+        check, reason = await self.api.connect(self.account_is_demo == AccountType.DEMO)
         if not await self.check_connect():
             logger.error(
                 "Websocket failed to connect or connection was rejected."
@@ -585,20 +586,23 @@ class Quotex:
     def set_account_mode(self, balance_mode: str = "PRACTICE") -> None:
         """Set active account `real` or `practice`"""
         if balance_mode.upper() == "REAL":
-            self.account_is_demo = 0
+            self.account_is_demo = AccountType.REAL
         elif balance_mode.upper() == "PRACTICE":
-            self.account_is_demo = 1
+            self.account_is_demo = AccountType.DEMO
         else:
             raise ValueError(
                 f"Invalid balance mode '{balance_mode}'. "
                 "Use 'REAL' or 'PRACTICE'."
             )
 
-    async def change_account(self, balance_mode: str) -> None:
-        """Change active account `real` or `practice`"""
-        self.account_is_demo = 0 if balance_mode.upper() == "REAL" else 1
+    async def change_account(self, balance_mode: str, tournament_id: int = 0) -> None:
+        """Change active account `real` or `practice` or a specific tournament"""
+        self.account_is_demo = (
+            AccountType.REAL if balance_mode.upper() == "REAL"
+            else AccountType.DEMO
+        )
         if self.api:
-            await self.api.change_account(self.account_is_demo)
+            await self.api.change_account(self.account_is_demo, tournament_id=tournament_id)
 
     async def change_time_offset(self, time_offset: int) -> Any:
         """Updates the timezone/time offset on the server."""
@@ -642,7 +646,7 @@ class Quotex:
             raise RuntimeError("Not connected to Quotex")
 
         if self.api.account_balance is not None:
-            if self.api.account_type and self.api.account_type > 0:
+            if self.api.account_type == AccountType.DEMO:
                 balance = self.api.account_balance.get("demoBalance", 0)
             else:
                 balance = self.api.account_balance.get("liveBalance", 0)
@@ -660,7 +664,7 @@ class Quotex:
         if self.api.account_balance is None:
             return 0.0
 
-        if self.api.account_type and self.api.account_type > 0:
+        if self.api.account_type == AccountType.DEMO:
             balance = self.api.account_balance.get("demoBalance", 0)
         else:
             balance = self.api.account_balance.get("liveBalance", 0)
@@ -1032,7 +1036,7 @@ class Quotex:
         if self.api is None:
             return []
 
-        account_type = 1 if self.account_is_demo else 0
+        account_type = AccountType.DEMO if self.account_is_demo else AccountType.REAL
         return await self.api.get_trader_history(account_type, page=1)
 
     async def buy(

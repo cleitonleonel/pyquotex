@@ -55,7 +55,7 @@ class Buy(Base):
             "time": expiration,
             "action": direction,
             "isDemo": self.api.account_type,
-            "tournamentId": 0,
+            "tournamentId": self.api.tournament_id,
             "requestId": request_id,
             "optionType": option_type
         }
