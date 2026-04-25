@@ -35,12 +35,18 @@ cert_path = certifi.where()
 os.environ['SSL_CERT_FILE'] = cert_path
 os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = cert_path
 
-ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3
-ssl_context.load_verify_locations(cert_path)
-
-# Shared SSL context for httpx to avoid DeprecationWarning
-ssl_verify = ssl.create_default_context(cafile=cert_path)
+# Unified SSL context for both HTTP and WebSocket to ensure consistent JA3 fingerprint
+unified_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+unified_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+unified_ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
+# Browser-like cipher suite to avoid JA3 detection
+unified_ssl_context.set_ciphers(
+    'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:'
+    'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:'
+    'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:'
+    'DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384'
+)
+unified_ssl_context.load_verify_locations(cert_path)
 
 
 class QuotexAPI:
@@ -130,7 +136,7 @@ class QuotexAPI:
         self.settings = Settings(self)
         self.event_registry = EventRegistry()
         self._http_client = httpx.AsyncClient(
-            verify=ssl_verify,
+            verify=unified_ssl_context,
             timeout=30.0,
             follow_redirects=True,
         )
@@ -728,10 +734,14 @@ class QuotexAPI:
             "User-Agent": self.session_data.get("user_agent", ""),
             "Origin": self.https_url,
             "Cookie": self.session_data.get("cookies", ""),
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         }
         self._websocket_task = asyncio.create_task(
             self.websocket_client.run_forever(
-                url=self.wss_url, extra_headers=extra_headers, ssl=ssl_context
+                url=self.wss_url, extra_headers=extra_headers, ssl=unified_ssl_context
             )
         )
         for _ in range(100):
