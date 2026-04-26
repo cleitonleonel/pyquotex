@@ -9,7 +9,6 @@ from typing import Any, Callable
 
 import certifi
 import httpx
-import orjson
 
 from .global_value import ConnectionState, WebsocketStatus, AuthStatus
 from .network.history import GetHistory
@@ -17,6 +16,7 @@ from .network.login import Login
 from .network.logout import Logout
 from .network.navigator import Browser
 from .network.settings import Settings
+from .utils import json_utils as json
 from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
 from .ws.channels.buy import Buy
@@ -210,7 +210,7 @@ class QuotexAPI:
 
                 if start_idx != -1:
                     clean_json = msg_str[start_idx:]
-                    data_json = orjson.loads(clean_json)
+                    data_json = json.loads(clean_json)
                     message = data_json
                     data = (
                         data_json[0]
@@ -251,7 +251,7 @@ class QuotexAPI:
                         if isinstance(data, dict) and data.get("_placeholder"):
                             self._temp_status = (
                                 '451-["instruments/list",'
-                                f'{orjson.dumps(data).decode()}]'
+                                f'{json.dumps_str(data)}]'
                             )
                         else:
                             self.instruments = data
@@ -613,31 +613,31 @@ class QuotexAPI:
         if end_time:
             payload["endTime"] = end_time
 
-        data = f'42["settings/apply", {orjson.dumps(payload).decode()}]'
+        data = f'42["settings/apply", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def subscribe_realtime_candle(self, asset: str, period: int) -> None:
         """Subscribes to real-time price updates for a specific asset
         and period."""
         payload = {"asset": asset, "period": period}
-        data = f'42["instruments/update", {orjson.dumps(payload).decode()}]'
+        data = f'42["instruments/update", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def chart_notification(self, asset: str) -> None:
         """Requests chart notifications for a specific asset."""
         payload = {"asset": asset, "version": "1.0.0"}
-        payload_json = orjson.dumps(payload).decode()
+        payload_json = json.dumps_str(payload)
         data = f'42["chart_notification/get", {payload_json}]'
         await self.send_websocket_request(data)
 
     async def follow_candle(self, asset: str) -> None:
         """Starts following the depth of market for a specific asset."""
-        data = f'42["depth/follow", {orjson.dumps(asset).decode()}]'
+        data = f'42["depth/follow", {json.dumps_str(asset)}]'
         await self.send_websocket_request(data)
 
     async def unfollow_candle(self, asset: str) -> None:
         """Stops following the depth of the market for a specific asset."""
-        data = f'42["depth/unfollow", {orjson.dumps(asset).decode()}]'
+        data = f'42["depth/unfollow", {json.dumps_str(asset)}]'
         await self.send_websocket_request(data)
 
     async def signals_subscribe(self) -> None:
@@ -669,13 +669,13 @@ class QuotexAPI:
             "tournamentId": tournament_id
         }
 
-        data = f'42["account/change",{orjson.dumps(payload).decode()}]'
+        data = f'42["account/change",{json.dumps_str(payload)}]'
 
         await self.send_websocket_request(data)
 
     async def edit_training_balance(self, amount: float | int) -> None:
         """Refills the demo account balance."""
-        data = f'42["demo/refill",{orjson.dumps(amount).decode()}]'
+        data = f'42["demo/refill",{json.dumps_str(amount)}]'
         await self.send_websocket_request(data)
 
     async def change_time_offset(self, time_offset: int) -> dict[str, Any]:
@@ -685,19 +685,19 @@ class QuotexAPI:
     async def unsubscribe_realtime_candle(self, asset: str) -> None:
         """Unsubscribes from real-time price updates for a specific asset."""
         payload = {"asset": asset}
-        data = f'42["instruments/unsubscribe", {orjson.dumps(payload).decode()}]'
+        data = f'42["instruments/unsubscribe", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def subscribe_Traders_mood(self, asset: str, instrument: str) -> None:
         """Subscribes to traders' mood/sentiment for a specific asset."""
         payload = {"asset": asset, "instrument": instrument}
-        data = f'42["sentiment/subscribe", {orjson.dumps(payload).decode()}]'
+        data = f'42["sentiment/subscribe", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def subscribe_all_size(self, asset: str) -> None:
         """Subscribes to all candle sizes for a specific asset."""
         payload = {"asset": asset}
-        data = f'42["history/subscribe_all", {orjson.dumps(payload).decode()}]'
+        data = f'42["history/subscribe_all", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def get_history_line(
@@ -714,7 +714,7 @@ class QuotexAPI:
             "time": time_from,
             "offset": offset
         }
-        data = f'42["history/load", {orjson.dumps(payload).decode()}]'
+        data = f'42["history/load", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def open_pending(
@@ -736,7 +736,7 @@ class QuotexAPI:
             "tournamentId": self.tournament_id,
             "requestId": int(time.time())
         }
-        data = f'42["pending/create", {orjson.dumps(payload).decode()}]'
+        data = f'42["pending/create", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def instruments_follow(

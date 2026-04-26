@@ -1,4 +1,4 @@
-import orjson
+from pyquotex.utils import json_utils as json
 
 from pyquotex.ws.channels.base import Base
 
@@ -31,5 +31,5 @@ class GetCandles(Base):
             "offset": offset,
             "period": period
         }
-        data = f'42["history/load",{orjson.dumps(payload).decode()}]'
+        data = f'42["history/load",{json.dumps_str(payload)}]'
         await self.send_websocket_request(data)

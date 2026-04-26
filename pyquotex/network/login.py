@@ -4,10 +4,9 @@ import re
 import sys
 from typing import Any
 
-import orjson
-
 from pyquotex.config import update_session
 from pyquotex.network.navigator import Browser
+from pyquotex.utils import json_utils as json
 
 
 class Login(Browser):
@@ -106,7 +105,7 @@ class Login(Browser):
             )
             self.cookies = self.get_cookies()
             try:
-                settings_data = orjson.loads(match)
+                settings_data = json.loads(match)
                 self.ssid = settings_data.get("token")
                 self.api.session_data["cookies"] = self.cookies
                 self.api.session_data["token"] = self.ssid

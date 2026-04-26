@@ -57,11 +57,20 @@ poetry install
 poetry run python app.py
 ```
 
-### 2. Ou instale diretamente no seu projeto com Poetry:
-
 ```bash
 poetry add git+https://github.com/cleitonleonel/pyquotex.git
 ```
+
+### 3. Otimização de Performance (Opcional)
+
+Para melhor performance no processamento de dados (recomendado para uso em servidores), você pode instalar a biblioteca
+com suporte ao `orjson`:
+
+```bash
+poetry add "pyquotex[fast] @ git+https://github.com/cleitonleonel/pyquotex.git"
+```
+
+*Nota: No Termux (Android), recomendamos usar a instalação padrão sem `orjson` para evitar erros de compilação.*
 
 ### 2.1. Instale com um comando no Termux (Android):
 

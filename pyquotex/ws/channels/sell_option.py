@@ -1,4 +1,4 @@
-import orjson
+from pyquotex.utils import json_utils as json
 
 from pyquotex.ws.channels.base import Base
 
@@ -17,7 +17,7 @@ class SellOption(Base):
                 "ticket": options_ids
             }
             await self.send_websocket_request(
-                f'42["orders/cancel",{orjson.dumps(payload).decode()}]'
+                f'42["orders/cancel",{json.dumps_str(payload)}]'
             )
         else:
             for ids in options_ids:
@@ -25,5 +25,5 @@ class SellOption(Base):
                     "ticket": ids
                 }
                 await self.send_websocket_request(
-                    f'42["orders/cancel",{orjson.dumps(payload).decode()}]'
+                    f'42["orders/cancel",{json.dumps_str(payload)}]'
                 )

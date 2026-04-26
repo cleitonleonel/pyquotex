@@ -1,4 +1,4 @@
-import orjson
+from pyquotex.utils import json_utils as json
 
 from pyquotex.ws.channels.base import Base
 
@@ -18,5 +18,5 @@ class Ssid(Base):
             "isDemo": self.api.account_type,
             "tournamentId": 0
         }
-        data = f'42["authorization",{orjson.dumps(payload).decode()}]'
+        data = f'42["authorization",{json.dumps_str(payload)}]'
         await self.send_websocket_request(data)

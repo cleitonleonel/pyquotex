@@ -4,8 +4,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
-import orjson
-
+from pyquotex.utils import json_utils as json
 from . import expiration
 from .api import QuotexAPI
 from .config import (
@@ -323,7 +322,7 @@ class Quotex:
             "offset": offset,
             "period": period
         }
-        ws_msg = f'42["history/load",{orjson.dumps(payload).decode()}]'
+        ws_msg = f'42["history/load",{json.dumps_str(payload)}]'
 
         # Clear specific event to ensure fresh wait
         event_name = f'candles_ready_{asset}_{index}'

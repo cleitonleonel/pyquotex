@@ -4,8 +4,6 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Callable
 
-import orjson
-
 from ..global_value import AuthStatus
 
 
@@ -143,8 +141,10 @@ class EventRegistry:
                 self._events[key].reset()
 
 
+from pyquotex.utils import json_utils
+
 class FastJSONParser:
-    """Fast JSON parsing using orjson."""
+    """Fast JSON parsing with graceful fallback."""
     
     @staticmethod
     async def parse_async(data: bytes, skip_header: int = 0) -> Any:
@@ -154,25 +154,25 @@ class FastJSONParser:
 
         # Offload to thread pool to avoid blocking
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, orjson.loads, data)
+        return await loop.run_in_executor(None, json_utils.loads, data)
 
     @staticmethod
     def parse_sync(data: bytes, skip_header: int = 0) -> Any:
         """Parse JSON data synchronously."""
         if skip_header > 0:
             data = data[skip_header:]
-        return orjson.loads(data)
+        return json_utils.loads(data)
 
     @staticmethod
     async def dumps_async(obj: Any) -> bytes:
         """Serialize object to JSON bytes asynchronously."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, orjson.dumps, obj)
+        return await loop.run_in_executor(None, json_utils.dumps, obj)
     
     @staticmethod
     def dumps_sync(obj: Any) -> bytes:
         """Serialize object to JSON bytes synchronously."""
-        return orjson.dumps(obj)
+        return json_utils.dumps(obj)
 
 
 class AsyncTimeout:
