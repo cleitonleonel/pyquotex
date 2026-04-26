@@ -27,7 +27,14 @@ O **PyQuotex** nasceu como uma biblioteca open-source para facilitar a comunica�
 
 ---
 
-## 🎯 Objetivo da Biblioteca / Library Goal
+## 📘 Sobre el Proyecto (ES)
+
+**PyQuotex** nació como una biblioteca de código abierto para facilitar la comunicación con la plataforma Quotex a
+través de WebSockets. Con el tiempo y debido al uso indebido, se creó una versión privada más segura y robusta.
+
+---
+
+## 🎯 Objetivo da Biblioteca / Library Goal / Objetivo
 
 Prover ferramentas para desenvolvedores integrarem seus sistemas com a plataforma Quotex, permitindo operações automatizadas de forma segura e eficiente.
 
@@ -71,7 +78,7 @@ from pyquotex.stable_api import Quotex
 client = Quotex(
   email="your_email",
   password="your_password",
-  lang="pt"  # ou "en"
+  lang="pt"  # ou "en", "es"
 )
 
 await client.connect()
@@ -79,25 +86,31 @@ print(await client.get_balance())
 
 # Usar conta de torneio / Use tournament account
 from pyquotex.utils.account_type import AccountType
-await client.change_account("PRACTICE", tournament_id=12345)
+await client.change_account(AccountType.DEMO, tournament_id=1)
+
+# Buscar histórico profundo paralelo / Fetch parallel deep history
+# ⚠️ CUIDADO: O uso excessivo de workers (> 10) pode causar banimento!
+# ⚠️ WARNING: Excessive workers (> 10) may lead to a ban!
+# ⚠️ ADVERTENCIA: ¡El uso excesivo de workers (> 10) puede causar baneo!
+# Recomendado: 2-5 workers.
+candles = await client.get_historical_candles("EURUSD", amount_of_seconds=86400, period=60, max_workers=5)
 
 await client.close()
 ```
 
 ---
 
-## 💡 Recursos Principais
+## 💡 Recursos Principais / Main Features / Funciones Principales
 
-| Função                     | Descrição                            |
-|----------------------------|--------------------------------------|
-| `connect()`                | Conecta via WebSocket com reconexão  |
-| `get_balance()`            | Retorna o saldo da conta             |
-| `buy()`                    | Realiza uma operação de compra       |
-| `check_win()`              | Verifica o resultado de uma operação |
-| `get_candles()`            | Retorna candles históricos           |
-| `get_realtime_sentiment()` | Sentimento em tempo real do ativo    |
-| `edit_practice_balance()`  | Recarrega a conta demo               |
-| `change_account()`         | Alterna entre Real, Demo e Torneios  |
+| Função                     | PT-BR                           | EN                        | ES                              |
+|----------------------------|---------------------------------|---------------------------|---------------------------------|
+| `connect()`                | Conecta via WebSocket           | Connects via WebSocket    | Conecta vía WebSocket           |
+| `get_balance()`            | Retorna o saldo da conta        | Returns account balance   | Retorna el saldo                |
+| `buy()`                    | Realiza uma operação            | Places a trade            | Realiza una operación           |
+| `get_candles()`            | Retorna candles recentes        | Returns recent candles    | Retorna velas recientes         |
+| `get_historical_candles()` | **Histórico profundo paralelo** | **Parallel deep history** | **Historial profundo paralelo** |
+| `get_realtime_sentiment()` | Sentimento em tempo real        | Real-time sentiment       | Sentimiento en tiempo real      |
+| `change_account()`         | Alterna entre Real e Demo       | Switch Real/Demo          | Cambiar entre Real/Demo         |
 
 ---
 

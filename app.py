@@ -145,6 +145,10 @@ def make_parser() -> argparse.ArgumentParser:
         "--period", type=int, default=60,
         help="Candle period in seconds (default: 60)"
     )
+    cd_p.add_argument(
+        "--workers", type=int, default=5,
+        help="Number of parallel workers (default: 5)"
+    )
     cd_p.add_argument("--output", help="Save results to a CSV file")
     cd_p.add_argument(
         "--demo", action="store_true", default=True, help="Use demo account"
@@ -792,21 +796,30 @@ async def cmd_candles_deep(client: Quotex, args: argparse.Namespace) -> None:
             TaskProgressColumn(),
             console=console
     ) as progress:
-        task = progress.add_task(
-            f"Downloading {args.seconds}s of history...",
-            total=float(args.seconds)
-        )
+        # Map worker names to Rich task IDs
+        worker_tasks = {}
+        total_candles = 0
 
-        def update_progress(fetched: int, total: int, count: int) -> None:
+        def update_progress(completed: int, total: int, count: int, worker: str) -> None:
+            nonlocal total_candles
+            if worker not in worker_tasks:
+                worker_tasks[worker] = progress.add_task(
+                    f"[cyan]{worker}",
+                    total=100
+                )
+
+            pct = (completed / total) * 100 if total > 0 else 100
             progress.update(
-                task, completed=min(float(fetched), float(total)),
-                description=f"Downloaded {count} candles..."
+                worker_tasks[worker],
+                completed=pct,
+                description=f"[cyan]{worker}[/] | Candles: [bold green]{count}[/] | {pct:.1f}%"
             )
 
-        candles = await client.get_candles_deep(
+        candles = await client.get_historical_candles(
             asset,
             args.seconds,
             args.period,
+            max_workers=getattr(args, 'workers', 5),
             progress_callback=update_progress
         )
 

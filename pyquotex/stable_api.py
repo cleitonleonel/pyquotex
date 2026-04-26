@@ -373,78 +373,95 @@ class Quotex:
             amount_of_seconds: int,
             period: int,
             timeout: int = DEFAULT_TIMEOUT,
-            progress_callback: Callable[[int, int, int], None] | None = None
+            max_workers: int = 5,
+            progress_callback: Callable[[int, int, int, str], None] | None = None
     ) -> list[dict[str, Any]]:
         """
-        Retrieves extensive historical candle data by paginating backwards.
-        Bypasses the broker's 200-candle limit by stitching batches together.
+        Retrieves extensive historical candle data using a hybrid parallel-sequential approach.
+        Divides the total time range into blocks assigned to parallel workers.
+        Each worker fetches its block sequentially to ensure no gaps.
         """
         all_candles: dict[int, dict[str, Any]] = {}
         current_time = int(time.time())
-        target_oldest_time = current_time - amount_of_seconds
+        target_start_time = current_time - amount_of_seconds
 
-        # Optimize chunk offset based on period (max ~200 candles per batch)
-        chunk_offset = period * 200
+        # Divide total range into large blocks for each worker
+        block_size = amount_of_seconds // max_workers
+        chunk_seconds = period * 200  # Request size per batch
+        semaphore = asyncio.Semaphore(max_workers)
+
+        async def worker(start_t: int, end_t: int, worker_id: int) -> list[dict[str, Any]]:
+            worker_candles = {}
+            worker_label = f"Worker-{worker_id}"
+            async with semaphore:
+                oldest_t = start_t
+                while oldest_t > end_t:
+                    # Generate a unique browser-style index
+                    index = int(time.time() * 1000) + worker_id
+
+                    batch_data = await self._fetch_historical_batch(
+                        asset, oldest_t, chunk_seconds, period, index, timeout
+                    )
+
+                    if not batch_data:
+                        # Gap or error, jump back to try continuing
+                        oldest_t -= chunk_seconds
+                        continue
+
+                    new_batch = self._parse_historical_candles(batch_data)
+                    if not new_batch:
+                        oldest_t -= chunk_seconds
+                        continue
+
+                    # Process and find new boundary
+                    batch_times = []
+                    for c in new_batch:
+                        ts = c['time']
+                        if ts >= end_t and ts <= start_t:
+                            worker_candles[ts] = c
+                            batch_times.append(ts)
+
+                    if not batch_times:
+                        oldest_t -= chunk_seconds
+                        continue
+
+                    batch_times.sort()
+                    new_oldest = batch_times[0]
+
+                    if progress_callback:
+                        # Report progress based on how much of the block is covered
+                        progress_callback(
+                            start_t - new_oldest,
+                            start_t - end_t,
+                            len(worker_candles),
+                            worker_label
+                        )
+
+                    if new_oldest >= oldest_t:
+                        oldest_t -= chunk_seconds
+                    else:
+                        oldest_t = new_oldest
+
+                    # Small throttle
+                    await asyncio.sleep(0.1)
+
+            return list(worker_candles.values())
 
         await self.start_candles_stream(asset, period)
 
-        # 1. Fetch initial batch
-        candles = await self.get_candles(
-            asset, float(current_time), chunk_offset, period, timeout=timeout
-        )
-        if not candles:
-            logger.warning(f"Failed to fetch initial candles for {asset}")
-            return []
+        # Launch workers for each block
+        tasks = []
+        for i in range(max_workers):
+            s = current_time - (i * block_size)
+            e = max(target_start_time, s - block_size)
+            tasks.append(worker(s, e, i))
 
-        for c in candles:
-            all_candles[c['time']] = c
+        results = await asyncio.gather(*tasks)
 
-        oldest_time = candles[0]['time']
-
-        # 2. Iterate backward
-        while oldest_time > target_oldest_time:
-            # Generate a unique browser-style index
-            index = int(time.time() * 100)
-
-            # Fetch batch
-            batch_data = await self._fetch_historical_batch(
-                asset, oldest_time, chunk_offset, period, index, timeout
-            )
-            if not batch_data:
-                # Gap or error, jump back to try continuing
-                oldest_time -= chunk_offset
-                continue
-
-            new_batch = self._parse_historical_candles(batch_data)
-            if not new_batch:
-                # Potential market closure gap
-                oldest_time -= chunk_offset
-                continue
-
-            # Merge and find new boundary
-            batch_times = []
-            for c in new_batch:
-                ts = c['time']
-                all_candles[ts] = c
-                batch_times.append(ts)
-
-            batch_times.sort()
-            new_oldest = batch_times[0]
-
-            if new_oldest >= oldest_time:
-                # No progress made (reached end of history or stuck)
-                oldest_time -= chunk_offset
-            else:
-                oldest_time = new_oldest
-
-                progress_callback(
-                    current_time - oldest_time,
-                    amount_of_seconds,
-                    len(all_candles)
-                )
-
-            # Minimal throttle to respect API
-            await asyncio.sleep(0.2)
+        # Merge results and deduplicate
+        for batch in results:
+            for c in batch:
+                all_candles[c['time']] = c
 
         return sorted(all_candles.values(), key=lambda x: x['time'])
 
