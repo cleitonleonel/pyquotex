@@ -79,11 +79,21 @@ class WebsocketClient:
                 async for raw in ws:
                     await self.api._on_message(raw)
         except ConnectionClosed as e:
-            logger.info("WebSocket closed: %s", e)
-            self.api._on_close(
-                getattr(e, 'code', None),
-                str(getattr(e, 'reason', e))
-            )
+            # Use newer rcvd/sent attributes to avoid deprecation warnings in websockets 13.1+
+            rcvd = getattr(e, 'rcvd', None)
+            sent = getattr(e, 'sent', None)
+            if rcvd:
+                code = rcvd.code
+                reason = rcvd.reason
+            elif sent:
+                code = sent.code
+                reason = sent.reason
+            else:
+                code = 1006  # Abnormal Closure
+                reason = str(e)
+
+            logger.info("WebSocket closed: code=%s, reason=%s", code, reason)
+            self.api._on_close(code, reason)
         except Exception as e:
             logger.error("WebSocket error: %s", e)
             self.api._on_error(e)

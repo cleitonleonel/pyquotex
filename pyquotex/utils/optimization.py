@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Any, Callable
 
+from pyquotex.global_value import WebsocketStatus
 from pyquotex.utils.async_utils import AsyncEvent
 
 logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ class OptimizedQuotexMixin:
             )
         except Exception as e:
             logger.error(f"Error during buy operation: {e}")
-            if self.api.state.check_websocket_if_error:
+            if self.api.state.status == WebsocketStatus.ERROR:
                 raise RuntimeError("WebSocket error during buy operation")
             raise
 

@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from pyquotex.config import credentials
 from pyquotex.stable_api import Quotex
 
 USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
@@ -26,8 +27,8 @@ class QuotexExchange:
     async def connect(self):
         return await self.client.connect()
 
-    def disconnect(self):
-        self.client.close()
+    async def disconnect(self):
+        await self.client.close()
 
     async def check_connect(self):
         return await self.client.check_connect()
@@ -38,9 +39,10 @@ class QuotexExchange:
 
 @pytest.mark.asyncio
 async def test_user():
+    email, password = credentials()
     params = {
-        "email": "email@gmail.com",
-        "password": "password",
+        "email": email,
+        "password": password,
         "lang": "pt"
     }
     trade = QuotexExchange(**params)
@@ -53,7 +55,7 @@ async def test_user():
         balance = await trade.get_balance()
         print(f"Balance: {balance}")
     print("Closing...")
-    trade.disconnect()
+    await trade.disconnect()
 
 
 if __name__ == "__main__":

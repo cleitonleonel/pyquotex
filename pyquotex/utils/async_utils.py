@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional, Callable
 
 import orjson
 
+from ..global_value import AuthStatus
+
 
 class AsyncEvent:
     """Enhanced asyncio.Event with timeout support and automatic reset.
@@ -303,11 +305,10 @@ class EventDispatcher:
         await self.api.event_registry.set_event(event, data)
 
     def _on_auth(self, data):
-        self.api.state.check_accepted_connection = 1
-        self.api.state.check_rejected_connection = 0
+        self.api.state.auth_status = AuthStatus.AUTHENTICATED
 
     def _on_reject(self, data):
-        self.api.state.check_rejected_connection = 1
+        self.api.state.auth_status = AuthStatus.FAILED
 
     def _on_instruments(self, data):
         self.api.state.started_listen_instruments = True

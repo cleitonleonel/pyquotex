@@ -13,6 +13,7 @@ from .config import (
     update_session,
     resource_path
 )
+from .global_value import AuthStatus
 from .utils.account_type import AccountType
 from .utils.indicators import TechnicalIndicators
 from .utils.processor import (
@@ -104,9 +105,7 @@ class Quotex:
     async def _check_connect(state: Any) -> bool:
         """Check connection using the per-instance state object."""
         await asyncio.sleep(2)
-        if state.check_accepted_connection == 1:
-            return True
-        return False
+        return state.auth_status == AuthStatus.AUTHENTICATED
 
     async def check_connect(self) -> bool:
         """Check connection using the current API's state."""

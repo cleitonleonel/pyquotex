@@ -70,7 +70,7 @@ retrocedendo no tempo recursivamente.
 
 ```python
 # Busca 1 hora de histórico (3600 segundos) para EURUSD (1 min)
-candles = await client.get_candles_deep(
+candles = await client.get_historical_candles(
     asset="EURUSD", 
     amount_of_seconds=3600, 
     period=60

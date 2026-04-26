@@ -3,13 +3,15 @@ import logging
 
 import pytest
 
+from pyquotex.config import credentials
 from pyquotex.stable_api import Quotex
 
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 
+email, password = credentials()
 client = Quotex(
-    email="user@gmail.com",
-    password="account_password",
+    email=email,
+    password=password,
     lang="pt"
 )
 

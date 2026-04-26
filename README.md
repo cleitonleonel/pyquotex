@@ -111,6 +111,26 @@ await client.close()
 | `get_historical_candles()` | **Histórico profundo paralelo** | **Parallel deep history** | **Historial profundo paralelo** |
 | `get_realtime_sentiment()` | Sentimento em tempo real        | Real-time sentiment       | Sentimiento en tiempo real      |
 | `change_account()`         | Alterna entre Real e Demo       | Switch Real/Demo          | Cambiar entre Real/Demo         |
+| `state.status`             | Status do WebSocket (Enum)      | WebSocket Status (Enum)   | Estado del WebSocket (Enum)     |
+| `state.auth_status`        | Status da Autenticação (Enum)   | Auth Status (Enum)        | Estado de Autenticación (Enum)  |
+
+---
+
+## 🏗️ Gestão de Estado e Eventos / State & Event Management
+
+O PyQuotex utiliza um sistema moderno de Enums e Eventos para controle de conexão:
+
+```python
+from pyquotex.global_value import WebsocketStatus, AuthStatus
+
+# Verificar status via Enum
+if client.api.state.status == WebsocketStatus.CONNECTED:
+    print("Conectado!")
+
+# Aguardar eventos de mudança de estado
+await client.api.event_registry.wait_event("status_changed")
+await client.api.event_registry.wait_event("auth_changed")
+```
 
 ---
 

@@ -11,7 +11,7 @@ import certifi
 import httpx
 import orjson
 
-from .global_value import ConnectionState
+from .global_value import ConnectionState, WebsocketStatus, AuthStatus
 from .network.history import GetHistory
 from .network.login import Login
 from .network.logout import Logout
@@ -141,23 +141,25 @@ class QuotexAPI:
             follow_redirects=True,
         )
         self.profit_today: float | None = None
+        self.heartbeat_task: asyncio.Task | None = None
 
     async def _on_open(self) -> None:
         """Called when WebSocket connection is established."""
         logger.info("Websocket client connected.")
-        self.state.check_websocket_if_connect = 1
+        self.state.status = WebsocketStatus.CONNECTED
+        await self.event_registry.set_event("status_changed", self.state.status)
 
         # Start Heartbeat task to keep connection alive and stream active
         async def heartbeat() -> None:
-            while self.state.check_websocket_if_connect == 1:
+            while self.state.status == WebsocketStatus.CONNECTED:
                 try:
                     await self.websocket.send('42["tick"]')
                 except Exception:
                     break
-                # Send every 5 seconds as in legacy version
+                # Send it every 5 seconds as in legacy version
                 await asyncio.sleep(5)
 
-        asyncio.create_task(heartbeat())
+        self.heartbeat_task = asyncio.create_task(heartbeat())
 
         await self.websocket.send('42["indicator/list"]')
         await self.websocket.send('42["drawing/load"]')
@@ -179,11 +181,20 @@ class QuotexAPI:
                 self.state.websocket_error_reason = (
                     "Websocket connection rejected."
                 )
-                self.state.check_websocket_if_error = True
+                self.state.auth_status = AuthStatus.FAILED
+                await self.event_registry.set_event(
+                    "auth_changed", self.state.auth_status
+                )
                 return
             elif "s_authorization" in msg_str:
-                self.state.check_accepted_connection = 1
-                self.state.check_websocket_if_connect = 1
+                self.state.auth_status = AuthStatus.AUTHENTICATED
+                self.state.status = WebsocketStatus.CONNECTED
+                await self.event_registry.set_event(
+                    "auth_changed", self.state.auth_status
+                )
+                await self.event_registry.set_event(
+                    "status_changed", self.state.status
+                )
 
             # Detect Socket.IO prefix
             is_control = msg_str and msg_str[0].isdigit()
@@ -232,7 +243,10 @@ class QuotexAPI:
                     data = message[1]
 
                     if event == "s_authorization":
-                        self.state.check_accepted_connection = True
+                        self.state.auth_status = AuthStatus.AUTHENTICATED
+                        await self.event_registry.set_event(
+                            "auth_changed", self.state.auth_status
+                        )
                     elif event == "instruments/list":
                         if isinstance(data, dict) and data.get("_placeholder"):
                             self._temp_status = (
@@ -270,14 +284,14 @@ class QuotexAPI:
                             self.realtime_sentiment[asset] = data
 
             # 2. Handle Data Payloads (Placeholder fulfillment)
-            elif self._temp_status and message is not None:
+            elif message is not None and not is_control:
                 data = (
                     message[0]
                     if isinstance(message, list) and len(message) == 1
                     else message
                 )
 
-                if 'instruments/list' in self._temp_status:
+                if self._temp_status and 'instruments/list' in self._temp_status:
                     if isinstance(data, list):
                         self.instruments = data
                     elif isinstance(data, dict) and "list" in data:
@@ -288,9 +302,9 @@ class QuotexAPI:
                             'instruments_ready', self.instruments
                         )
 
-                elif any(
-                        x in self._temp_status
-                        for x in ['history/list/v2', 'history/load']
+                elif (
+                        any(x in self._temp_status for x in ['history/list/v2', 'history/load'])
+                        or (isinstance(data, dict) and (data.get("candles") or data.get("data")))
                 ):
                     if isinstance(data, dict) and data.get("asset"):
                         asset = data["asset"]
@@ -298,7 +312,7 @@ class QuotexAPI:
                         await self.event_registry.set_event(
                             f'candles_ready_{asset}', data
                         )
-                        if data.get("index"):
+                        if data.get("index") is not None:
                             await self.event_registry.set_event(
                                 f'candles_ready_{asset}_{data["index"]}',
                                 data
@@ -309,7 +323,7 @@ class QuotexAPI:
                             'history_ready', data
                         )
 
-                elif any(
+                elif self._temp_status and any(
                         x in self._temp_status
                         for x in [
                             'orders/open', 'orders/close', 'orders/opened',
@@ -471,7 +485,15 @@ class QuotexAPI:
         """
         logger.error(error)
         self.state.websocket_error_reason = str(error)
-        self.state.check_websocket_if_error = True
+        self.state.status = WebsocketStatus.ERROR
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(
+                    self.event_registry.set_event("status_changed", self.state.status)
+                )
+        except RuntimeError:
+            pass
 
     def _on_close(self, code: int, msg: str) -> None:
         """
@@ -482,7 +504,19 @@ class QuotexAPI:
             msg (str): The closure message.
         """
         logger.info("Websocket connection closed.")
-        self.state.check_websocket_if_connect = 0
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+            self.heartbeat_task = None
+
+        self.state.status = WebsocketStatus.DISCONNECTED
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(
+                    self.event_registry.set_event("status_changed", self.state.status)
+                )
+        except RuntimeError:
+            pass
 
     @property
     def websocket(self) -> Any:
@@ -561,7 +595,7 @@ class QuotexAPI:
 
     async def check_connect(self) -> bool:
         """Checks if the WebSocket is currently connected."""
-        return self.state.check_websocket_if_connect == 1
+        return self.state.status == WebsocketStatus.CONNECTED
 
     async def settings_apply(
             self,
@@ -724,8 +758,9 @@ class QuotexAPI:
         Returns:
             tuple[bool, str]: (Success status, Connection status message).
         """
-        self.state.check_websocket_if_connect = None
-        self.state.check_websocket_if_error = False
+        self.state.status = WebsocketStatus.CONNECTING
+        self.state.auth_status = AuthStatus.NOT_AUTHENTICATED
+        await self.event_registry.set_event("status_changed", self.state.status)
         if not self.state.SSID:
             await self.authenticate()
 
@@ -745,9 +780,9 @@ class QuotexAPI:
             )
         )
         for _ in range(100):
-            if self.state.check_websocket_if_error:
+            if self.state.status == WebsocketStatus.ERROR:
                 return False, self.state.websocket_error_reason
-            if self.state.check_websocket_if_connect == 1:
+            if self.state.status == WebsocketStatus.CONNECTED:
                 return True, "Connected"
             await asyncio.sleep(0.1)
         return False, "Timeout"
@@ -778,8 +813,12 @@ class QuotexAPI:
 
     async def close(self) -> bool:
         """Closes the WebSocket connection and the HTTP client session."""
-        if self.websocket_client: await self.websocket_client.close()
-        if self._http_client: await self._http_client.aclose()
+        if self.websocket_client:
+            await self.websocket_client.close()
+            # Explicitly trigger cleanup to ensure heartbeat is cancelled
+            self._on_close(1000, "Graceful closure")
+        if self._http_client:
+            await self._http_client.aclose()
         return True
 
     @property
