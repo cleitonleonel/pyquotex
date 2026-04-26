@@ -65,9 +65,9 @@ pip install -r requirements.txt
 
 msg "${CYAN}🧪 Testando conexão com Quotex...${RESET}" \
     "${CYAN}🧪 Testing connection with Quotex...${RESET}"
-python app.py get-profile < /dev/tty || {
-    msg "${RED}❌ Falha ao executar a função 'get-profile'. Verifique credenciais no código.${RESET}" \
-        "${RED}❌ Failed to execute 'get-profile' function. Check credentials in the code.${RESET}"
+python app.py login --demo < /dev/tty || {
+    msg "${RED}❌ Falha ao executar a função 'login'. Verifique credenciais no código.${RESET}" \
+        "${RED}❌ Failed to execute 'login' function. Check credentials in the code.${RESET}"
     exit 1
 }
 
