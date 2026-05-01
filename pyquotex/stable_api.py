@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import logging
 import time
 from datetime import datetime
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 # Default timeout (seconds) for async polling loops
 DEFAULT_TIMEOUT = 30
+
+# Monotonically-increasing counter for WebSocket request indices.
+# Seeded from the current millisecond timestamp so indices remain
+# browser-style large integers while being globally unique across
+# all workers and loop iterations within a process (fixes #85).
+_request_counter = itertools.count(int(time.time() * 1000))
 
 
 class Quotex:
@@ -394,8 +401,11 @@ class Quotex:
             async with semaphore:
                 oldest_t = start_t
                 while oldest_t > end_t:
-                    # Generate a unique browser-style index
-                    index = int(time.time() * 1000) + worker_id
+                    # Use a monotonically-increasing counter so that parallel
+                    # workers and back-to-back iterations within the same worker
+                    # never produce the same index — prevents event-registry
+                    # key collisions where one worker steals another's response.
+                    index = next(_request_counter)
 
                     batch_data = await self._fetch_historical_batch(
                         asset, oldest_t, chunk_seconds, period, index, timeout
@@ -1135,7 +1145,11 @@ class Quotex:
             await asyncio.sleep(0.2)
             if self.api.state.check_websocket_if_error:
                 return False, self.api.state.websocket_error_reason
-        else:
+
+        # Loop exited normally — pending_id was set (success path).
+        # Only follow up when we actually have an id; if the loop was
+        # broken by disconnect the early returns above already handled it.
+        if self.api.pending_id is not None:
             status_buy = True
             await self.api.instruments_follow(
                 amount, asset, direction, duration, open_time_int
@@ -1152,8 +1166,10 @@ class Quotex:
         if self.api is None:
             raise RuntimeError("API not initialized")
 
-        await self.api.sell_option(options_ids)
+        # Reset sentinel BEFORE sending the request — if the WS response
+        # arrives before the next line, it must not be wiped out.
         self.api.sold_options_respond = None
+        await self.api.sell_option(options_ids)
         start = time.time()
         while self.api.sold_options_respond is None:
             if time.time() - start > timeout:
@@ -1462,6 +1478,15 @@ class Quotex:
             return False
 
         self.api.candle_generated_check[str(asset)][int(size)] = {}
+        # Send the subscribe request exactly once before polling.
+        # Calling follow_candle() inside the loop would spam the server
+        # with up to 100 subscribe messages (20 s / 0.2 s) before data
+        # arrives — a ban/rate-limit risk explicitly warned about in README.
+        try:
+            await self.api.follow_candle(self.codes_asset[asset])
+        except Exception as e:
+            logger.error('**error** start_candles_stream reconnect: %s', e)
+            await self.connect()
         while True:
             if time.time() - start > 20:
                 logger.error(
@@ -1473,11 +1498,6 @@ class Quotex:
                     return True
             except (KeyError, TypeError):
                 pass
-            try:
-                await self.api.follow_candle(self.codes_asset[asset])
-            except Exception as e:
-                logger.error('**error** start_candles_stream reconnect: %s', e)
-                await self.connect()
             await asyncio.sleep(0.2)
 
     async def start_candles_all_size_stream(self, asset: str) -> bool:
