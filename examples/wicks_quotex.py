@@ -47,8 +47,9 @@ async def main():
 
         if direction:
             print(f"{datetime.now()} - Sinal de {direction.upper()} detectado")
-            opened = await qx.buy(amount=AMOUNT, direction=direction, asset=PAIR, duration=EXPIRATION)
-            if opened:
+            # buy() signature: buy(amount, asset, direction, duration)
+            status, opened = await qx.buy(AMOUNT, PAIR, direction, EXPIRATION)
+            if status:
                 print(f"Aposta realizada: {direction.upper()} | Preço: {last_candle['close']}")
             await asyncio.sleep(60)  # espera próximo candle
         else:
