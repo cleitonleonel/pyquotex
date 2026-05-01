@@ -486,32 +486,23 @@ class Quotex:
 
         index = expiration.get_timestamp()
         self.api.current_asset = asset
-        self.api.historical_candles = {}
+        # Reset to None (not {}) so the poll loop below can detect arrival.
+        # An empty dict is a valid response; None is the sentinel for
+        # "not yet received".
+        self.api.historical_candles = None
         await self.start_candles_stream(asset)
         await self.api.get_history_line(
             self.codes_asset[asset], index, end_from_time, offset
         )
         start_time = time.time()
-        while True:
-            while (
-                    await self.check_connect()
-                    and self.api.historical_candles is None
-            ):
-                if time.time() - start_time > timeout:
-                    logger.error(
-                        "Timeout waiting for history line data for %s.",
-                        asset
-                    )
-                    return None
-                await asyncio.sleep(0.2)
-            if self.api.historical_candles is not None:
-                break
+        while await self.check_connect() and self.api.historical_candles is None:
             if time.time() - start_time > timeout:
                 logger.error(
                     "Timeout waiting for history line data for %s.",
                     asset
                 )
                 return None
+            await asyncio.sleep(0.2)
         return self.api.historical_candles
 
     async def get_candle_v2(
@@ -524,13 +515,18 @@ class Quotex:
         self.api.candle_v2_data[asset] = None
         await self.start_candles_stream(asset, period)
         start_time = time.time()
+        # Poll until data arrives or timeout is reached.
+        # Previous code returned None on every iteration because the
+        # return statement was inside the while-body instead of the
+        # timeout branch, so data was never awaited.
         while self.api.candle_v2_data[asset] is None:
-            logger.error(
-                "Timeout waiting for get_candle_v2 data for %s.",
-                asset
-            )
-            return None
-        await asyncio.sleep(0.2)
+            if time.time() - start_time > timeout:
+                logger.error(
+                    "Timeout waiting for get_candle_v2 data for %s.",
+                    asset
+                )
+                return None
+            await asyncio.sleep(0.2)
         candles = self.prepare_candles(asset, period)
         return candles
 
