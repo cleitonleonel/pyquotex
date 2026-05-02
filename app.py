@@ -1228,10 +1228,13 @@ async def cmd_strategy(client: Quotex, args: argparse.Namespace) -> None:
     """Run Triple-Confirmation strategy."""
     if not await connect_with_retry(client, True):
         return
-    asset, _ = await client.get_available_asset(args.asset, force_open=True)
-    strategy = TripleConfirmationStrategy(client, asset, args.period)
+    strategy = TripleConfirmationStrategy(
+        client=client,
+        asset=args.asset,
+        period=args.period,
+    )
     console.print(Panel(
-        f"[bold cyan]Asset:[/]      {asset}\n"
+        f"[bold cyan]Asset:[/]      {args.asset}\n"
         f"[bold cyan]Period:[/]     {args.period}s\n"
         f"[bold cyan]Auto-trade:[/] {'YES ⚠ DEMO ONLY' if args.auto_trade else 'NO (signal only)'}",
         title="🧠 [bold]Triple Confirmation Strategy[/]",

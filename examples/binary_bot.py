@@ -1,43 +1,41 @@
-# Bot Options Binary — Experiment on Quotex (educational only)
-# Uses an unofficial library to communicate with the platform (warning: experimental only)
-from pyquotex import Quotex
-import time, math
+"""Binary Options Bot — Educational example (async API).
 
-# ----- Settings -----
-EMAIL = "your_email@example.com"
-PASSWORD = "your_password"
-SYMBOL = "EURUSD"           # financial asset
-TIMEFRAME = 60              # trade duration in minutes
-RISK_PERCENT = 1.0          # risk percentage per trade %
-MAX_TRADES = 2              # maximum number of open trades at the same time
-PAYOUT = 0.8                # estimated payout
+Strategy: RSI crossover + SMA filter.
+- BUY  (call) when RSI crosses above 30 and close > SMA
+- SELL (put)  when RSI crosses below 70 and close < SMA
 
-RSI_PERIOD = 14
-SMA_PERIOD = 50
+⚠️  This is an educational example only.
+    Binary options trading carries significant risk of loss.
+    Always test on a DEMO account first.
+"""
+import asyncio
+import time
 
-# ----- Platform connection -----
-client = Quotex(email=EMAIL, password=PASSWORD)
-connected, msg = client.connect()
+from pyquotex.config import credentials
+from pyquotex.stable_api import Quotex
 
-if not connected:
-    print("❌ Connection failed:", msg)
-    exit()
+# ── Settings ──────────────────────────────────────────────────────────────
+SYMBOL       = "EURUSD_otc"
+PERIOD       = 60        # candle duration in seconds
+RISK_PERCENT = 1.0       # % of balance per trade
+PAYOUT       = 0.80      # estimated broker payout (e.g. 80 %)
+MAX_TRADES   = 2         # max concurrent open trades
+RSI_PERIOD   = 14
+SMA_PERIOD   = 50
 
-# ----- Wait for next candle -----
-def wait_next_candle(timeframe):
-    now = int(time.time())
-    wait = timeframe * 60 - (now % (timeframe * 60))
-    time.sleep(wait + 1)
 
-# ----- Analysis functions -----
-def calc_rsi(closes, period=RSI_PERIOD):
-    gains = []
-    losses = []
+# ── Indicators (pure Python, no numpy) ────────────────────────────────────
 
+def calc_rsi(closes: list[float], period: int = RSI_PERIOD) -> float | None:
+    """Wilder-smoothed RSI — returns only the latest value."""
+    if len(closes) < period + 1:
+        return None
+
+    gains, losses = [], []
     for i in range(1, len(closes)):
-        diff = closes[i] - closes[i-1]
-        gains.append(max(diff, 0))
-        losses.append(max(-diff, 0))
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
 
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
@@ -47,69 +45,122 @@ def calc_rsi(closes, period=RSI_PERIOD):
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
 
     if avg_loss == 0:
-        return 100
-
+        return 100.0
     rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return round(100 - (100 / (1 + rs)), 2)
 
-def calc_sma(closes, period=SMA_PERIOD):
-    if len(closes) < period:
-        return sum(closes) / len(closes)
-    return sum(closes[-period:]) / period
 
-# ----- Risk management -----
-def calc_amount(balance, risk_percent, payout=PAYOUT):
-    risk = balance * (risk_percent / 100)
+def calc_sma(closes: list[float], period: int = SMA_PERIOD) -> float:
+    window = closes[-period:] if len(closes) >= period else closes
+    return sum(window) / len(window)
+
+
+def calc_amount(balance: float, risk_pct: float, payout: float = PAYOUT) -> float:
+    risk   = balance * (risk_pct / 100)
     amount = risk / payout
-    return max(amount, 1.0)
+    return max(round(amount, 2), 1.0)
 
-# ----- Trade execution -----
-def open_trade(direction, amount):
-    result = client.buy_simple(SYMBOL, amount, direction, TIMEFRAME)
-    print(f"✅ Trade opened {direction} with amount {amount}")
-    return result
 
-def count_trades_open():
-    trades = client.get_open_trades()
-    return len([t for t in trades if t["symbol"] == SYMBOL])
+# ── Main bot ───────────────────────────────────────────────────────────────
 
-# ----- Main loop -----
-print("🚀 Bot started...")
+async def main() -> None:
+    email, password = credentials()
+    client = Quotex(email=email, password=password)
 
-while True:
+    check, reason = await client.connect()
+    if not check:
+        print(f"❌ Connection failed: {reason}")
+        return
 
-    wait_next_candle(TIMEFRAME)
+    print(f"✅ Connected  |  symbol={SYMBOL}  period={PERIOD}s")
 
-    if count_trades_open() >= MAX_TRADES:
-        print("⚠️ Max open trades reached")
-        continue
+    asset, info = await client.get_available_asset(SYMBOL, force_open=True)
+    if not info or not info[2]:
+        print(f"❌ Asset {SYMBOL} is closed.")
+        await client.close()
+        return
 
-    candles = client.get_candles(symbol=SYMBOL, timeframe=TIMEFRAME, limit=200)
-    closes = [c["close"] for c in candles]
+    await client.get_all_assets()
+    open_trades: list[str] = []
+    prev_rsi: float | None = None
 
-    rsi = calc_rsi(closes)
-    rsi_prev = calc_rsi(closes[:-1])
+    try:
+        while True:
+            # ── fetch candles ────────────────────────────────────────────
+            candles = await client.get_candles(
+                asset, time.time(), PERIOD * (SMA_PERIOD + 5), PERIOD
+            )
+            if not candles or len(candles) < SMA_PERIOD + 2:
+                print("⏳ Waiting for candle data…")
+                await asyncio.sleep(PERIOD)
+                continue
 
-    sma = calc_sma(closes)
+            closes = [float(c["close"]) for c in candles]
+            rsi    = calc_rsi(closes)
+            sma    = calc_sma(closes)
 
-    last = candles[-1]
+            if rsi is None or prev_rsi is None:
+                prev_rsi = rsi
+                await asyncio.sleep(5)
+                continue
 
-    direction = None
+            last_close = closes[-1]
+            direction: str | None = None
 
-    # RSI crossover logic
-    if rsi_prev < 30 and rsi > 30 and last["close"] > sma:
-        direction = "call"
+            # RSI crossover signals
+            if prev_rsi < 30 <= rsi and last_close > sma:
+                direction = "call"
+            elif prev_rsi > 70 >= rsi and last_close < sma:
+                direction = "put"
 
-    elif rsi_prev > 70 and rsi < 70 and last["close"] < sma:
-        direction = "put"
+            prev_rsi = rsi
 
-    if direction:
+            if not direction:
+                print(f"  RSI={rsi:.1f}  SMA={sma:.5f}  close={last_close:.5f}  — no signal")
+                await asyncio.sleep(5)
+                continue
 
-        balance = client.get_balance()
+            # ── respect max concurrent trades ───────────────────────────
+            if len(open_trades) >= MAX_TRADES:
+                print(f"⚠️  Max open trades ({MAX_TRADES}) reached — skipping signal")
+                await asyncio.sleep(5)
+                continue
 
-        amount = calc_amount(balance, RISK_PERCENT)
+            # ── place trade ──────────────────────────────────────────────
+            balance = await client.get_balance()
+            amount  = calc_amount(balance, RISK_PERCENT)
 
-        open_trade(direction, amount)
+            print(
+                f"🚀 {direction.upper():4s}  amount={amount}  "
+                f"balance={balance:.2f}  RSI={rsi:.1f}"
+            )
 
-    else:
-        print("No signal...")
+            status, data = await client.buy(amount, asset, direction, PERIOD)
+            if status:
+                trade_id = (data or {}).get("id", "?")
+                open_trades.append(str(trade_id))
+                print(f"  ✅ Trade placed — id={trade_id}")
+
+                # wait for result then remove from open_trades
+                async def _track(tid: str) -> None:
+                    win, profit = await client.check_win(tid, PERIOD)
+                    label = "WIN 🎉" if win == "win" else "LOSS 💸"
+                    print(f"  {label}  id={tid}  profit={profit:+.2f}")
+                    if tid in open_trades:
+                        open_trades.remove(tid)
+
+                asyncio.create_task(_track(str(trade_id)))
+            else:
+                print(f"  ❌ Trade failed: {data}")
+
+            # wait for next candle boundary
+            await asyncio.sleep(PERIOD)
+
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped.")
+    finally:
+        await client.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

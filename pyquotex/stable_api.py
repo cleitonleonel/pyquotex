@@ -23,6 +23,7 @@ from .utils.processor import (
     process_tick,
     aggregate_candle
 )
+from .utils.optimization import OptimizedQuotexMixin
 from .utils.services import truncate
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ DEFAULT_TIMEOUT = 30
 _request_counter = itertools.count(int(time.time() * 1000))
 
 
-class Quotex:
+class Quotex(OptimizedQuotexMixin):
 
     def __init__(
             self,

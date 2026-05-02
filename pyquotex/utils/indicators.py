@@ -1,4 +1,5 @@
-import numpy as np
+import math
+import statistics
 
 
 class TechnicalIndicators:
@@ -34,24 +35,22 @@ class TechnicalIndicators:
         if len(prices) < period + 1:
             return []
 
-        deltas = np.diff(prices)
-        gain = np.where(deltas > 0, deltas, 0)
-        loss = np.where(deltas < 0, -deltas, 0)
+        # Pure-Python replacement for numpy: no external dependency needed.
+        deltas = [prices[i + 1] - prices[i] for i in range(len(prices) - 1)]
+        gain = [d if d > 0 else 0.0 for d in deltas]
+        loss = [-d if d < 0 else 0.0 for d in deltas]
 
-        avg_gain = np.concatenate(([np.mean(gain[:period])], gain[period:]))
-        avg_loss = np.concatenate(([np.mean(loss[:period])], loss[period:]))
+        avg_gain = sum(gain[:period]) / period
+        avg_loss = sum(loss[:period]) / period
 
-        for i in range(1, len(avg_gain)):
-            avg_gain[i] = (
-                                  avg_gain[i - 1] * (period - 1) + gain[period + i - 1]
-                          ) / period
-            avg_loss[i] = (
-                                  avg_loss[i - 1] * (period - 1) + loss[period + i - 1]
-                          ) / period
+        rsi_values: list[float] = []
+        for i in range(period, len(deltas)):
+            avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+            avg_loss = (avg_loss * (period - 1) + loss[i]) / period
+            rs = avg_gain / (avg_loss if avg_loss != 0 else 0.00001)
+            rsi_values.append(round(100 - (100 / (1 + rs)), 2))
 
-        rs = avg_gain / np.where(avg_loss == 0, 0.00001, avg_loss)
-        rsi = 100 - (100 / (1 + rs))
-        return [round(x, 2) for x in rsi.tolist()]
+        return rsi_values
 
     @staticmethod
     def calculate_macd(
@@ -110,7 +109,8 @@ class TechnicalIndicators:
 
         for i in range(len(prices) - period + 1):
             window = prices[i:(i + period)]
-            std.append(np.std(window))
+            # statistics.pstdev is population std dev — same as numpy.std default
+            std.append(statistics.pstdev(window))
 
         upper_band = [
             sma[i] + (std[i] * num_std) for i in range(len(sma))

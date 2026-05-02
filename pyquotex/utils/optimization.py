@@ -52,17 +52,29 @@ class OptimizedQuotexMixin:
         ):
             raise RuntimeError("Not connected to Quotex")
         
-        # Quick check if already available
+        # Quick check if already available — extract the correct key like
+        # get_balance() does; account_balance is a dict, not a scalar.
         if self.api.account_balance is not None:
-            return self.api.account_balance
-        
-        # Request balance (trigger WebSocket call)
-        # This would be added to the actual get_balance() call
-        
-        # Wait for result with timeout
+            from pyquotex.utils.account_type import AccountType
+            from pyquotex.utils.services import truncate
+            if self.api.account_type == AccountType.DEMO:
+                balance = self.api.account_balance.get("demoBalance", 0)
+            else:
+                balance = self.api.account_balance.get("liveBalance", 0)
+            return float(f"{truncate(balance + (self.api.profit_in_operation or 0), 2):.2f}")
+
+        # Wait for WebSocket balance event
         try:
-            result = await self._balance_event.wait(timeout=timeout)
-            return float(result or self.api.account_balance)
+            data = await self._balance_event.wait(timeout=timeout)
+            # data is the raw balance dict pushed by the WS handler
+            from pyquotex.utils.account_type import AccountType
+            from pyquotex.utils.services import truncate
+            balance_dict = data if isinstance(data, dict) else (self.api.account_balance or {})
+            if self.api.account_type == AccountType.DEMO:
+                balance = balance_dict.get("demoBalance", 0)
+            else:
+                balance = balance_dict.get("liveBalance", 0)
+            return float(f"{truncate(balance + (self.api.profit_in_operation or 0), 2):.2f}")
         except TimeoutError:
             raise TimeoutError(
                 f"Timeout waiting for account balance after {timeout}s"

@@ -21,13 +21,45 @@ user_agent = "custom_user_agent"
 )"""
 
 
-def check_moving_average_cross(prices, short_window=5, long_window=15):
-    short_moving_average = sum([i['price'] for i in prices[-short_window:]]) / short_window
-    long_moving_average = sum([i['price'] for i in prices[-long_window:]]) / long_window
-    if short_moving_average > long_moving_average:
-        return "buy"
-    elif short_moving_average < long_moving_average:
-        return "sell"
+def check_moving_average_cross(
+        prices: list,
+        short_window: int = 5,
+        long_window: int = 15,
+) -> str:
+    """Return 'buy', 'sell', or 'hold' based on MA crossover.
+
+    ``prices`` is the list returned by ``get_realtime_price()``.
+    Each entry is a dict that may contain a ``'price'`` key or a direct
+    numeric price depending on the broker's WS format.  We handle both.
+    """
+    if len(prices) < long_window:
+        return "hold"
+
+    def _price(item: dict | float) -> float:
+        if isinstance(item, dict):
+            # try common key names
+            for key in ("price", "close", "value"):
+                if key in item:
+                    return float(item[key])
+            # fallback: first numeric value in the dict
+            for v in item.values():
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return float(item)
+
+    short_ma = sum(_price(p) for p in prices[-short_window:]) / short_window
+    long_ma  = sum(_price(p) for p in prices[-long_window:])  / long_window
+
+    # Crossover: compare current vs previous bar's MAs
+    prev_short_ma = sum(_price(p) for p in prices[-(short_window + 1):-1]) / short_window
+    prev_long_ma  = sum(_price(p) for p in prices[-(long_window  + 1):-1]) / long_window
+
+    if prev_short_ma <= prev_long_ma and short_ma > long_ma:
+        return "buy"   # bullish crossover
+    elif prev_short_ma >= prev_long_ma and short_ma < long_ma:
+        return "sell"  # bearish crossover
     else:
         return "hold"
 
