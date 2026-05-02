@@ -1,7 +1,58 @@
 #!/usr/bin/env python3
-"""PyQuotex CLI — Fast Quotex trading API client."""
+"""PyQuotex CLI — Complete Quotex trading API client.
+
+Every public method exposed by ``stable_api.Quotex`` is reachable from this
+CLI.  Use ``python app.py --help`` or ``python app.py <command> --help`` for
+full usage.
+
+Commands
+--------
+Connection & Auth
+    login           Connect and show profile + balance
+    balance         Show current balance
+
+Account Management
+    set-demo-balance    Refill / set demo (practice) balance
+    server-time         Show synced server timestamp
+    settings            Apply and retrieve trading-UI settings
+
+Assets & Payouts
+    assets          List all available assets with open/closed status
+    payout          Show payout % for all assets
+    payout-asset    Show payout % for a single asset
+
+Candle / Market Data
+    candles             Fetch latest candles (up to 199 per request)
+    candles-v2          Fetch candles via the v2 API path
+    candles-deep        Fetch deep historical data (parallel workers)
+    history-line        Fetch raw historical price-line data
+    candle-info         Opening / closing / remaining time of current candle
+    realtime-price      Live price stream for an asset
+    realtime-sentiment  Live trader-sentiment stream
+    realtime-candle     Live candle tick stream
+
+Trading
+    buy             Place an immediate binary option trade
+    sell            Sell / close an open position early
+    pending         Place a pending order (executed at a future time)
+    check           Check win/loss result of a trade by ID
+    result          Look up a trade result from history by operation ID
+    signals         Fetch current signal data from the signals stream
+
+History
+    history         Show recent trade history (paged)
+
+Indicators
+    indicator       Calculate a technical indicator (RSI, MACD, BB, …)
+    subscribe-indicator  Live indicator stream with callback
+
+Monitoring
+    monitor         Real-time candle price monitor
+    strategy        Run Triple-Confirmation strategy (demo only)
+"""
 import argparse
 import asyncio
+import csv
 import logging
 import sys
 import time
@@ -27,6 +78,10 @@ logger = logging.getLogger(__name__)
 current_progress: Progress | None = None
 
 
+# ---------------------------------------------------------------------------
+# OTP callback
+# ---------------------------------------------------------------------------
+
 async def on_otp(message: str) -> str:
     """Callback to handle OTP input, pausing progress spinners if active."""
     if current_progress:
@@ -39,6 +94,7 @@ async def on_otp(message: str) -> str:
     else:
         return console.input(f"[bold yellow]🔐 {message}[/]")
 
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -46,172 +102,259 @@ async def on_otp(message: str) -> str:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pyquotex",
-        description="⚡ PyQuotex — Fast Quotex trading API",
+        description="⚡ PyQuotex — Complete Quotex trading API CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             "  pyquotex login --demo\n"
-            "  pyquotex balance\n"
-            "  pyquotex buy --asset EURUSD --amount 5 "
-            "--direction call --duration 60\n"
-            "  pyquotex candles --asset EURUSD --period 60 --count 10\n"
+            "  pyquotex balance --live\n"
             "  pyquotex assets\n"
+            "  pyquotex payout\n"
+            "  pyquotex payout-asset --asset EURUSD --timeframe 1\n"
+            "  pyquotex candles --asset EURUSD --period 60 --count 10\n"
+            "  pyquotex candles-v2 --asset EURUSD --period 60\n"
+            "  pyquotex candles-deep --asset EURUSD --seconds 3600 --workers 5\n"
+            "  pyquotex history-line --asset EURUSD --offset 3600\n"
+            "  pyquotex candle-info --asset EURUSD --period 60\n"
+            "  pyquotex realtime-price --asset EURUSD\n"
+            "  pyquotex realtime-sentiment --asset EURUSD\n"
+            "  pyquotex realtime-candle --asset EURUSD --period 60\n"
+            "  pyquotex buy --asset EURUSD --amount 5 --direction call --duration 60 --check-win\n"
+            "  pyquotex sell --id TRADE_ID\n"
+            "  pyquotex pending --asset EURUSD --amount 10 --direction call --duration 60\n"
+            "  pyquotex check --id TRADE_ID\n"
+            "  pyquotex result --id OPERATION_ID\n"
             "  pyquotex history --pages 2\n"
+            "  pyquotex signals\n"
+            "  pyquotex indicator --asset EURUSD --name RSI --period 14\n"
+            "  pyquotex server-time\n"
+            "  pyquotex set-demo-balance --amount 10000\n"
+            "  pyquotex settings --asset EURUSD --period 60\n"
             "  pyquotex monitor --asset EURUSD\n"
+            "  pyquotex strategy --asset EURUSD --auto-trade\n"
         ),
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    # ── helpers ─────────────────────────────────────────────────────────────
+    def _add_account_flags(p: argparse.ArgumentParser) -> None:
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--demo", action="store_true", default=True,
+                       help="Use demo account (default)")
+        g.add_argument("--live", action="store_true",
+                       help="Use live account")
+
+    def _add_asset_flag(p: argparse.ArgumentParser,
+                        default: str = "EURUSD") -> None:
+        p.add_argument("--asset", default=default,
+                       help=f"Asset symbol (default: {default})")
+
+    # ── test-all ─────────────────────────────────────────────────────────────
     sub.add_parser("test-all", help="Run all tests")
 
-    # login
-    login_p = sub.add_parser("login", help="Test login and show balance")
-    login_p.add_argument(
-        "--demo", action="store_true", default=True,
-        help="Use demo account (default)"
-    )
-    login_p.add_argument(
-        "--live", action="store_true", help="Use live account"
-    )
+    # ── login ────────────────────────────────────────────────────────────────
+    p = sub.add_parser("login", help="Test connection and show profile + balance")
+    _add_account_flags(p)
 
-    # balance
-    bal_p = sub.add_parser("balance", help="Show account balance")
-    bal_p.add_argument(
-        "--demo", action="store_true", default=True,
-        help="Use demo account (default)"
-    )
-    bal_p.add_argument("--live", action="store_true", help="Use live account")
+    # ── balance ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("balance", help="Show account balance")
+    _add_account_flags(p)
 
-    # buy
-    buy_p = sub.add_parser("buy", help="Place a trade")
-    buy_p.add_argument(
-        "--asset", default="EURUSD", help="Asset symbol (default: EURUSD)"
-    )
-    buy_p.add_argument(
-        "--amount", type=float, default=1.0, help="Trade amount (default: 1.0)"
-    )
-    buy_p.add_argument("--direction", choices=["call", "put"], default="call",
-                       help="Trade direction: call (up) or put (down)")
-    buy_p.add_argument(
-        "--duration", type=int, default=60,
-        help="Duration in seconds (default: 60)"
-    )
-    buy_p.add_argument(
-        "--demo", action="store_true", default=True,
-        help="Use demo account (default)"
-    )
-    buy_p.add_argument(
-        "--live", action="store_true", help="Use live account"
-    )
-    buy_p.add_argument(
-        "--check-win", action="store_true",
-        help="Wait for the trade to finish and show the result"
-    )
+    # ── server-time ──────────────────────────────────────────────────────────
+    sub.add_parser("server-time",
+                   help="Show the current synced server timestamp")
 
-    # sell
-    sell_p = sub.add_parser("sell", help="Sell/close an open position")
-    sell_p.add_argument(
-        "--id", dest="trade_id", required=True, help="Trade ID to sell"
-    )
-    sell_p.add_argument("--demo", action="store_true", default=True)
-    sell_p.add_argument("--live", action="store_true")
+    # ── set-demo-balance ─────────────────────────────────────────────────────
+    p = sub.add_parser("set-demo-balance",
+                       help="Refill or set demo (practice) account balance")
+    p.add_argument("--amount", type=float, default=10000.0,
+                   help="Amount to set (default: 10000)")
 
-    # candles
-    candles_p = sub.add_parser("candles", help="Fetch candle data")
-    candles_p.add_argument(
-        "--asset", default="EURUSD", help="Asset symbol (default: EURUSD)"
-    )
-    candles_p.add_argument(
-        "--period", type=int, default=60,
-        help="Candle period in seconds (default: 60)"
-    )
-    candles_p.add_argument(
-        "--count", type=int, default=10,
-        help="Number of candles (default: 10)"
-    )
+    # ── settings ─────────────────────────────────────────────────────────────
+    p = sub.add_parser("settings",
+                       help="Apply trading-UI settings and show result")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    p.add_argument("--mode", choices=["TIMER", "TURBO"], default="TIMER",
+                   help="Time mode (default: TIMER)")
+    p.add_argument("--deal", type=int, default=5,
+                   help="Default deal amount (default: 5)")
+    _add_account_flags(p)
 
-    # candles-deep
-    cd_p = sub.add_parser(
-        "candles-deep", help="Fetch deep historical candle data"
-    )
-    cd_p.add_argument(
-        "--asset", default="EURUSD", help="Asset symbol (default: EURUSD)"
-    )
-    cd_p.add_argument(
-        "--seconds", type=int, default=3600,
-        help="Amount of history in seconds (default: 3600)"
-    )
-    cd_p.add_argument(
-        "--period", type=int, default=60,
-        help="Candle period in seconds (default: 60)"
-    )
-    cd_p.add_argument(
-        "--workers", type=int, default=5,
-        help="Number of parallel workers (default: 5)"
-    )
-    cd_p.add_argument("--output", help="Save results to a CSV file")
-    cd_p.add_argument(
-        "--demo", action="store_true", default=True, help="Use demo account"
-    )
-    cd_p.add_argument("--live", action="store_true", help="Use live account")
+    # ── assets ───────────────────────────────────────────────────────────────
+    sub.add_parser("assets", help="List all available assets")
 
-    # assets
-    sub.add_parser("assets", help="List available assets")
+    # ── payout ───────────────────────────────────────────────────────────────
+    sub.add_parser("payout", help="Show payout % for all assets")
 
-    # history
-    hist_p = sub.add_parser("history", help="Show trade history")
-    hist_p.add_argument(
-        "--demo", action="store_true", default=True,
-        help="Use demo account (default)"
-    )
-    hist_p.add_argument(
-        "--live", action="store_true", help="Use live account"
-    )
-    hist_p.add_argument(
-        "--pages", type=int, default=1,
-        help="Number of history pages (default: 1)"
-    )
+    # ── payout-asset ─────────────────────────────────────────────────────────
+    p = sub.add_parser("payout-asset",
+                       help="Show payout % for a specific asset")
+    _add_asset_flag(p)
+    p.add_argument("--timeframe", default="1",
+                   choices=["1", "5", "24", "all"],
+                   help="Timeframe in minutes, or 'all' (default: 1)")
 
-    # check
-    chk_p = sub.add_parser(
-        "check", help="Check the result of a specific trade by ID"
-    )
-    chk_p.add_argument(
-        "--id", dest="trade_id", type=str, required=True,
-        help="Trade ID to check"
-    )
-    chk_p.add_argument(
-        "--demo", action="store_true", default=True,
-        help="Use demo account"
-    )
-    chk_p.add_argument("--live", action="store_true", help="Use live account")
+    # ── candles ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("candles", help="Fetch latest candle data (≤199)")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    p.add_argument("--count", type=int, default=10,
+                   help="Number of candles to display (default: 10)")
+    _add_account_flags(p)
 
-    # monitor
-    mon_p = sub.add_parser("monitor", help="Monitor asset price in real-time")
-    mon_p.add_argument(
-        "--asset", default="EURUSD", help="Asset symbol (default: EURUSD)"
-    )
-    mon_p.add_argument(
-        "--period", type=int, default=60,
-        help="Candle period in seconds (default: 60)"
-    )
+    # ── candles-v2 ───────────────────────────────────────────────────────────
+    p = sub.add_parser("candles-v2",
+                       help="Fetch candles via the v2 API path")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    _add_account_flags(p)
 
-    # strategy
-    strat_p = sub.add_parser(
-        "strategy",
-        help="Run professional trading strategy (Triple Confirmation)"
-    )
-    strat_p.add_argument(
-        "--asset", default="EURUSD", help="Asset to monitor (default: EURUSD)"
-    )
-    strat_p.add_argument(
-        "--period", type=int, default=60,
-        help="Candle period in seconds (default: 60)"
-    )
-    strat_p.add_argument(
-        "--auto-trade", action="store_true",
-        help="Automatically place trades on signals (DEMO only)"
-    )
+    # ── candles-deep ─────────────────────────────────────────────────────────
+    p = sub.add_parser("candles-deep",
+                       help="Fetch deep historical candle data (parallel workers)")
+    _add_asset_flag(p)
+    p.add_argument("--seconds", type=int, default=3600,
+                   help="Total history window in seconds (default: 3600)")
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    p.add_argument("--workers", type=int, default=5,
+                   help="Parallel workers 2-10 (default: 5). "
+                        "WARNING: >10 may cause a ban.")
+    p.add_argument("--output", metavar="FILE",
+                   help="Save results to a CSV file")
+    _add_account_flags(p)
+
+    # ── history-line ─────────────────────────────────────────────────────────
+    p = sub.add_parser("history-line",
+                       help="Fetch raw historical price-line data")
+    _add_asset_flag(p)
+    p.add_argument("--offset", type=int, default=3600,
+                   help="History window in seconds (default: 3600)")
+    _add_account_flags(p)
+
+    # ── candle-info ──────────────────────────────────────────────────────────
+    p = sub.add_parser("candle-info",
+                       help="Show opening / closing / remaining time of current candle")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    _add_account_flags(p)
+
+    # ── realtime-price ───────────────────────────────────────────────────────
+    p = sub.add_parser("realtime-price",
+                       help="Stream live price data for an asset")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    _add_account_flags(p)
+
+    # ── realtime-sentiment ───────────────────────────────────────────────────
+    p = sub.add_parser("realtime-sentiment",
+                       help="Stream live trader-sentiment data")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    _add_account_flags(p)
+
+    # ── realtime-candle ──────────────────────────────────────────────────────
+    p = sub.add_parser("realtime-candle",
+                       help="Stream live processed candle ticks")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    _add_account_flags(p)
+
+    # ── buy ──────────────────────────────────────────────────────────────────
+    p = sub.add_parser("buy", help="Place an immediate binary option trade")
+    _add_asset_flag(p)
+    p.add_argument("--amount", type=float, default=1.0,
+                   help="Trade amount (default: 1.0)")
+    p.add_argument("--direction", choices=["call", "put"], default="call",
+                   help="call = UP, put = DOWN (default: call)")
+    p.add_argument("--duration", type=int, default=60,
+                   help="Duration in seconds (default: 60)")
+    p.add_argument("--check-win", action="store_true",
+                   help="Wait for the trade to settle and show win/loss")
+    _add_account_flags(p)
+
+    # ── sell ─────────────────────────────────────────────────────────────────
+    p = sub.add_parser("sell", help="Sell / close an open position early")
+    p.add_argument("--id", dest="trade_id", required=True,
+                   help="Trade ID to sell")
+    _add_account_flags(p)
+
+    # ── pending ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("pending",
+                       help="Place a pending order (executed at a future time)")
+    _add_asset_flag(p)
+    p.add_argument("--amount", type=float, default=1.0,
+                   help="Trade amount (default: 1.0)")
+    p.add_argument("--direction", choices=["call", "put"], default="call",
+                   help="call = UP, put = DOWN (default: call)")
+    p.add_argument("--duration", type=int, default=60,
+                   help="Duration in seconds (default: 60)")
+    p.add_argument("--open-time", dest="open_time", default=None,
+                   help="Exact open time HH:MM (optional, defaults to next candle)")
+    _add_account_flags(p)
+
+    # ── check ────────────────────────────────────────────────────────────────
+    p = sub.add_parser("check",
+                       help="Check win/loss result of a trade by ID")
+    p.add_argument("--id", dest="trade_id", required=True,
+                   help="Trade ID to check")
+    _add_account_flags(p)
+
+    # ── result ───────────────────────────────────────────────────────────────
+    p = sub.add_parser("result",
+                       help="Look up trade result from history by operation ID")
+    p.add_argument("--id", dest="operation_id", required=True,
+                   help="Operation ID to look up")
+    _add_account_flags(p)
+
+    # ── history ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("history", help="Show recent trade history (paged)")
+    p.add_argument("--pages", type=int, default=1,
+                   help="Number of history pages (default: 1)")
+    _add_account_flags(p)
+
+    # ── signals ──────────────────────────────────────────────────────────────
+    sub.add_parser("signals",
+                   help="Fetch current signal data from the signals stream")
+
+    # ── indicator ────────────────────────────────────────────────────────────
+    p = sub.add_parser("indicator",
+                       help="Calculate a technical indicator (RSI, MACD, BB, …)")
+    _add_asset_flag(p)
+    p.add_argument("--name",
+                   choices=["RSI", "MACD", "BOLLINGER",
+                            "STOCHASTIC", "ADX", "ATR", "SMA", "EMA", "ICHIMOKU"],
+                   default="RSI",
+                   help="Indicator name (default: RSI)")
+    p.add_argument("--period", type=int, default=14,
+                   help="Indicator period (default: 14)")
+    p.add_argument("--timeframe", type=int, default=60,
+                   help="Candle timeframe in seconds (default: 60)")
+    _add_account_flags(p)
+
+    # ── monitor ──────────────────────────────────────────────────────────────
+    p = sub.add_parser("monitor",
+                       help="Real-time price monitor for an asset")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+
+    # ── strategy ─────────────────────────────────────────────────────────────
+    p = sub.add_parser("strategy",
+                       help="Run Triple-Confirmation strategy (DEMO recommended)")
+    _add_asset_flag(p)
+    p.add_argument("--period", type=int, default=60,
+                   help="Candle period in seconds (default: 60)")
+    p.add_argument("--auto-trade", action="store_true",
+                   help="Automatically place trades on signals (DEMO only)")
 
     return parser
 
@@ -228,14 +371,14 @@ async def connect_with_retry(
     """Connect to Quotex with exponential backoff on failure."""
     if await client.check_connect():
         return True
-    
+
     delay = 1.0
     for attempt in range(1, max_attempts + 1):
         with Progress(
             SpinnerColumn(),
-                TextColumn(
-                    f"[cyan]Connecting (attempt {attempt}/{max_attempts})…"
-                ),
+            TextColumn(
+                f"[cyan]Connecting (attempt {attempt}/{max_attempts})…"
+            ),
             transient=True,
             console=console,
         ) as prog:
@@ -264,11 +407,10 @@ async def connect_with_retry(
 
 
 # ---------------------------------------------------------------------------
-# Command implementations
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 def _is_demo(args: argparse.Namespace) -> bool:
-    """Resolve --demo / --live flags to is_demo bool."""
     if hasattr(args, "live") and args.live:
         return False
     return True
@@ -282,7 +424,7 @@ def _balance_table(profile: Any) -> Table:
         box=box.ROUNDED,
         border_style="magenta",
         row_styles=["none", "dim"],
-        padding=(0, 1)
+        padding=(0, 1),
     )
     table.add_column("Account", style="cyan", no_wrap=True)
     table.add_column("Balance", justify="right", style="bold green")
@@ -296,10 +438,14 @@ def _balance_table(profile: Any) -> Table:
     return table
 
 
+# ---------------------------------------------------------------------------
+# Command implementations — Connection & Account
+# ---------------------------------------------------------------------------
+
 async def cmd_login(client: Quotex, args: argparse.Namespace) -> None:
+    """Connect and display user profile + balance."""
     is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    if not await connect_with_retry(client, is_demo):
         return
     profile = await client.get_profile()
     console.print(_balance_table(profile))
@@ -311,26 +457,395 @@ async def cmd_login(client: Quotex, args: argparse.Namespace) -> None:
         border_style="bright_blue",
         box=box.ROUNDED,
         padding=(1, 2),
-        expand=False
+        expand=False,
     ))
 
 
 async def cmd_balance(client: Quotex, args: argparse.Namespace) -> None:
+    """Display current balance."""
     is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    if not await connect_with_retry(client, is_demo):
         return
     profile = await client.get_profile()
     console.print(_balance_table(profile))
 
 
-async def cmd_buy(client: Quotex, args: argparse.Namespace) -> None:
+async def cmd_server_time(client: Quotex, args: argparse.Namespace) -> None:
+    """Show the current synced server timestamp."""
+    if not await connect_with_retry(client, True):
+        return
+    ts = await client.get_server_time()
+    dt = datetime.fromtimestamp(ts)
+    console.print(Panel(
+        f"[bold cyan]Unix:[/]   {ts}\n"
+        f"[bold cyan]Local:[/]  {dt.strftime('%Y-%m-%d %H:%M:%S')}",
+        title="🕒 [bold]Server Time[/]",
+        border_style="cyan",
+        box=box.ROUNDED,
+        expand=False,
+    ))
+
+
+async def cmd_set_demo_balance(
+        client: Quotex, args: argparse.Namespace
+) -> None:
+    """Refill or set the demo (practice) account balance."""
+    if not await connect_with_retry(client, True):
+        return
+    result = await client.edit_practice_balance(args.amount)
+    console.print(Panel(
+        f"[bold green]✓ Demo balance updated[/]\n{result}",
+        title="💸 [bold]Set Demo Balance[/]",
+        border_style="green",
+        box=box.ROUNDED,
+        expand=False,
+    ))
+
+
+async def cmd_settings(client: Quotex, args: argparse.Namespace) -> None:
+    """Apply trading-UI settings and display the server response."""
     is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    if not await connect_with_retry(client, is_demo):
+        return
+    result = await client.store_settings_apply(
+        asset=args.asset,
+        period=args.period,
+        time_mode=args.mode,
+        deal=args.deal,
+    )
+    table = Table(
+        title="⚙️  [bold]Settings Applied[/]",
+        box=box.ROUNDED,
+        border_style="cyan",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Key", style="bright_white")
+    table.add_column("Value", style="yellow")
+    for k, v in result.items():
+        table.add_row(str(k), str(v))
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Command implementations — Assets & Payouts
+# ---------------------------------------------------------------------------
+
+async def cmd_assets(client: Quotex, args: argparse.Namespace) -> None:
+    """List all available assets with open/closed status."""
+    if not await connect_with_retry(client, True):
+        return
+    await client.get_all_assets()
+    instruments = await client.get_instruments()
+    if not instruments:
+        console.print("[red]No instruments received.[/]")
         return
 
-    # Automatically resolve asset name (handles OTC switching and casing)
+    table = Table(
+        title="📊 [bold]Available Assets[/]",
+        box=box.ROUNDED,
+        border_style="bright_blue",
+        show_header=True,
+        header_style="bold bright_white on blue",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Asset", style="cyan", no_wrap=True)
+    table.add_column("Name", style="white")
+    table.add_column("Status", justify="center")
+    table.add_column("Payout %", justify="right", style="green")
+
+    for idx, i in enumerate(instruments, 1):
+        status = "[green]OPEN[/]" if i[14] else "[red]CLOSED[/]"
+        payout = f"{i[5]}%" if len(i) > 5 else "—"
+        table.add_row(str(idx), i[1], i[2].replace("\n", ""), status, payout)
+
+    console.print(table)
+
+
+async def cmd_payout(client: Quotex, args: argparse.Namespace) -> None:
+    """Show payout % for all assets."""
+    if not await connect_with_retry(client, True):
+        return
+    await client.get_all_assets()
+    data = client.get_payment()
+    if not data:
+        console.print("[red]No payout data available.[/]")
+        return
+
+    table = Table(
+        title="💹 [bold]Asset Payouts[/]",
+        box=box.ROUNDED,
+        border_style="green",
+        show_header=True,
+        header_style="bold bright_white on green",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("Asset", style="cyan", no_wrap=True)
+    table.add_column("Payout %", justify="right")
+    table.add_column("Turbo %", justify="right")
+    table.add_column("1M %", justify="right")
+    table.add_column("5M %", justify="right")
+    table.add_column("Open", justify="center")
+
+    for asset, info in data.items():
+        status = "[green]✓[/]" if info.get("open") else "[red]✗[/]"
+        table.add_row(
+            asset,
+            str(info.get("payment", "—")),
+            str(info.get("turbo_payment", "—")),
+            str(info.get("profit", {}).get("1M", "—")),
+            str(info.get("profit", {}).get("5M", "—")),
+            status,
+        )
+    console.print(table)
+
+
+async def cmd_payout_asset(client: Quotex, args: argparse.Namespace) -> None:
+    """Show payout % for a specific asset."""
+    if not await connect_with_retry(client, True):
+        return
+    await client.get_all_assets()
+    result = client.get_payout_by_asset(args.asset, args.timeframe)
+    if result is None:
+        console.print(f"[red]Asset '{args.asset}' not found.[/]")
+        return
+    console.print(Panel(
+        f"[bold cyan]Asset:[/]     {args.asset}\n"
+        f"[bold cyan]Timeframe:[/] {args.timeframe}M\n"
+        f"[bold green]Payout:[/]    {result}%",
+        title="💹 [bold]Asset Payout[/]",
+        border_style="green",
+        box=box.ROUNDED,
+        expand=False,
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Command implementations — Candle / Market Data
+# ---------------------------------------------------------------------------
+
+async def cmd_candles(client: Quotex, args: argparse.Namespace) -> None:
+    """Fetch latest candles for an asset (up to 199 per call)."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    candles = await client.get_candles(
+        asset, time.time(), args.period * args.count, args.period
+    )
+    if not candles:
+        console.print("[red]No candle data received.[/]")
+        return
+    _print_candles_table(candles[-args.count:], asset, args.period)
+
+
+async def cmd_candles_v2(client: Quotex, args: argparse.Namespace) -> None:
+    """Fetch candles via the v2 API path."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    candles = await client.get_candle_v2(asset, args.period)
+    if not candles:
+        console.print("[red]No v2 candle data received.[/]")
+        return
+    _print_candles_table(candles, asset, args.period, title="Candles (v2)")
+
+
+async def cmd_candles_deep(client: Quotex, args: argparse.Namespace) -> None:
+    """Fetch deep historical candle data using parallel workers."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    if args.workers > 10:
+        console.print(
+            "[bold red]⚠ WARNING:[/] workers > 10 may cause a ban. "
+            "Clamping to 10."
+        )
+        args.workers = 10
+
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+
+    def _progress_cb(done: int, total: int, count: int, label: str) -> None:
+        pct = int(done / total * 100) if total else 0
+        console.print(
+            f"  [dim]{label}[/] {pct}% — {count} candles collected",
+            end="\r",
+        )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]Fetching deep history…"),
+        BarColumn(),
+        TaskProgressColumn(),
+        transient=True,
+        console=console,
+    ) as prog:
+        prog.add_task("fetch")
+        candles = await client.get_historical_candles(
+            asset,
+            amount_of_seconds=args.seconds,
+            period=args.period,
+            max_workers=args.workers,
+            progress_callback=_progress_cb,
+        )
+
+    console.print(f"\n[green]✓[/] {len(candles)} candles fetched.")
+    _print_candles_table(candles[-20:], asset, args.period,
+                         title=f"Last 20 of {len(candles)} candles (deep)")
+
+    if args.output:
+        _save_candles_csv(candles, args.output)
+        console.print(f"[green]✓ Saved to {args.output}[/]")
+
+
+async def cmd_history_line(client: Quotex, args: argparse.Namespace) -> None:
+    """Fetch raw historical price-line data."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    await client.get_all_assets()
+    data = await client.get_history_line(
+        asset, time.time(), args.offset
+    )
+    if not data:
+        console.print("[red]No history-line data received.[/]")
+        return
+    console.print(Panel(
+        str(data)[:2000],
+        title=f"📈 [bold]History Line — {asset}[/]",
+        border_style="blue",
+        box=box.ROUNDED,
+    ))
+
+
+async def cmd_candle_info(client: Quotex, args: argparse.Namespace) -> None:
+    """Show opening / closing / remaining time of the current candle."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    await client.start_candles_stream(asset, args.period)
+    await asyncio.sleep(1)  # let stream warm up
+    info = await client.opening_closing_current_candle(asset, args.period)
+    if not info:
+        console.print("[red]Could not retrieve candle info.[/]")
+        return
+    opening = datetime.fromtimestamp(info.get("opening", 0))
+    closing = datetime.fromtimestamp(info.get("closing", 0))
+    console.print(Panel(
+        f"[bold cyan]Asset:[/]      {asset}\n"
+        f"[bold cyan]Period:[/]     {args.period}s\n"
+        f"[bold cyan]Opening:[/]    {opening.strftime('%H:%M:%S')}\n"
+        f"[bold cyan]Closing:[/]    {closing.strftime('%H:%M:%S')}\n"
+        f"[bold yellow]Remaining:[/] {info.get('remaining', '?')}s",
+        title="🕯️  [bold]Current Candle Info[/]",
+        border_style="cyan",
+        box=box.ROUNDED,
+        expand=False,
+    ))
+    await client.stop_candles_stream(asset)
+
+
+async def cmd_realtime_price(client: Quotex, args: argparse.Namespace) -> None:
+    """Stream live price data for an asset (Ctrl+C to stop)."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    console.print(
+        f"[cyan]Streaming live price for[/] [bold]{asset}[/] "
+        f"[dim](Ctrl+C to stop)[/]"
+    )
+    await client.start_realtime_price(asset, args.period)
+    try:
+        while True:
+            prices = await client.get_realtime_price(asset)
+            if prices:
+                latest = prices[-1]
+                console.print(
+                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  "
+                    f"[bold green]{latest.get('price', latest)}[/]",
+                    end="\r",
+                )
+            await asyncio.sleep(0.5)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stream stopped.[/]")
+    finally:
+        await client.stop_candles_stream(asset)
+
+
+async def cmd_realtime_sentiment(
+        client: Quotex, args: argparse.Namespace
+) -> None:
+    """Stream live trader-sentiment data (Ctrl+C to stop)."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    console.print(
+        f"[cyan]Streaming sentiment for[/] [bold]{asset}[/] "
+        f"[dim](Ctrl+C to stop)[/]"
+    )
+    await client.start_realtime_sentiment(asset, args.period)
+    try:
+        while True:
+            sentiment = await client.get_realtime_sentiment(asset)
+            if sentiment:
+                bulls = sentiment.get("call", sentiment.get("bulls", "?"))
+                bears = sentiment.get("put", sentiment.get("bears", "?"))
+                console.print(
+                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  "
+                    f"[green]CALL {bulls}%[/]  [red]PUT {bears}%[/]",
+                    end="\r",
+                )
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stream stopped.[/]")
+    finally:
+        await client.stop_candles_stream(asset)
+
+
+async def cmd_realtime_candle(
+        client: Quotex, args: argparse.Namespace
+) -> None:
+    """Stream live processed candle ticks (Ctrl+C to stop)."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    console.print(
+        f"[cyan]Streaming candle ticks for[/] [bold]{asset}[/] "
+        f"[dim](Ctrl+C to stop)[/]"
+    )
+    try:
+        while True:
+            candle = await client.start_realtime_candle(asset, args.period)
+            if candle:
+                console.print(
+                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  "
+                    f"{candle}",
+                    end="\r",
+                )
+            await asyncio.sleep(0.5)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stream stopped.[/]")
+    finally:
+        await client.stop_candles_stream(asset)
+
+
+# ---------------------------------------------------------------------------
+# Command implementations — Trading
+# ---------------------------------------------------------------------------
+
+async def cmd_buy(client: Quotex, args: argparse.Namespace) -> None:
+    """Place an immediate binary option trade."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+
     asset, asset_info = await client.get_available_asset(
         args.asset, force_open=True
     )
@@ -339,74 +854,56 @@ async def cmd_buy(client: Quotex, args: argparse.Namespace) -> None:
             f"[bold red]✗ Asset {args.asset} not found or closed.[/]"
         )
         return
-    amount = args.amount
-    direction = args.direction
-    duration = args.duration
 
     console.print(
-        f"[cyan]Placing trade:[/] [bold]{direction.upper()}[/] "
-        f"[yellow]{asset}[/] | amount=[bold]{amount}[/] | "
-        f"duration=[bold]{duration}s[/]"
+        f"[cyan]Placing trade:[/] [bold]{args.direction.upper()}[/] "
+        f"[yellow]{asset}[/] | amount=[bold]{args.amount}[/] | "
+        f"duration=[bold]{args.duration}s[/]"
     )
 
     with Progress(
-            SpinnerColumn(), TextColumn("[cyan]Sending order…"),
-            transient=True, console=console
+        SpinnerColumn(), TextColumn("[cyan]Sending order…"),
+        transient=True, console=console
     ) as prog:
         prog.add_task("buy")
         status, trade_data = await client.buy(
-            amount, asset, direction, duration
+            args.amount, asset, args.direction, args.duration
         )
 
     if status:
         order_data = trade_data if isinstance(trade_data, dict) else {}
         trade_id = order_data.get("id")
-        close_timestamp = order_data.get("closeTimestamp")
-
+        close_ts = order_data.get("closeTimestamp")
         console.print(
             f"[bold green]✓ Order placed![/] Trade ID: [bold]{trade_id}[/]"
         )
 
         if getattr(args, "check_win", False):
             with Progress(
-                    SpinnerColumn(), TextColumn("[cyan]{task.description}"),
-                    transient=True, console=console
+                SpinnerColumn(),
+                TextColumn("[cyan]{task.description}"),
+                transient=True,
+                console=console,
             ) as prog:
                 task_id = prog.add_task("Waiting for trade closure...")
-
-                # Add a small buffer to time out to account for network latency
                 check_task = asyncio.create_task(
-                    client.check_win(trade_id, duration)
+                    client.check_win(trade_id, args.duration)
                 )
-
                 while not check_task.done():
-                    # Calculate real remaining time using server clock
                     server_now = (
                         client.api.timesync.server_timestamp
                         if client.api else None
                     )
-                    if close_timestamp and server_now:
-                        remaining = int(close_timestamp - server_now)
-                    else:
-                        remaining = 0  # If no server time, just show finishing
-
-                    if remaining > 0:
-                        prog.update(
-                            task_id,
-                            description=(
-                                f"Waiting for trade closure... "
-                                f"[bold yellow]{remaining}s[/] remaining"
-                            )
-                        )
-                    else:
-                        prog.update(
-                            task_id,
-                            description=(
-                                "Waiting for trade closure... "
-                                "[bold yellow]finishing up[/]"
-                            )
-                        )
-
+                    remaining = (
+                        int(close_ts - server_now)
+                        if close_ts and server_now else 0
+                    )
+                    label = (
+                        f"Waiting… [bold yellow]{remaining}s[/] remaining"
+                        if remaining > 0
+                        else "Waiting… [bold yellow]finishing[/]"
+                    )
+                    prog.update(task_id, description=label)
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(check_task), timeout=1.0
@@ -414,115 +911,47 @@ async def cmd_buy(client: Quotex, args: argparse.Namespace) -> None:
                     except asyncio.TimeoutError:
                         pass
 
-                win, profit = await check_task
-
-            win_bool = win == "win"
-            result_color = "green" if win_bool else "red"
-            result_label = "WIN 🎉" if win_bool else "LOSS 💸"
+            win, profit = await check_task
+            color = "green" if win == "win" else "red"
+            label = "WIN 🎉" if win == "win" else "LOSS 💸"
             console.print(
-                f"[bold {result_color}]{result_label}[/] — "
-                f"Profit: [bold]{profit:+.2f}[/]"
+                f"[bold {color}]{label}[/] — Profit: [bold]{profit:+.2f}[/]"
             )
         else:
             console.print(
-                "[dim]Order successfully dispatched. "
-                "Exiting immediately as --check-win was not passed.[/]"
+                "[dim]Order dispatched. Pass --check-win to wait for result.[/]"
             )
     else:
-        # Fixed UnboundLocalError by using trade_data
         console.print(f"[bold red]✗ Order failed.[/] Response: {trade_data}")
-        if not getattr(args, "check_win", False):
-            sys.exit(1)
-
-
-async def cmd_check(client: Quotex, args: argparse.Namespace) -> None:
-    is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
-        return
-
-    trade_id = args.trade_id
-    console.print(
-        f"[cyan]Checking result for Trade ID:[/] [bold]{trade_id}[/]"
-    )
-
-    with Progress(
-            SpinnerColumn(), TextColumn("[cyan]{task.description}"),
-            transient=True, console=console
-    ) as prog:
-        task_id = prog.add_task("Waiting for trade closure...")
-        try:
-            # Increase default timeout for manual check
-            check_task = asyncio.create_task(
-                client.check_win(trade_id, timeout=300)
-            )
-            elapsed = 0
-
-            while not check_task.done():
-                prog.update(
-                    task_id,
-                    description=(
-                        f"Waiting for trade closure... "
-                        f"[bold yellow]{elapsed}s[/] elapsed"
-                    )
-                )
-
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(check_task), timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    elapsed += 1
-
-            win, profit = await check_task
-            win_bool = win == "win"
-            result_color = "green" if win_bool else "red"
-            result_label = "WIN 🎉" if win_bool else "LOSS 💸"
-            console.print(
-                f"[bold {result_color}]{result_label}[/] — "
-                f"Profit/Loss: [bold]{profit:+.2f}[/]"
-            )
-        except Exception as e:
-            console.print(
-                f"[bold red]✗ Could not check trade result.[/] Error: {e}"
-            )
+        sys.exit(1)
 
 
 async def cmd_sell(client: Quotex, args: argparse.Namespace) -> None:
+    """Sell / close an open position early."""
     is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    if not await connect_with_retry(client, is_demo):
         return
-
-    trade_id = args.trade_id
-    console.print(f"[cyan]Selling trade ID:[/] {trade_id}")
     with Progress(
-            SpinnerColumn(), TextColumn("[cyan]Sending sell order…"),
-            transient=True, console=console
+        SpinnerColumn(), TextColumn("[cyan]Sending sell request…"),
+        transient=True, console=console
     ) as prog:
         prog.add_task("sell")
-        result = await client.sell_option(trade_id)
-    console.print(f"[bold green]Sell result:[/] {result}")
+        result = await client.sell_option(args.trade_id)
+    console.print(Panel(
+        f"[bold green]✓ Sell response received[/]\n{result}",
+        title="📤 [bold]Sell Option[/]",
+        border_style="green",
+        box=box.ROUNDED,
+        expand=False,
+    ))
 
 
-def _ascii_sparkline(values: list[float]) -> str:
-    """Render a compact ASCII sparkline for a list of floats."""
-    if not values:
-        return ""
-    bars = "▁▂▃▄▅▆▇█"
-    mn, mx = min(values), max(values)
-    span = mx - mn or 1
-    return "".join(
-        bars[int((v - mn) / span * (len(bars) - 1))] for v in values
-    )
-
-
-async def cmd_candles(client: Quotex, args: argparse.Namespace) -> None:
-    ok = await connect_with_retry(client, is_demo=True)
-    if not ok:
+async def cmd_pending(client: Quotex, args: argparse.Namespace) -> None:
+    """Place a pending order to be executed at a future time."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
         return
 
-    # Automatically resolve asset name (handles OTC switching and casing)
     asset, asset_info = await client.get_available_asset(
         args.asset, force_open=True
     )
@@ -531,497 +960,473 @@ async def cmd_candles(client: Quotex, args: argparse.Namespace) -> None:
             f"[bold red]✗ Asset {args.asset} not found or closed.[/]"
         )
         return
-    period = args.period
-    count = args.count
-    end_time = time.time()
 
-    with Progress(
-            SpinnerColumn(),
-            TextColumn(f"[cyan]Fetching {count} candles for {asset}…"),
-            transient=True, console=console
-    ) as prog:
-        prog.add_task("candles")
-        candles = await client.get_candles(asset, end_time, count, period)
-
-    if not candles:
-        console.print("[yellow]No candle data returned.[/]")
-        return
-
-    table = Table(
-        title=f"🕯 [bold]Candles — {asset}[/] (period={period}s)",
-        header_style="bold bright_white on cyan",
-        box=box.MINIMAL_DOUBLE_HEAD,
-        border_style="cyan",
-        row_styles=["none", "dim"]
+    console.print(
+        f"[cyan]Placing pending order:[/] [bold]{args.direction.upper()}[/] "
+        f"[yellow]{asset}[/] | amount=[bold]{args.amount}[/] | "
+        f"duration=[bold]{args.duration}s[/]"
+        + (f" | open_time=[bold]{args.open_time}[/]" if args.open_time else "")
     )
-    table.add_column("Time", style="dim")
-    table.add_column("Open", justify="right", style="bright_white")
-    table.add_column("High", justify="right", style="green")
-    table.add_column("Low", justify="right", style="red")
-    table.add_column("Close", justify="right", style="bright_white")
-    table.add_column("Trend", justify="center")
-
-    closes = []
-    for c in candles[-count:]:
-        ts = time.strftime("%H:%M:%S", time.localtime(c.get("time", 0)))
-        o, h, l, cl = (
-            c.get("open", 0), c.get("high", 0),
-            c.get("low", 0), c.get("close", 0)
-        )
-        direction = "[green]▲[/]" if cl >= o else "[red]▼[/]"
-        table.add_row(
-            ts, f"{o:.5f}", f"{h:.5f}", f"{l:.5f}", f"{cl:.5f}", direction
-        )
-        closes.append(cl)
-
-    console.print(table)
-    if closes:
-        console.print(f"  Trend: [bold]{_ascii_sparkline(closes)}[/]")
-
-
-async def cmd_assets(client: Quotex, args: argparse.Namespace) -> None:
-    ok = await connect_with_retry(client, is_demo=True)
-    if not ok:
-        return
 
     with Progress(
-            SpinnerColumn(), TextColumn("[cyan]Fetching asset list…"),
-            transient=True, console=console
+        SpinnerColumn(), TextColumn("[cyan]Sending pending order…"),
+        transient=True, console=console
     ) as prog:
-        prog.add_task("assets")
-        raw_data = await client.get_instruments(timeout=60)
+        prog.add_task("pending")
+        status, data = await client.open_pending(
+            args.amount, asset, args.direction,
+            args.duration, args.open_time
+        )
 
-    if not raw_data:
-        console.print("[yellow]No instruments data available.[/]")
-        return
-
-    # Standardize data format: Quotex may return a dict with "list",
-    # "instruments", or just the list
-    if isinstance(raw_data, dict):
-        items = raw_data.get("list", raw_data.get("instruments", []))
-    elif isinstance(raw_data, list):
-        items = raw_data
+    if status:
+        console.print(
+            f"[bold green]✓ Pending order placed![/]\n{data}"
+        )
     else:
-        items = []
+        console.print(f"[bold red]✗ Pending order failed.[/] {data}")
+        sys.exit(1)
 
-    if not items and isinstance(raw_data, dict):
-        # Fallback: if it's a dict and we didn't find 'list', maybe it
-        # IS the list of assets?
-        # Check if keys look like symbols
-        items = list(raw_data.values()) if any(
-            isinstance(v, (dict, list)) for v in raw_data.values()
-        ) else []
 
-    table = Table(
-        title="📊 [bold]Available Assets[/]",
-        header_style="bold bright_white on magenta",
-        box=box.ROUNDED,
-        border_style="magenta",
-        row_styles=["none", "dim"]
+async def cmd_check(client: Quotex, args: argparse.Namespace) -> None:
+    """Check win/loss result of a trade by ID."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+
+    console.print(
+        f"[cyan]Checking result for Trade ID:[/] [bold]{args.trade_id}[/]"
     )
-    table.add_column("Symbol", style="bold cyan")
-    table.add_column("Name", style="bright_white")
-    table.add_column("Payout", justify="right", style="bold green")
-    table.add_column("Status", justify="center")
-
-    for item in items[:50]:
-        try:
-            if isinstance(item, dict):
-                symbol = item.get("symbol", item.get("asset", ""))
-                name = item.get("name", "")
-                payout = f"{item.get('payout', item.get('profit', 0))}%"
-                status = (
-                    "[green]●[/]" if item.get("enabled", True) else "[red]○[/]"
+    with Progress(
+        SpinnerColumn(), TextColumn("[cyan]{task.description}"),
+        transient=True, console=console
+    ) as prog:
+        task_id = prog.add_task("Waiting…")
+        check_task = asyncio.create_task(
+            client.check_win(args.trade_id, timeout=300)
+        )
+        elapsed = 0
+        while not check_task.done():
+            prog.update(
+                task_id,
+                description=f"Waiting… [bold yellow]{elapsed}s[/] elapsed",
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(check_task), timeout=1.0
                 )
-            elif isinstance(item, list) and len(item) >= 6:
-                symbol = item[1]
-                name = item[2]
-                payout = f"{item[5]}%"
-                status = "[green]●[/]"
-            else:
-                continue
-            table.add_row(str(symbol), str(name), str(payout), status)
-        except Exception:
-            continue
+            except asyncio.TimeoutError:
+                elapsed += 1
 
+        win, profit = await check_task
+
+    color = "green" if win == "win" else "red"
+    label = "WIN 🎉" if win == "win" else "LOSS 💸"
+    console.print(
+        f"[bold {color}]{label}[/] — Profit: [bold]{profit:+.2f}[/]"
+    )
+
+
+async def cmd_result(client: Quotex, args: argparse.Namespace) -> None:
+    """Look up a trade result from history by operation ID."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    status, data = await client.get_result(args.operation_id)
+    if status is None:
+        console.print(f"[red]Operation ID '{args.operation_id}' not found.[/]")
+        return
+    color = "green" if status == "win" else "red"
+    console.print(Panel(
+        f"[bold {color}]Result: {status.upper()}[/]\n{data}",
+        title=f"📋 [bold]Trade Result — {args.operation_id}[/]",
+        border_style=color,
+        box=box.ROUNDED,
+    ))
+
+
+async def cmd_signals(client: Quotex, args: argparse.Namespace) -> None:
+    """Fetch current signal data from the signals stream."""
+    if not await connect_with_retry(client, True):
+        return
+    await client.start_signals_data()
+    await asyncio.sleep(2)  # allow signals to arrive
+    data = client.get_signal_data()
+    if not data:
+        console.print("[yellow]No signal data available yet.[/]")
+        return
+    table = Table(
+        title="📡 [bold]Signal Data[/]",
+        box=box.ROUNDED,
+        border_style="yellow",
+        show_header=True,
+        header_style="bold yellow",
+    )
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+    for k, v in data.items():
+        table.add_row(str(k), str(v))
     console.print(table)
-    if len(items) > 50:
-        console.print(f"[dim]… and {len(items) - 50} more assets[/]")
 
+
+# ---------------------------------------------------------------------------
+# Command implementations — History
+# ---------------------------------------------------------------------------
 
 async def cmd_history(client: Quotex, args: argparse.Namespace) -> None:
+    """Show recent trade history (paged)."""
     is_demo = _is_demo(args)
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    if not await connect_with_retry(client, is_demo):
         return
-
+    all_trades: list[dict] = []
     account_type = 1 if is_demo else 0
-    all_deals = []
+    for page in range(1, args.pages + 1):
+        page_data = await client.get_trader_history(account_type, page)
+        if isinstance(page_data, dict):
+            trades = page_data.get("data", [])
+        elif isinstance(page_data, list):
+            trades = page_data
+        else:
+            trades = []
+        all_trades.extend(trades)
 
-    with Progress(
-            SpinnerColumn(), TextColumn("[cyan]Fetching history…"),
-            transient=True, console=console
-    ) as prog:
-        prog.add_task("history")
-        for page in range(1, args.pages + 1):
-            data = await client.get_trader_history(account_type, page)
-            deals = data.get("deals", []) if isinstance(data, dict) else []
-            all_deals.extend(deals)
-
-    if not all_deals:
+    if not all_trades:
         console.print("[yellow]No trade history found.[/]")
         return
 
     table = Table(
-        title="📜 [bold]Trade History[/]",
-        header_style="bold bright_white on blue",
+        title=f"📜 [bold]Trade History[/] ({'Demo' if is_demo else 'Live'})",
         box=box.ROUNDED,
-        border_style="blue",
-        row_styles=["none", "dim"]
+        border_style="bright_blue",
+        show_header=True,
+        header_style="bold bright_white on blue",
+        row_styles=["none", "dim"],
     )
     table.add_column("ID", style="dim", no_wrap=True)
-    table.add_column("Asset", style="bold cyan")
-    table.add_column("Dir", justify="center")
-    table.add_column("Amount", justify="right", style="bright_white")
+    table.add_column("Asset", style="cyan")
+    table.add_column("Direction", justify="center")
+    table.add_column("Amount", justify="right")
     table.add_column("Profit", justify="right")
     table.add_column("Result", justify="center")
     table.add_column("Time", style="dim")
 
-    for deal in all_deals[:100]:
-        d_id = str(deal.get("id", ""))[:8]
-        asset = deal.get("asset", "")
-        direction = deal.get("command", "")
-        amount = f"{deal.get('amount', 0):.2f}"
-        profit = deal.get("profit", 0)
-        profit_str = (
-            f"[green]+{profit:.2f}[/]" if profit > 0
-            else f"[red]{profit:.2f}[/]"
+    for t in all_trades:
+        profit = float(t.get("profitAmount", 0))
+        result_str = (
+            "[green]WIN[/]" if profit > 0
+            else "[red]LOSS[/]" if profit < 0
+            else "[dim]DRAW[/]"
         )
-        result = "[green]WIN[/]" if profit > 0 else "[red]LOSS[/]"
-        ts = time.strftime(
-            "%m-%d %H:%M", time.localtime(deal.get("openTimestamp", 0))
+        direction = t.get("command", t.get("direction", "?")).upper()
+        dir_color = "green" if direction in ("CALL", "BUY", "UP") else "red"
+        ts = t.get("openTimestamp", t.get("createdAt", ""))
+        try:
+            ts_str = datetime.fromtimestamp(int(ts)).strftime(
+                "%m-%d %H:%M"
+            ) if ts else "—"
+        except Exception:
+            ts_str = str(ts)
+        table.add_row(
+            str(t.get("ticket", t.get("id", "—")))[:12],
+            str(t.get("asset", "?")),
+            f"[{dir_color}]{direction}[/{dir_color}]",
+            f"{float(t.get('amount', 0)):,.2f}",
+            f"{profit:+,.2f}",
+            result_str,
+            ts_str,
         )
-        table.add_row(d_id, asset, direction, amount, profit_str, result, ts)
-
     console.print(table)
-    wins = sum(1 for d in all_deals if d.get("profit", 0) > 0)
-    losses = len(all_deals) - wins
-    total_profit = sum(d.get("profit", 0) for d in all_deals)
-    pct = wins / len(all_deals) * 100 if all_deals else 0
-    console.print(
-        f"\n[bold]Total:[/] {len(all_deals)} trades | "
-        f"[green]Wins: {wins}[/] | [red]Losses: {losses}[/] | "
-        f"Win rate: [bold]{pct:.1f}%[/] | "
-        f"Net P&L: [bold]{'[green]' if total_profit >= 0 else '[red]'}"
-        f"{total_profit:+.2f}[/]"
-    )
 
+
+# ---------------------------------------------------------------------------
+# Command implementations — Indicators
+# ---------------------------------------------------------------------------
+
+async def cmd_indicator(client: Quotex, args: argparse.Namespace) -> None:
+    """Calculate a technical indicator and display the result."""
+    is_demo = _is_demo(args)
+    if not await connect_with_retry(client, is_demo):
+        return
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    console.print(
+        f"[cyan]Calculating[/] [bold]{args.name}[/] for "
+        f"[yellow]{asset}[/] (period={args.period}, tf={args.timeframe}s)"
+    )
+    with Progress(
+        SpinnerColumn(), TextColumn("[cyan]Fetching history + computing…"),
+        transient=True, console=console
+    ) as prog:
+        prog.add_task("indicator")
+        result = await client.calculate_indicator(
+            asset,
+            args.name,
+            params={"period": args.period},
+            timeframe=args.timeframe,
+        )
+    if not result:
+        console.print("[red]No indicator data returned.[/]")
+        return
+    table = Table(
+        title=f"📐 [bold]{args.name} — {asset}[/]",
+        box=box.ROUNDED,
+        border_style="magenta",
+        show_header=True,
+        header_style="bold magenta",
+    )
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="bold yellow")
+    if isinstance(result, dict):
+        for k, v in result.items():
+            table.add_row(str(k), f"{v:.6f}" if isinstance(v, float) else str(v))
+    else:
+        table.add_row("result", str(result))
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Command implementations — Monitor & Strategy
+# ---------------------------------------------------------------------------
 
 async def cmd_monitor(client: Quotex, args: argparse.Namespace) -> None:
-    is_demo = True
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    """Real-time price monitor for an asset (Ctrl+C to stop)."""
+    if not await connect_with_retry(client, True):
         return
-
-    # Automatically resolve asset name (handles OTC switching and casing)
-    asset, asset_info = await client.get_available_asset(
-        args.asset, force_open=True
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    console.print(
+        f"[cyan]Monitoring[/] [bold]{asset}[/] "
+        f"[dim](period={args.period}s — Ctrl+C to stop)[/]"
     )
-    if not asset_info or not asset_info[0]:
-        console.print(
-            f"[bold red]✗ Asset {args.asset} not found or closed.[/]"
-        )
-        return
-    period = args.period
-    console.print(Panel(
-        f"Monitoring [bold cyan]{asset}[/] | period=[bold]{period}s[/]\n"
-        "Press Ctrl+C to stop.",
-        title="📡 Live Monitor",
-        border_style="cyan",
-    ))
-
-    await client.start_realtime_candle(asset, period)
-    prices: list[float] = []
+    await client.start_candles_stream(asset, args.period)
+    prev_price = None
     try:
         while True:
-            candle = await client.get_realtime_candles(asset)
-            if candle:
-                price = (
-                    candle[2]
-                    if isinstance(candle, list) and len(candle) >= 3
-                    else None
+            prices = await client.get_realtime_price(asset)
+            if prices:
+                latest = prices[-1]
+                price = latest.get("price", latest)
+                change = ""
+                if prev_price is not None:
+                    delta = float(price) - float(prev_price)
+                    change = (
+                        f" [green]+{delta:.5f}[/]" if delta > 0
+                        else f" [red]{delta:.5f}[/]" if delta < 0
+                        else " [dim]—[/]"
+                    )
+                console.print(
+                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  "
+                    f"[bold]{price}[/]{change}      ",
+                    end="\r",
                 )
-                if price:
-                    prices.append(float(price))
-                    trend = _ascii_sparkline(prices[-20:])
-                    direction = (
-                        "▲" if len(prices) < 2 or prices[-1] >= prices[-2]
-                        else "▼"
-                    )
-                    color = "green" if direction == "▲" else "red"
-                    console.print(
-                        f"\r[{color}]{direction}[/{color}] [bold]{asset}[/] "
-                        f"Price: [bold cyan]{price:.5f}[/]  "
-                        f"[{color}]{trend}[/{color}]",
-                        end="",
-                    )
-            await asyncio.sleep(1)
+                prev_price = price
+            await asyncio.sleep(0.5)
     except KeyboardInterrupt:
-        console.print("\n[dim]Monitoring stopped.[/]")
-
-
-async def cmd_candles_deep(client: Quotex, args: argparse.Namespace) -> None:
-    is_demo = not args.live
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
-        return
-
-    asset, asset_info = await client.get_available_asset(
-        args.asset, force_open=True
-    )
-    if not asset_info or not asset_info[0]:
-        console.print(
-            f"[bold red]✗ Asset {args.asset} not found or closed.[/]"
-        )
-        return
-
-    console.print(
-        f"[bold blue]📊 Fetching deep history for {asset}...[/bold blue]"
-    )
-
-    with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console
-    ) as progress:
-        # Map worker names to Rich task IDs
-        worker_tasks = {}
-        total_candles = 0
-
-        def update_progress(completed: int, total: int, count: int, worker: str) -> None:
-            nonlocal total_candles
-            if worker not in worker_tasks:
-                worker_tasks[worker] = progress.add_task(
-                    f"[cyan]{worker}",
-                    total=100
-                )
-
-            pct = (completed / total) * 100 if total > 0 else 100
-            progress.update(
-                worker_tasks[worker],
-                completed=pct,
-                description=f"[cyan]{worker}[/] | Candles: [bold green]{count}[/] | {pct:.1f}%"
-            )
-
-        candles = await client.get_historical_candles(
-            asset,
-            args.seconds,
-            args.period,
-            max_workers=getattr(args, 'workers', 5),
-            progress_callback=update_progress
-        )
-
-    if candles:
-        console.print(
-            f"[bold green]✅ Successfully fetched {len(candles)} "
-            "candles![/bold green]"
-        )
-        console.print(
-            f"📅 From: [yellow]"
-            f"{datetime.fromtimestamp(candles[0]['time'])}[/yellow]"
-        )
-        console.print(
-            f"📅 To:   [yellow]"
-            f"{datetime.fromtimestamp(candles[-1]['time'])}[/yellow]"
-        )
-
-        if args.output:
-            import csv
-            with open(args.output, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=candles[0].keys())
-                writer.writeheader()
-                writer.writerows(candles)
-            console.print(f"[bold cyan]📁 Saved to {args.output}[/bold cyan]")
-    else:
-        console.print(
-            "[bold red]❌ No history found or fetch failed.[/bold red]"
-        )
+        console.print("\n[yellow]Monitor stopped.[/]")
+    finally:
+        await client.stop_candles_stream(asset)
 
 
 async def cmd_strategy(client: Quotex, args: argparse.Namespace) -> None:
-    is_demo = True
-    ok = await connect_with_retry(client, is_demo)
-    if not ok:
+    """Run Triple-Confirmation strategy."""
+    if not await connect_with_retry(client, True):
         return
-
-    # Automatically resolve asset name (handles OTC switching and casing)
-    asset, asset_info = await client.get_available_asset(
-        args.asset, force_open=True
-    )
-    if not asset_info or not asset_info[0]:
-        console.print(
-            f"[bold red]✗ Asset {args.asset} not found or closed.[/]"
-        )
-        return
-    period = args.period
-    strategy = TripleConfirmationStrategy()
-
-    mode_text = (
-        '[bold green]AUTO-TRADE (DEMO)[/]' if args.auto_trade
-        else '[bold yellow]MONITOR ONLY[/]'
-    )
+    asset, _ = await client.get_available_asset(args.asset, force_open=True)
+    strategy = TripleConfirmationStrategy(client, asset, args.period)
     console.print(Panel(
-        f"Strategy: [bold magenta]Triple Confirmation[/] | "
-        f"Asset: [bold cyan]{asset}[/] | Period: [bold]{period}s[/]\n"
-        f"Mode: {mode_text}\n"
-        "Searching for high-probability entries...",
-        title="🤖 Trading Bot",
+        f"[bold cyan]Asset:[/]      {asset}\n"
+        f"[bold cyan]Period:[/]     {args.period}s\n"
+        f"[bold cyan]Auto-trade:[/] {'YES ⚠ DEMO ONLY' if args.auto_trade else 'NO (signal only)'}",
+        title="🧠 [bold]Triple Confirmation Strategy[/]",
         border_style="magenta",
+        box=box.ROUNDED,
+        expand=False,
     ))
+    await strategy.run(auto_trade=args.auto_trade)
 
-    try:
-        while True:
-            # Fetch last candles
-            candles = await client.get_candles(asset, time.time(), 60, period)
-            if candles:
-                signal = strategy.analyze(candles)
 
-                # Render status line
-                ts = time.strftime("%H:%M:%S")
-                last_price = candles[-1]['close']
-                status_color = (
-                    "green" if signal == "call" else "red"
-                    if signal == "put" else "dim"
-                )
-                signal_text = (
-                    f"[{status_color}]SIGNAL: {str(signal).upper()}[/]"
-                    if signal else "[dim]SIGNAL: NONE[/]"
-                )
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
 
-                console.print(
-                    f"\r[dim]{ts}[/] | Price: [bold]{last_price:.5f}[/] | "
-                    f"{signal_text}",
-                    end="",
-                )
+def _print_candles_table(
+    candles: list[dict],
+    asset: str,
+    period: int,
+    title: str | None = None,
+) -> None:
+    """Render a Rich table of candle data."""
+    tbl_title = title or f"🕯️  [bold]Candles — {asset} ({period}s)[/]"
+    table = Table(
+        title=tbl_title,
+        box=box.ROUNDED,
+        border_style="bright_blue",
+        show_header=True,
+        header_style="bold bright_white on blue",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("Time", style="dim", no_wrap=True)
+    table.add_column("Open", justify="right")
+    table.add_column("High", justify="right", style="green")
+    table.add_column("Low", justify="right", style="red")
+    table.add_column("Close", justify="right", style="bold")
+    table.add_column("Dir", justify="center")
 
-                if signal:
-                    console.print(
-                        f"\n[bold {status_color}]🎯 ENTRY DETECTED:[/] "
-                        f"[white]{signal.upper()}[/] on {asset}"
-                    )
-                    if args.auto_trade:
-                        console.print(
-                            f"[yellow]⚡ Placing {signal.upper()} trade...[/]"
-                        )
-                        status, trade_data = await client.buy(
-                            10, asset, signal, period
-                        )
-                        if status:
-                            # Extract ID correctly from dictionary response
-                            trade_id = (
-                                trade_data.get("id")
-                                if isinstance(trade_data, dict) else trade_data
-                            )
-                            console.print(
-                                f"[bold green]✓ Trade Placed![/] "
-                                f"ID: {trade_id}"
-                            )
-                        else:
-                            console.print(
-                                f"[bold red]✗ Trade Failed:[/] {trade_data}"
-                            )
+    for c in candles:
+        ts = c.get("time", c.get("timestamp", 0))
+        try:
+            ts_str = datetime.fromtimestamp(int(ts)).strftime("%m-%d %H:%M:%S")
+        except Exception:
+            ts_str = str(ts)
+        o = c.get("open", 0)
+        h = c.get("max", c.get("high", 0))
+        lo = c.get("min", c.get("low", 0))
+        cl = c.get("close", 0)
+        direction = (
+            "[green]▲[/]" if float(cl) >= float(o)
+            else "[red]▼[/]"
+        )
+        table.add_row(
+            ts_str,
+            f"{float(o):.5f}",
+            f"{float(h):.5f}",
+            f"{float(lo):.5f}",
+            f"{float(cl):.5f}",
+            direction,
+        )
+    console.print(table)
 
-            await asyncio.sleep(2)
-    except KeyboardInterrupt:
-        console.print("\n[dim]Strategy stopped.[/]")
 
+def _save_candles_csv(candles: list[dict], filepath: str) -> None:
+    """Save candles list to a CSV file."""
+    if not candles:
+        return
+    fieldnames = list(candles[0].keys())
+    with open(filepath, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(candles)
+
+
+# ---------------------------------------------------------------------------
+# test-all runner
+# ---------------------------------------------------------------------------
 
 async def cmd_test_all(client: Quotex, args: argparse.Namespace) -> None:
-    """Run a suite of tests to verify all functionality."""
-    console.print(Panel(
-        "[bold yellow]🚀 Starting Full Test Suite[/]",
-        border_style="yellow", expand=False
-    ))
+    """Run a quick smoke-test of every major API method."""
+    console.rule("[bold cyan]PyQuotex — test-all[/]")
+    passed = 0
+    failed = 0
 
-    # 1. Login & Balance
-    console.print("\n[bold cyan]1. Testing Login & Balance...[/]")
-    await cmd_login(client, args)
+    async def _test(name: str, coro: Any) -> None:
+        nonlocal passed, failed
+        try:
+            result = await coro
+            console.print(f"  [green]✓[/] {name}: {str(result)[:80]}")
+            passed += 1
+        except Exception as e:
+            console.print(f"  [red]✗[/] {name}: {e}")
+            failed += 1
 
-    # 2. Assets
-    console.print("\n[bold cyan]2. Testing Assets List...[/]")
-    await cmd_assets(client, args)
+    if not await connect_with_retry(client, True):
+        return
 
-    # 3. Candles
-    console.print("\n[bold cyan]3. Testing Candles Fetching...[/]")
-    args.asset = "EURUSD"
-    args.period = 60
-    args.count = 5
-    await cmd_candles(client, args)
+    await client.get_all_assets()
 
-    # 4. History
-    console.print("\n[bold cyan]4. Testing Trade History...[/]")
-    args.pages = 1
-    await cmd_history(client, args)
+    await _test("get_profile", client.get_profile())
+    await _test("get_balance", client.get_balance())
+    await _test("get_server_time", client.get_server_time())
+    await _test("get_all_asset_name", asyncio.coroutine(
+        lambda: client.get_all_asset_name()
+    )())
+    await _test("get_payment (sync)", asyncio.coroutine(
+        lambda: client.get_payment()
+    )())
+    await _test("get_payout_by_asset EURUSD",
+                asyncio.coroutine(
+                    lambda: client.get_payout_by_asset("EURUSD")
+                )())
+    await _test("get_candles EURUSD 60s",
+                client.get_candles("EURUSD", time.time(), 3600, 60))
+    await _test("get_candle_v2 EURUSD",
+                client.get_candle_v2("EURUSD", 60))
+    await _test("get_historical_candles EURUSD 1h",
+                client.get_historical_candles(
+                    "EURUSD", amount_of_seconds=3600, period=60, max_workers=2
+                ))
+    await _test("get_realtime_price EURUSD",
+                client.start_realtime_price("EURUSD", 60))
+    await _test("get_realtime_sentiment EURUSD",
+                client.start_realtime_sentiment("EURUSD", 60))
+    await _test("get_trader_history demo p1",
+                client.get_trader_history(1, 1))
+    await _test("calculate_indicator RSI",
+                client.calculate_indicator(
+                    "EURUSD", "RSI", {"period": 14}, timeframe=60
+                ))
 
-    console.print(Panel(
-        "\n[bold green]✅ Test Suite Completed![/]",
-        border_style="green", expand=False
-    ))
+    console.rule()
+    color = "green" if failed == 0 else "yellow"
+    console.print(
+        f"[bold {color}]Results: {passed} passed, {failed} failed[/]"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Main dispatcher
 # ---------------------------------------------------------------------------
+
+COMMAND_MAP: dict[str, Any] = {
+    "login":               cmd_login,
+    "balance":             cmd_balance,
+    "server-time":         cmd_server_time,
+    "set-demo-balance":    cmd_set_demo_balance,
+    "settings":            cmd_settings,
+    "assets":              cmd_assets,
+    "payout":              cmd_payout,
+    "payout-asset":        cmd_payout_asset,
+    "candles":             cmd_candles,
+    "candles-v2":          cmd_candles_v2,
+    "candles-deep":        cmd_candles_deep,
+    "history-line":        cmd_history_line,
+    "candle-info":         cmd_candle_info,
+    "realtime-price":      cmd_realtime_price,
+    "realtime-sentiment":  cmd_realtime_sentiment,
+    "realtime-candle":     cmd_realtime_candle,
+    "buy":                 cmd_buy,
+    "sell":                cmd_sell,
+    "pending":             cmd_pending,
+    "check":               cmd_check,
+    "result":              cmd_result,
+    "signals":             cmd_signals,
+    "history":             cmd_history,
+    "indicator":           cmd_indicator,
+    "monitor":             cmd_monitor,
+    "strategy":            cmd_strategy,
+    "test-all":            cmd_test_all,
+}
+
 
 async def main() -> None:
     parser = make_parser()
     args = parser.parse_args()
 
     if not args.command:
-        console.print(Panel(
-            "[bold cyan]⚡ PyQuotex[/] — Fast Quotex trading API\n\n"
-            "Run [bold]pyquotex --help[/] for available commands.",
-            border_style="cyan",
-        ))
         parser.print_help()
         return
 
     email, password = credentials()
-    if not email or not password:
-        console.print(
-            "[bold red]✗ No credentials found.[/] "
-            "Please configure pyquotex/config.py"
-        )
-        sys.exit(1)
-
     client = Quotex(
         email=email,
         password=password,
         on_otp_callback=on_otp,
     )
 
+    handler = COMMAND_MAP.get(args.command)
+    if handler is None:
+        console.print(f"[red]Unknown command: {args.command}[/]")
+        parser.print_help()
+        return
+
     try:
-        command_map: dict[str, Callable[[Quotex, argparse.Namespace], Any]] = {
-            "login": cmd_login,
-            "balance": cmd_balance,
-            "buy": cmd_buy,
-            "check": cmd_check,
-            "sell": cmd_sell,
-            "candles": cmd_candles,
-            "assets": cmd_assets,
-            "history": cmd_history,
-            "monitor": cmd_monitor,
-            "strategy": cmd_strategy,
-            "candles-deep": cmd_candles_deep,
-            "test-all": cmd_test_all,
-        }
-        handler = command_map.get(args.command)
-        if handler:
-            await handler(client, args)
-        else:
-            console.print(f"[red]Unknown command: {args.command}[/]")
+        await handler(client, args)
     finally:
         await client.close()
 
