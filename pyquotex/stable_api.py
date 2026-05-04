@@ -1591,7 +1591,16 @@ class Quotex(OptimizedQuotexMixin):
         if not self.multilogin_config or not self.multilogin_config.auto_start:
             return
 
-        self._multilogin_client = MultiloginClient(self.multilogin_config)
+        # Allow callers behind a corporate proxy to reach the Multilogin
+        # cloud / agent endpoint.
+        ml_proxy = (
+            self.proxy_config.url
+            if self.proxy_config and self.proxy_config.url
+            else None
+        )
+        self._multilogin_client = MultiloginClient(
+            self.multilogin_config, proxy=ml_proxy
+        )
         profile = await self._multilogin_client.start_profile()
         self.multilogin_profile = profile
 

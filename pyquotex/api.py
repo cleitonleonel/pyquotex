@@ -149,10 +149,14 @@ class QuotexAPI:
         self.browser.set_headers()
         self.settings = Settings(self)
         self.event_registry = EventRegistry()
+        http_verify: Any = unified_ssl_context
+        if proxy_config and not proxy_config.verify_ssl:
+            http_verify = False
         self._http_client = httpx.AsyncClient(
-            verify=unified_ssl_context,
+            verify=http_verify,
             timeout=30.0,
             follow_redirects=True,
+            proxy=proxy_url,
         )
         self.profit_today: float | None = None
         self.heartbeat_task: asyncio.Task | None = None

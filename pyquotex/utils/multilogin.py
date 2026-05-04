@@ -79,12 +79,18 @@ class MultiloginProfile:
 class MultiloginClient:
     """Async client for the Multilogin agent / cloud API."""
 
-    def __init__(self, config: MultiloginConfig, timeout: float = 30.0):
+    def __init__(
+            self,
+            config: MultiloginConfig,
+            timeout: float = 30.0,
+            proxy: str | None = None,
+    ):
         self.config = config
         self._client = httpx.AsyncClient(
             base_url=config.resolved_base_url(),
             timeout=timeout,
             follow_redirects=True,
+            proxy=proxy,
         )
 
     async def __aenter__(self) -> "MultiloginClient":
