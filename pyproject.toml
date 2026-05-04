@@ -1,6 +1,6 @@
 [project]
 name = "pyquotex"
-version = "1.0.3"
+version = "1.1.0"
 description = "Quotex API Client written in Python."
 authors = [
     { name = "cleiton", email = "cleiton.leonel@gmail.com"}]
