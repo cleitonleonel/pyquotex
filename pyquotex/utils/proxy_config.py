@@ -27,6 +27,8 @@ class ProxyConfig:
     verify_ssl: bool = True
     dns_overrides: dict[str, str] = field(default_factory=dict)
     extra_headers: dict[str, str] = field(default_factory=dict)
+    use_browser_tls: bool = False
+    impersonate: str = "chrome120"
 
     @property
     def scheme(self) -> str | None:
@@ -93,4 +95,6 @@ class ProxyConfig:
             verify_ssl=bool(data.get("verify_ssl", True)),
             dns_overrides=dict(data.get("dns_overrides") or {}),
             extra_headers=dict(data.get("extra_headers") or {}),
+            use_browser_tls=bool(data.get("use_browser_tls", False)),
+            impersonate=str(data.get("impersonate", "chrome120")),
         )

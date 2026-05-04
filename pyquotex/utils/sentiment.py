@@ -76,9 +76,11 @@ class SentimentMonitor:
             self,
             thresholds: SentimentThresholds | None = None,
             history_size: int = 256,
+            store: "SentimentStore | None" = None,
     ):
         self.thresholds = thresholds or SentimentThresholds()
         self.history_size = history_size
+        self.store = store
         self._history: dict[str, deque[SentimentSnapshot]] = defaultdict(
             lambda: deque(maxlen=self.history_size)
         )
@@ -118,6 +120,12 @@ class SentimentMonitor:
         self._history[asset].append(snapshot)
         if price is not None:
             self._prices[asset].append(float(price))
+
+        if self.store is not None:
+            try:
+                self.store.write(snapshot, price=price)
+            except Exception as e:
+                logger.warning("sentiment store write failed: %s", e)
 
         signals: list[SentimentSignal] = []
         signals.extend(self._check_extremes(snapshot))
@@ -247,3 +255,168 @@ def _pearson(a: list[float], b: list[float]) -> float | None:
     if denom_a == 0 or denom_b == 0:
         return None
     return num / (denom_a * denom_b)
+
+
+class SentimentStore:
+    """SQLite-backed persistence layer for sentiment snapshots.
+
+    One row per ``(asset, timestamp)``; safe to share across multiple
+    monitors. Backtesting code can replay any window via :meth:`query`.
+    """
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS sentiment_snapshots (
+        asset TEXT NOT NULL,
+        timestamp REAL NOT NULL,
+        bullish REAL NOT NULL,
+        bearish REAL NOT NULL,
+        price REAL,
+        PRIMARY KEY (asset, timestamp)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sentiment_asset_ts
+        ON sentiment_snapshots (asset, timestamp);
+    """
+
+    def __init__(self, path: str | "os.PathLike[str]" = ":memory:"):
+        import sqlite3
+
+        self.path = str(path)
+        self._conn = sqlite3.connect(
+            self.path, isolation_level=None, check_same_thread=False
+        )
+        self._conn.executescript(self._SCHEMA)
+
+    def write(
+            self, snapshot: SentimentSnapshot, price: float | None = None
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO sentiment_snapshots "
+            "(asset, timestamp, bullish, bearish, price) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                snapshot.asset,
+                snapshot.timestamp,
+                snapshot.bullish,
+                snapshot.bearish,
+                price,
+            ),
+        )
+
+    def query(
+            self,
+            asset: str,
+            start: float | None = None,
+            end: float | None = None,
+            limit: int | None = None,
+    ) -> list[SentimentSnapshot]:
+        sql = (
+            "SELECT asset, timestamp, bullish, bearish "
+            "FROM sentiment_snapshots WHERE asset = ?"
+        )
+        params: list[Any] = [asset]
+        if start is not None:
+            sql += " AND timestamp >= ?"
+            params.append(start)
+        if end is not None:
+            sql += " AND timestamp <= ?"
+            params.append(end)
+        sql += " ORDER BY timestamp ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self._conn.execute(sql, params).fetchall()
+        return [
+            SentimentSnapshot(
+                asset=r[0], timestamp=r[1], bullish=r[2], bearish=r[3]
+            )
+            for r in rows
+        ]
+
+    def assets(self) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT DISTINCT asset FROM sentiment_snapshots"
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class SentimentCorrelationAnalyzer:
+    """Compute pairwise sentiment correlations across multiple assets.
+
+    Reads recent samples from a :class:`SentimentMonitor` (in-memory) or
+    :class:`SentimentStore` (persisted) and returns Pearson correlations
+    of the signed bias time series, plus a divergence helper that
+    surfaces decoupled asset pairs.
+    """
+
+    def __init__(
+            self,
+            monitor: "SentimentMonitor | None" = None,
+            store: "SentimentStore | None" = None,
+    ):
+        if monitor is None and store is None:
+            raise ValueError("Pass either monitor or store.")
+        self.monitor = monitor
+        self.store = store
+
+    def correlation_matrix(
+            self,
+            assets: list[str],
+            window: int = 60,
+    ) -> dict[tuple[str, str], float]:
+        """Return Pearson correlations for every distinct asset pair.
+
+        Time series are aligned by index (most recent ``window``
+        samples). Pairs without enough overlap are omitted from the
+        result.
+        """
+        series = self._collect_series(assets, window)
+        out: dict[tuple[str, str], float] = {}
+        for i, a in enumerate(assets):
+            for b in assets[i + 1:]:
+                xs = series.get(a)
+                ys = series.get(b)
+                if not xs or not ys:
+                    continue
+                length = min(len(xs), len(ys))
+                if length < 2:
+                    continue
+                corr = _pearson(xs[-length:], ys[-length:])
+                if corr is not None:
+                    out[(a, b)] = corr
+        return out
+
+    def find_divergences(
+            self,
+            assets: list[str],
+            window: int = 60,
+            threshold: float = 0.0,
+    ) -> list[tuple[str, str, float]]:
+        """Return ``(asset_a, asset_b, correlation)`` triples whose
+        correlation is at or below ``threshold`` — i.e. the assets'
+        sentiments are moving in opposite directions."""
+        matrix = self.correlation_matrix(assets, window=window)
+        return sorted(
+            [
+                (a, b, c) for (a, b), c in matrix.items()
+                if c <= threshold
+            ],
+            key=lambda x: x[2],
+        )
+
+    def _collect_series(
+            self, assets: list[str], window: int
+    ) -> dict[str, list[float]]:
+        out: dict[str, list[float]] = {}
+        for asset in assets:
+            snaps: list[SentimentSnapshot] = []
+            if self.monitor is not None:
+                snaps = self.monitor.history(asset)[-window:]
+            elif self.store is not None:
+                snaps = self.store.query(asset, limit=window)
+                snaps = snaps[-window:]
+            if snaps:
+                out[asset] = [s.bias for s in snaps]
+        return out

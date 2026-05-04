@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 fast = ["orjson (>=3.9.0,<4.0.0)"]
 socks = ["httpx[socks] (>=0.27.0,<1.0.0)"]
+stealth = ["curl_cffi (>=0.7.0,<1.0.0)"]
 
 [tool.poetry.group.dev.dependencies]
 python = ">=3.12,<4.0"

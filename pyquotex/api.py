@@ -20,6 +20,7 @@ from .utils import json_utils as json
 from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
 from .utils.proxy_config import ProxyConfig
+from .utils.reconnect import ReconnectPolicy, ReconnectSupervisor
 from .utils.sentiment import SentimentMonitor
 from .ws.channels.buy import Buy
 from .ws.channels.candles import GetCandles
@@ -66,6 +67,7 @@ class QuotexAPI:
             on_otp_callback: Callable | None = None,
             proxy_config: ProxyConfig | None = None,
             sentiment_monitor: SentimentMonitor | None = None,
+            reconnect_policy: ReconnectPolicy | None = None,
     ):
         """
         :param str host: The hostname or ip address of a Quotex server.
@@ -120,6 +122,9 @@ class QuotexAPI:
         self.proxies = proxies
         self.proxy_config = proxy_config
         self.sentiment_monitor = sentiment_monitor
+        self.reconnect_policy = reconnect_policy or ReconnectPolicy()
+        self.reconnect_supervisor: ReconnectSupervisor | None = None
+        self._client_ref: Any = None  # set by Quotex for state replay
         self.lang = lang
         self.settings_list: dict[str, Any] = {}
         self.signal_data: dict[str, Any] = {}
@@ -858,11 +863,26 @@ class QuotexAPI:
             AccountType.DEMO if is_demo else AccountType.REAL
         )
         ok, reason = await self.start_websocket()
-        if ok: await self.send_ssid()
+        if ok:
+            await self.send_ssid()
+            self._start_reconnect_supervisor()
         return ok, reason
+
+    def _start_reconnect_supervisor(self) -> None:
+        """Spawn the reconnect supervisor on first successful connect."""
+        if not self.reconnect_policy.enabled:
+            return
+        if self.reconnect_supervisor is None:
+            self.reconnect_supervisor = ReconnectSupervisor(
+                self, self.reconnect_policy
+            )
+        self.reconnect_supervisor.capture()
+        self.reconnect_supervisor.start()
 
     async def close(self) -> bool:
         """Closes the WebSocket connection and the HTTP client session."""
+        if self.reconnect_supervisor:
+            await self.reconnect_supervisor.stop()
         if self.websocket_client:
             await self.websocket_client.close()
             # Explicitly trigger cleanup to ensure heartbeat is cancelled

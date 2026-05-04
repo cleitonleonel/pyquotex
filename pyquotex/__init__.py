@@ -8,10 +8,13 @@ from .utils.multilogin import (
     MultiloginProfile,
 )
 from .utils.proxy_config import ProxyConfig
+from .utils.reconnect import ReconnectPolicy, ReconnectStats, ReconnectSupervisor
 from .utils.sentiment import (
+    SentimentCorrelationAnalyzer,
     SentimentMonitor,
     SentimentSignal,
     SentimentSnapshot,
+    SentimentStore,
     SentimentThresholds,
 )
 
@@ -25,6 +28,11 @@ __all__ = [
     "SentimentThresholds",
     "SentimentSignal",
     "SentimentSnapshot",
+    "SentimentStore",
+    "SentimentCorrelationAnalyzer",
+    "ReconnectPolicy",
+    "ReconnectStats",
+    "ReconnectSupervisor",
 ]
 
 

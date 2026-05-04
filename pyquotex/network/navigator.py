@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from typing_extensions import Self
 
 from pyquotex.utils.proxy_config import ProxyConfig
+from pyquotex.network.transport import TransportBackend, build_backend
 
 logger = logging.getLogger("Browser")
 logger.setLevel(logging.INFO)
@@ -45,16 +46,25 @@ class Browser:
 
         self.headers: dict[str, str] = self.get_headers()
 
-        # Build httpx.AsyncClient
+        # Build the HTTP backend (httpx by default; curl_cffi if
+        # ProxyConfig.use_browser_tls is True and the extra is installed).
         verify: Any = self._ssl_context
-        if self.proxy_config and not self.proxy_config.verify_ssl:
-            verify = False
-        self._client = httpx.AsyncClient(
+        use_browser_tls = False
+        impersonate = "chrome120"
+        if self.proxy_config:
+            if not self.proxy_config.verify_ssl:
+                verify = False
+            use_browser_tls = self.proxy_config.use_browser_tls
+            impersonate = self.proxy_config.impersonate
+        self._backend: TransportBackend = build_backend(
             verify=verify,
             timeout=30.0,
             follow_redirects=True,
             proxy=self.proxies if isinstance(self.proxies, str) else None,
+            use_browser_tls=use_browser_tls,
+            impersonate=impersonate,
         )
+        self._client = self._backend  # legacy alias for callers
 
         if self.debug:
             logger.setLevel(logging.DEBUG)

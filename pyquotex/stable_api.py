@@ -30,6 +30,7 @@ from .utils.multilogin import (
 )
 from .utils.optimization import OptimizedQuotexMixin
 from .utils.proxy_config import ProxyConfig
+from .utils.reconnect import ReconnectPolicy
 from .utils.sentiment import SentimentMonitor, SentimentThresholds
 from .utils.services import truncate
 
@@ -64,6 +65,8 @@ class Quotex(OptimizedQuotexMixin):
             multilogin: MultiloginConfig | None = None,
             sentiment_thresholds: SentimentThresholds | None = None,
             enable_sentiment_monitor: bool = False,
+            reconnect_policy: ReconnectPolicy | None = None,
+            auto_reconnect: bool = True,
     ):
         """
         Initializes the Quotex stable API wrapper.
@@ -103,6 +106,9 @@ class Quotex(OptimizedQuotexMixin):
             if enable_sentiment_monitor or sentiment_thresholds
             else None
         )
+        if reconnect_policy is None:
+            reconnect_policy = ReconnectPolicy(enabled=auto_reconnect)
+        self.reconnect_policy = reconnect_policy
         self.resource_path = root_path
         self.user_data_dir = user_data_dir
         self.asset_default = asset_default
@@ -604,7 +610,9 @@ class Quotex(OptimizedQuotexMixin):
             on_otp_callback=self.on_otp_callback,
             proxy_config=self.proxy_config,
             sentiment_monitor=self.sentiment_monitor,
+            reconnect_policy=self.reconnect_policy,
         )
+        self.api._client_ref = self
 
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
