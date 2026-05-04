@@ -8,6 +8,8 @@ import httpx
 from bs4 import BeautifulSoup
 from typing_extensions import Self
 
+from pyquotex.utils.proxy_config import ProxyConfig
+
 logger = logging.getLogger("Browser")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
@@ -25,7 +27,11 @@ class Browser:
         self.source_address: Any = kwargs.pop('source_address', None)
         self.server_hostname: str | None = kwargs.pop('server_hostname', None)
         self.proxies: dict[str, str] | str | None = kwargs.pop('proxies', None)
+        self.proxy_config: ProxyConfig | None = kwargs.pop('proxy_config', None)
         self.debug: bool = kwargs.pop('debug', False)
+
+        if self.proxy_config and self.proxy_config.url and not self.proxies:
+            self.proxies = self.proxy_config.url
 
         # Build SSL context
         cert_path = certifi.where()
@@ -40,8 +46,11 @@ class Browser:
         self.headers: dict[str, str] = self.get_headers()
 
         # Build httpx.AsyncClient
+        verify: Any = self._ssl_context
+        if self.proxy_config and not self.proxy_config.verify_ssl:
+            verify = False
         self._client = httpx.AsyncClient(
-            verify=self._ssl_context,
+            verify=verify,
             timeout=30.0,
             follow_redirects=True,
             proxy=self.proxies if isinstance(self.proxies, str) else None,
@@ -140,6 +149,12 @@ class Browser:
         merged_headers = dict(self.headers)
         if headers:
             merged_headers.update(headers)
+
+        if self.proxy_config:
+            url, dns_headers = self.proxy_config.resolve_url(url)
+            if dns_headers:
+                merged_headers.update(dns_headers)
+            merged_headers = self.proxy_config.merge_headers(merged_headers)
 
         logger.debug("Using proxies: %s", self.proxies)
 

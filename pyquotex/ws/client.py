@@ -53,6 +53,8 @@ class WebsocketClient:
             url: str,
             extra_headers: dict[str, str] | None = None,
             ssl: Any = None,
+            proxy: str | None = None,
+            server_hostname: str | None = None,
             **kwargs: Any
     ) -> None:
         """
@@ -62,18 +64,35 @@ class WebsocketClient:
             url (str): The WebSocket URL.
             extra_headers (dict, optional): Custom HTTP headers.
             ssl (SSLContext, optional): SSL context for secure connection.
+            proxy (str, optional): HTTP/SOCKS proxy URL forwarded to
+                ``websockets.connect`` when supported.
+            server_hostname (str, optional): TLS SNI override – useful when
+                the URL has been rewritten to a raw IP for DNS bypass.
         """
         headers = extra_headers or {}
+        connect_kwargs: dict[str, Any] = {
+            "additional_headers": headers,
+            "ssl": ssl,
+            "ping_interval": 24,
+            "ping_timeout": 20,
+            "max_size": 2 ** 23,  # 8MB
+            "compression": None,
+        }
+        if proxy:
+            connect_kwargs["proxy"] = proxy
+        if server_hostname:
+            connect_kwargs["server_hostname"] = server_hostname
         try:
-            async with websockets.connect(
-                url,
-                additional_headers=headers,
-                ssl=ssl,
-                ping_interval=24,
-                ping_timeout=20,
-                max_size=2 ** 23,  # 8MB
-                compression=None,  # disable per-frame compression for speed
-            ) as ws:
+            try:
+                ctx = websockets.connect(url, **connect_kwargs)
+            except TypeError:
+                # Older websockets versions reject ``proxy`` /
+                # ``server_hostname`` — retry without them so the
+                # default behaviour still works.
+                connect_kwargs.pop("proxy", None)
+                connect_kwargs.pop("server_hostname", None)
+                ctx = websockets.connect(url, **connect_kwargs)
+            async with ctx as ws:
                 self._ws = ws
                 await self.api._on_open()
                 async for raw in ws:
