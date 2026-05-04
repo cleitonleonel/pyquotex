@@ -20,6 +20,7 @@ Bem-vindo à documentação do pyquotex!
 - [Exemplos Básicos](9.%20Exemplos%20Básicos)
 - [Aspectos Técnicos](10.%20Aspectos%20Técnicos)
 - [Considerações e Avisos](11.%20Considerações%20e%20Advertências)
+- [Recursos Avançados](12.%20Recursos%20Avançados)
 
 ---
 
