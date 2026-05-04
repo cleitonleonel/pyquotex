@@ -73,6 +73,9 @@ class ReconnectSupervisor:
     connection and replay the captured state.
     """
 
+    #: How often to poll the API status for a disconnect transition.
+    poll_interval: float = 0.05
+
     def __init__(
             self,
             api: Any,
@@ -93,7 +96,11 @@ class ReconnectSupervisor:
         self._on_reconnect.append(cb)
 
     def capture(self) -> None:
-        """Snapshot subscription state for replay on the next reconnect."""
+        """Snapshot subscription state for replay on the next reconnect.
+
+        Snapshots are taken from concurrent collections via ``list()``
+        copies so user code can keep mutating them while we read.
+        """
         api = self.api
         self._snapshot.account_type = api.account_type
         self._snapshot.tournament_id = api.tournament_id
@@ -104,11 +111,13 @@ class ReconnectSupervisor:
         if client is None:
             return
 
+        candle_subs_raw = list(getattr(client, "subscribe_candle", []))
         self._snapshot.candle_subs = [
             (sp[0], int(sp[1]))
-            for s in getattr(client, "subscribe_candle", [])
+            for s in candle_subs_raw
             if "," in s
             for sp in [s.split(",", 1)]
+            if sp[1].isdigit()
         ]
         self._snapshot.candle_all_size_subs = list(
             getattr(client, "subscribe_candle_all_size", [])
@@ -135,6 +144,10 @@ class ReconnectSupervisor:
     async def _run(self) -> None:
         try:
             while not self._stopping:
+                # Refresh the snapshot every iteration so any
+                # subscriptions added since the last connect are
+                # included in the next replay.
+                self.capture()
                 await self._wait_for_disconnect()
                 if self._stopping or not self.policy.enabled:
                     return

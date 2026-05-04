@@ -14,6 +14,7 @@ To enable curl_cffi support::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import ssl
 from typing import Any, Protocol
@@ -137,11 +138,16 @@ class CurlCffiBackend:
         return await self._session.request(method, url, **kwargs)
 
     async def aclose(self) -> None:
-        if not self._closed:
-            try:
-                await self._session.close()
-            finally:
-                self._closed = True
+        if self._closed:
+            return
+        try:
+            # ``AsyncSession.close`` is async in curl_cffi >= 0.7 but
+            # was sync in some earlier 0.6.x releases — handle both.
+            result = self._session.close()
+            if asyncio.iscoroutine(result):
+                await result
+        finally:
+            self._closed = True
 
     @property
     def is_closed(self) -> bool:

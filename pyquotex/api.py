@@ -796,6 +796,15 @@ class QuotexAPI:
         Returns:
             tuple[bool, str]: (Success status, Connection status message).
         """
+        # Cancel any leftover task from a previous connection attempt
+        # before creating a new one, so reconnects don't leak tasks.
+        if self._websocket_task and not self._websocket_task.done():
+            self._websocket_task.cancel()
+            try:
+                await self._websocket_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         self.state.status = WebsocketStatus.CONNECTING
         self.state.auth_status = AuthStatus.NOT_AUTHENTICATED
         await self.event_registry.set_event("status_changed", self.state.status)
@@ -887,6 +896,16 @@ class QuotexAPI:
             await self.websocket_client.close()
             # Explicitly trigger cleanup to ensure heartbeat is cancelled
             self._on_close(1000, "Graceful closure")
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+        if self.settings:
+            try:
+                await self.settings.close()
+            except Exception:
+                pass
         if self._http_client:
             await self._http_client.aclose()
         return True

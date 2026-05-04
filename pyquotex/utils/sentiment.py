@@ -277,7 +277,7 @@ class SentimentStore:
         ON sentiment_snapshots (asset, timestamp);
     """
 
-    def __init__(self, path: str | "os.PathLike[str]" = ":memory:"):
+    def __init__(self, path: str = ":memory:"):
         import sqlite3
 
         self.path = str(path)
@@ -325,6 +325,29 @@ class SentimentStore:
             sql += " LIMIT ?"
             params.append(int(limit))
         rows = self._conn.execute(sql, params).fetchall()
+        return [
+            SentimentSnapshot(
+                asset=r[0], timestamp=r[1], bullish=r[2], bearish=r[3]
+            )
+            for r in rows
+        ]
+
+    def query_latest(
+            self, asset: str, limit: int
+    ) -> list[SentimentSnapshot]:
+        """Return the most-recent ``limit`` rows for ``asset`` in
+        chronological (ASC timestamp) order.
+
+        ``query(limit=N)`` returns the oldest N rows, which is rarely
+        what an analyzer wants — use this helper for "latest window".
+        """
+        rows = self._conn.execute(
+            "SELECT asset, timestamp, bullish, bearish "
+            "FROM sentiment_snapshots WHERE asset = ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (asset, int(limit)),
+        ).fetchall()
+        rows.reverse()
         return [
             SentimentSnapshot(
                 asset=r[0], timestamp=r[1], bullish=r[2], bearish=r[3]
@@ -415,8 +438,9 @@ class SentimentCorrelationAnalyzer:
             if self.monitor is not None:
                 snaps = self.monitor.history(asset)[-window:]
             elif self.store is not None:
-                snaps = self.store.query(asset, limit=window)
-                snaps = snaps[-window:]
+                # query_latest gives the most-recent ``window`` rows
+                # in ASC order — matches what the monitor returns.
+                snaps = self.store.query_latest(asset, limit=window)
             if snaps:
                 out[asset] = [s.bias for s in snaps]
         return out

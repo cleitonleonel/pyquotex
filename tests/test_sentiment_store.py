@@ -52,6 +52,35 @@ def test_store_assets_lists_distinct():
     store.close()
 
 
+def test_query_latest_returns_most_recent_in_asc_order():
+    store = SentimentStore(":memory:")
+    for ts in range(100):
+        store.write(SentimentSnapshot("X", 0.5, 0.5, float(ts)))
+    rows = store.query_latest("X", limit=5)
+    # 5 most recent samples (ts 95..99) in ASC order.
+    assert [r.timestamp for r in rows] == [95.0, 96.0, 97.0, 98.0, 99.0]
+    store.close()
+
+
+def test_correlation_via_store_uses_latest_window():
+    store = SentimentStore(":memory:")
+    # First 50 rows: A and B perfectly aligned (corr ≈ +1).
+    for i in range(50):
+        store.write(SentimentSnapshot("A", 0.5 + i * 0.01, 0.5 - i * 0.01, i))
+        store.write(SentimentSnapshot("B", 0.5 + i * 0.01, 0.5 - i * 0.01, i))
+    # Last 20 rows: B inverted (corr should be ≈ -1 over the latest window).
+    for j in range(20):
+        ts = 100 + j
+        store.write(SentimentSnapshot("A", 0.5 + j * 0.01, 0.5 - j * 0.01, ts))
+        store.write(SentimentSnapshot("B", 0.5 - j * 0.01, 0.5 + j * 0.01, ts))
+    analyzer = SentimentCorrelationAnalyzer(store=store)
+    matrix = analyzer.correlation_matrix(["A", "B"], window=20)
+    assert matrix[("A", "B")] < -0.9, (
+        "analyzer must read the latest window, not the oldest rows"
+    )
+    store.close()
+
+
 @pytest.mark.asyncio
 async def test_monitor_writes_to_store():
     store = SentimentStore(":memory:")
