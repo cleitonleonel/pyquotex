@@ -20,6 +20,7 @@ description: Documentación completa de pyquotex en español.
 - [Ejemplos Básicos](9.%20Ejemplos%20Básicos)
 - [Aspectos Técnicos](10.%20Aspectos%20Técnicos)
 - [Consideraciones y Advertencias](11.%20Consideraciones%20y%20Advertencias)
+- [Características Avanzadas](12.%20Características%20Avanzadas)
 
 ---
 

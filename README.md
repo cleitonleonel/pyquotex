@@ -61,13 +61,25 @@ poetry run python app.py
 poetry add git+https://github.com/cleitonleonel/pyquotex.git
 ```
 
-### 3. Otimização de Performance (Opcional)
+### 3. Otimização de Performance (Opcional) / Optional Extras
 
 Para melhor performance no processamento de dados (recomendado para uso em servidores), você pode instalar a biblioteca
 com suporte ao `orjson`:
 
 ```bash
 poetry add "pyquotex[fast] @ git+https://github.com/cleitonleonel/pyquotex.git"
+```
+
+Outros extras opcionais:
+
+| Extra | Adiciona / Adds / Añade |
+| --- | --- |
+| `fast` | `orjson` para parse JSON mais rápido |
+| `socks` | `httpx[socks]` para URLs `socks5://` |
+| `stealth` | `curl_cffi` para fingerprint TLS de navegador real (Chrome/Firefox) |
+
+```bash
+pip install 'pyquotex[fast,socks,stealth]'
 ```
 
 *Nota: No Termux (Android), recomendamos usar a instalação padrão sem `orjson` para evitar erros de compilação.*
@@ -125,6 +137,43 @@ await client.close()
 
 ---
 
+## 🆕 Recursos Avançados / Advanced Features / Características Avanzadas
+
+Funcionalidades antes exclusivas da versão privada agora disponíveis no open-source.
+*Previously private-only features now available in the OSS build.*
+
+```python
+from pyquotex import (
+    Quotex, ProxyConfig, MultiloginConfig,
+    SentimentMonitor, SentimentStore, SentimentCorrelationAnalyzer,
+    ReconnectPolicy,
+)
+
+client = Quotex(
+    email="…", password="…",
+    # Proxy + DNS overrides + browser-impersonating TLS
+    proxy_config=ProxyConfig(
+        url="http://user:pass@proxy:8080",
+        dns_overrides={"qxbroker.com": "1.2.3.4"},
+        use_browser_tls=True,         # requires pip install pyquotex[stealth]
+    ),
+    # Multilogin profile bootstrap (v1 agent or v3 cloud API)
+    multilogin=MultiloginConfig(profile_id="…", folder_id="…", token="…", api="v3"),
+    # Sentiment monitor with anomaly + divergence detection
+    enable_sentiment_monitor=True,
+    # Auto-reconnect with exponential backoff and subscription replay
+    reconnect_policy=ReconnectPolicy(initial_delay=1.0, max_delay=60.0),
+)
+```
+
+📖 Documentação completa / Full guide / Guía completa:
+- 🇬🇧 [Advanced Features](docs/en/12.%20Advanced%20Features.md)
+- 🇧🇷 [Recursos Avançados](docs/pt/12.%20Recursos%20Avançados.md)
+- 🇪🇸 [Características Avanzadas](docs/es/12.%20Características%20Avanzadas.md)
+- 🧪 Exemplo: [`examples/private_features.py`](examples/private_features.py)
+
+---
+
 ## 🏗️ Gestão de Estado e Eventos / State & Event Management
 
 O PyQuotex utiliza um sistema moderno de Enums e Eventos para controle de conexão:
@@ -149,16 +198,20 @@ Uma versão privada está disponível com recursos adicionais, estabilidade apri
 
 👉 [Acesse a versão privada](https://t.me/pyquotex/852) para desbloquear o máximo do PyQuotex!
 
-### 💥 Comparativo de Versões
+### 💥 Comparativo de Versões / Version Comparison
 
-| Recurso                        | Open Source ✅ | Versão Privada ✨      |
-|--------------------------------| ------------- | --------------------- |
-| Suporte a Multilogin           | ❌             | ✅                     |
-| Monitoramento de Sentimentos   | ✅             | ✅ + detecção avançada |
-| Proxy/DNS Customizado          | ❌             | ✅                     |
-| Robustez e Alta Confiabilidade | ✅             | ✨ Nível enterprise    |
-| Velocidade de Execução         | ✅             | ⚡ Ultra rápido        |
-| Suporte                        | ❌             | ✅                     |
+| Recurso / Feature                              | Open Source ✅                 | Versão Privada ✨              |
+|------------------------------------------------|--------------------------------|--------------------------------|
+| Suporte a Multilogin                           | ✅ v1 agent + v3 cloud API     | ✅                             |
+| Proxy/DNS Customizado                          | ✅ HTTP/SOCKS + DNS overrides  | ✅                             |
+| TLS de navegador real (curl_cffi)              | ✅ Optional `[stealth]` extra  | ✅                             |
+| Monitoramento de Sentimentos                   | ✅ + spike + divergência       | ✅                             |
+| Persistência de Sentimentos (SQLite)           | ✅                             | ✅                             |
+| Correlação Cross-Asset de Sentimentos          | ✅                             | ✅                             |
+| Auto-reconexão + replay de subscrições         | ✅                             | ✅                             |
+| Robustez e Alta Confiabilidade                 | ✅                             | ✨ Nível enterprise            |
+| Velocidade de Execução                         | ✅                             | ⚡ Ultra rápido                |
+| Suporte                                        | ❌                             | ✅                             |
 
 ---
 

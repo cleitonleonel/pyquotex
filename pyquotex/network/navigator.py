@@ -8,6 +8,9 @@ import httpx
 from bs4 import BeautifulSoup
 from typing_extensions import Self
 
+from pyquotex.utils.proxy_config import ProxyConfig
+from pyquotex.network.transport import TransportBackend, build_backend
+
 logger = logging.getLogger("Browser")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
@@ -25,7 +28,11 @@ class Browser:
         self.source_address: Any = kwargs.pop('source_address', None)
         self.server_hostname: str | None = kwargs.pop('server_hostname', None)
         self.proxies: dict[str, str] | str | None = kwargs.pop('proxies', None)
+        self.proxy_config: ProxyConfig | None = kwargs.pop('proxy_config', None)
         self.debug: bool = kwargs.pop('debug', False)
+
+        if self.proxy_config and self.proxy_config.url and not self.proxies:
+            self.proxies = self.proxy_config.url
 
         # Build SSL context
         cert_path = certifi.where()
@@ -39,13 +46,25 @@ class Browser:
 
         self.headers: dict[str, str] = self.get_headers()
 
-        # Build httpx.AsyncClient
-        self._client = httpx.AsyncClient(
-            verify=self._ssl_context,
+        # Build the HTTP backend (httpx by default; curl_cffi if
+        # ProxyConfig.use_browser_tls is True and the extra is installed).
+        verify: Any = self._ssl_context
+        use_browser_tls = False
+        impersonate = "chrome120"
+        if self.proxy_config:
+            if not self.proxy_config.verify_ssl:
+                verify = False
+            use_browser_tls = self.proxy_config.use_browser_tls
+            impersonate = self.proxy_config.impersonate
+        self._backend: TransportBackend = build_backend(
+            verify=verify,
             timeout=30.0,
             follow_redirects=True,
             proxy=self.proxies if isinstance(self.proxies, str) else None,
+            use_browser_tls=use_browser_tls,
+            impersonate=impersonate,
         )
+        self._client = self._backend  # legacy alias for callers
 
         if self.debug:
             logger.setLevel(logging.DEBUG)
@@ -140,6 +159,12 @@ class Browser:
         merged_headers = dict(self.headers)
         if headers:
             merged_headers.update(headers)
+
+        if self.proxy_config:
+            url, dns_headers = self.proxy_config.resolve_url(url)
+            if dns_headers:
+                merged_headers.update(dns_headers)
+            merged_headers = self.proxy_config.merge_headers(merged_headers)
 
         logger.debug("Using proxies: %s", self.proxies)
 

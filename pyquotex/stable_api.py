@@ -23,7 +23,15 @@ from .utils.processor import (
     process_tick,
     aggregate_candle
 )
+from .utils.multilogin import (
+    MultiloginClient,
+    MultiloginConfig,
+    MultiloginProfile,
+)
 from .utils.optimization import OptimizedQuotexMixin
+from .utils.proxy_config import ProxyConfig
+from .utils.reconnect import ReconnectPolicy
+from .utils.sentiment import SentimentMonitor, SentimentThresholds
 from .utils.services import truncate
 
 logger = logging.getLogger(__name__)
@@ -52,7 +60,13 @@ class Quotex(OptimizedQuotexMixin):
             asset_default: str = "EURUSD",
             period_default: int = 60,
             proxies: dict[str, str] | None = None,
-            on_otp_callback: Callable | None = None
+            on_otp_callback: Callable | None = None,
+            proxy_config: ProxyConfig | dict[str, Any] | None = None,
+            multilogin: MultiloginConfig | None = None,
+            sentiment_thresholds: SentimentThresholds | None = None,
+            enable_sentiment_monitor: bool = False,
+            reconnect_policy: ReconnectPolicy | None = None,
+            auto_reconnect: bool = True,
     ):
         """
         Initializes the Quotex stable API wrapper.
@@ -81,6 +95,20 @@ class Quotex(OptimizedQuotexMixin):
         self.host = host
         self.lang = lang
         self.proxies = proxies
+        if isinstance(proxy_config, dict):
+            proxy_config = ProxyConfig.from_dict(proxy_config)
+        self.proxy_config: ProxyConfig | None = proxy_config
+        self.multilogin_config: MultiloginConfig | None = multilogin
+        self.multilogin_profile: MultiloginProfile | None = None
+        self._multilogin_client: MultiloginClient | None = None
+        self.sentiment_monitor: SentimentMonitor | None = (
+            SentimentMonitor(thresholds=sentiment_thresholds)
+            if enable_sentiment_monitor or sentiment_thresholds
+            else None
+        )
+        if reconnect_policy is None:
+            reconnect_policy = ReconnectPolicy(enabled=auto_reconnect)
+        self.reconnect_policy = reconnect_policy
         self.resource_path = root_path
         self.user_data_dir = user_data_dir
         self.asset_default = asset_default
@@ -568,6 +596,9 @@ class Quotex(OptimizedQuotexMixin):
         """Establishes a connection to the Quotex API."""
         if self.api and await self.check_connect():
             return True, "Already connected"
+
+        await self._start_multilogin_if_configured()
+
         self.api = QuotexAPI(
             self.host,
             self.email,
@@ -576,8 +607,12 @@ class Quotex(OptimizedQuotexMixin):
             resource_path=self.resource_path,
             user_data_dir=self.user_data_dir,
             proxies=self.proxies,
-            on_otp_callback=self.on_otp_callback
+            on_otp_callback=self.on_otp_callback,
+            proxy_config=self.proxy_config,
+            sentiment_monitor=self.sentiment_monitor,
+            reconnect_policy=self.reconnect_policy,
         )
+        self.api._client_ref = self
 
         self.api.trace_ws = self.debug_ws_enable
         self.api.session_data = self.session_data
@@ -1559,8 +1594,57 @@ class Quotex(OptimizedQuotexMixin):
             finally:
                 await asyncio.sleep(0.2)
 
+    async def _start_multilogin_if_configured(self) -> None:
+        """Spin up a Multilogin profile and inherit its proxy + UA."""
+        if not self.multilogin_config or not self.multilogin_config.auto_start:
+            return
+
+        # Allow callers behind a corporate proxy to reach the Multilogin
+        # cloud / agent endpoint.
+        ml_proxy = (
+            self.proxy_config.url
+            if self.proxy_config and self.proxy_config.url
+            else None
+        )
+        self._multilogin_client = MultiloginClient(
+            self.multilogin_config, proxy=ml_proxy
+        )
+        profile = await self._multilogin_client.start_profile()
+        self.multilogin_profile = profile
+
+        if profile.user_agent:
+            session = dict(self.session_data or {})
+            session["user_agent"] = profile.user_agent
+            self.session_data = update_session(self.email, session)
+
+        if profile.proxy_url and not self.proxy_config:
+            self.proxy_config = ProxyConfig(url=profile.proxy_url)
+        elif profile.proxy_url and self.proxy_config and not self.proxy_config.url:
+            self.proxy_config.url = profile.proxy_url
+
+    def get_sentiment_monitor(self) -> SentimentMonitor | None:
+        """Returns the active :class:`SentimentMonitor`, if any."""
+        return self.sentiment_monitor
+
+    def enable_sentiment_monitor(
+            self, thresholds: SentimentThresholds | None = None
+    ) -> SentimentMonitor:
+        """Lazily build a sentiment monitor and attach it to the API."""
+        if self.sentiment_monitor is None:
+            self.sentiment_monitor = SentimentMonitor(thresholds=thresholds)
+        if self.api is not None:
+            self.api.sentiment_monitor = self.sentiment_monitor
+        return self.sentiment_monitor
+
     async def close(self) -> bool:
         """Closes the API connection and stops all tasks."""
+        result = True
         if self.api:
-            return await self.api.close()
-        return True
+            result = await self.api.close()
+        if self._multilogin_client and self.multilogin_config and self.multilogin_config.auto_stop:
+            try:
+                await self._multilogin_client.stop_profile()
+            finally:
+                await self._multilogin_client.close()
+                self._multilogin_client = None
+        return result

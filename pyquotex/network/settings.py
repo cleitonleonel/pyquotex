@@ -6,7 +6,14 @@ from ..network.navigator import Browser
 class Settings(Browser):
 
     def __init__(self, api: Any):
-        super().__init__()
+        api_proxies = getattr(api, "proxies", None)
+        proxy_url: str | None = None
+        if isinstance(api_proxies, str) and "://" in api_proxies:
+            proxy_url = api_proxies
+        proxy_config = getattr(api, "proxy_config", None)
+        if proxy_config and getattr(proxy_config, "url", None):
+            proxy_url = proxy_config.url
+        super().__init__(proxies=proxy_url, proxy_config=proxy_config)
         self.set_headers()
         self.api = api
         self.headers: dict[str, str] = self.get_headers()

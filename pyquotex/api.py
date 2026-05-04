@@ -19,6 +19,9 @@ from .network.settings import Settings
 from .utils import json_utils as json
 from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
+from .utils.proxy_config import ProxyConfig
+from .utils.reconnect import ReconnectPolicy, ReconnectSupervisor
+from .utils.sentiment import SentimentMonitor
 from .ws.channels.buy import Buy
 from .ws.channels.candles import GetCandles
 from .ws.channels.sell_option import SellOption
@@ -61,7 +64,10 @@ class QuotexAPI:
             proxies: dict[str, str] | None = None,
             resource_path: str | None = None,
             user_data_dir: str = ".",
-            on_otp_callback: Callable | None = None
+            on_otp_callback: Callable | None = None,
+            proxy_config: ProxyConfig | None = None,
+            sentiment_monitor: SentimentMonitor | None = None,
+            reconnect_policy: ReconnectPolicy | None = None,
     ):
         """
         :param str host: The hostname or ip address of a Quotex server.
@@ -114,6 +120,11 @@ class QuotexAPI:
         self.resource_path = resource_path
         self.user_data_dir = user_data_dir
         self.proxies = proxies
+        self.proxy_config = proxy_config
+        self.sentiment_monitor = sentiment_monitor
+        self.reconnect_policy = reconnect_policy or ReconnectPolicy()
+        self.reconnect_supervisor: ReconnectSupervisor | None = None
+        self._client_ref: Any = None  # set by Quotex for state replay
         self.lang = lang
         self.settings_list: dict[str, Any] = {}
         self.signal_data: dict[str, Any] = {}
@@ -131,14 +142,26 @@ class QuotexAPI:
         self.candle_generated_all_size_check = defaultdict(dict)
         self.top_list_leader: dict[str, Any] = {}
         self.session_data: dict[str, Any] = {}
-        self.browser = Browser()
+        proxy_url: str | None = None
+        if proxy_config and proxy_config.url:
+            proxy_url = proxy_config.url
+        elif isinstance(proxies, str) and "://" in proxies:
+            proxy_url = proxies
+        self.browser = Browser(
+            proxies=proxy_url,
+            proxy_config=proxy_config,
+        )
         self.browser.set_headers()
         self.settings = Settings(self)
         self.event_registry = EventRegistry()
+        http_verify: Any = unified_ssl_context
+        if proxy_config and not proxy_config.verify_ssl:
+            http_verify = False
         self._http_client = httpx.AsyncClient(
-            verify=unified_ssl_context,
+            verify=http_verify,
             timeout=30.0,
             follow_redirects=True,
+            proxy=proxy_url,
         )
         self.profit_today: float | None = None
         self.heartbeat_task: asyncio.Task | None = None
@@ -282,6 +305,21 @@ class QuotexAPI:
                         if asset:
                             self.traders_mood[asset] = data
                             self.realtime_sentiment[asset] = data
+                            if self.sentiment_monitor and isinstance(data, dict):
+                                bullish, bearish = (
+                                    self.sentiment_monitor.feed_raw(asset, data)
+                                )
+                                price_list = self.realtime_price.get(asset)
+                                last_price = (
+                                    price_list[-1]["price"]
+                                    if price_list else None
+                                )
+                                asyncio.create_task(
+                                    self.sentiment_monitor.feed(
+                                        asset, bullish, bearish,
+                                        price=last_price,
+                                    )
+                                )
 
             # 2. Handle Data Payloads (Placeholder fulfillment)
             elif message is not None and not is_control:
@@ -758,6 +796,15 @@ class QuotexAPI:
         Returns:
             tuple[bool, str]: (Success status, Connection status message).
         """
+        # Cancel any leftover task from a previous connection attempt
+        # before creating a new one, so reconnects don't leak tasks.
+        if self._websocket_task and not self._websocket_task.done():
+            self._websocket_task.cancel()
+            try:
+                await self._websocket_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         self.state.status = WebsocketStatus.CONNECTING
         self.state.auth_status = AuthStatus.NOT_AUTHENTICATED
         await self.event_registry.set_event("status_changed", self.state.status)
@@ -774,9 +821,26 @@ class QuotexAPI:
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
         }
+
+        ws_url = self.wss_url
+        ws_proxy = None
+        server_hostname = None
+        if self.proxy_config:
+            extra_headers = self.proxy_config.merge_headers(extra_headers)
+            ws_proxy = self.proxy_config.websockets_proxy()
+            ws_url, dns_headers = self.proxy_config.resolve_url(self.wss_url)
+            if dns_headers:
+                # Preserve original SNI so the TLS certificate keeps validating.
+                server_hostname = dns_headers.get("Host")
+                extra_headers.update(dns_headers)
+
         self._websocket_task = asyncio.create_task(
             self.websocket_client.run_forever(
-                url=self.wss_url, extra_headers=extra_headers, ssl=unified_ssl_context
+                url=ws_url,
+                extra_headers=extra_headers,
+                ssl=unified_ssl_context,
+                proxy=ws_proxy,
+                server_hostname=server_hostname,
             )
         )
         for _ in range(100):
@@ -808,15 +872,40 @@ class QuotexAPI:
             AccountType.DEMO if is_demo else AccountType.REAL
         )
         ok, reason = await self.start_websocket()
-        if ok: await self.send_ssid()
+        if ok:
+            await self.send_ssid()
+            self._start_reconnect_supervisor()
         return ok, reason
+
+    def _start_reconnect_supervisor(self) -> None:
+        """Spawn the reconnect supervisor on first successful connect."""
+        if not self.reconnect_policy.enabled:
+            return
+        if self.reconnect_supervisor is None:
+            self.reconnect_supervisor = ReconnectSupervisor(
+                self, self.reconnect_policy
+            )
+        self.reconnect_supervisor.capture()
+        self.reconnect_supervisor.start()
 
     async def close(self) -> bool:
         """Closes the WebSocket connection and the HTTP client session."""
+        if self.reconnect_supervisor:
+            await self.reconnect_supervisor.stop()
         if self.websocket_client:
             await self.websocket_client.close()
             # Explicitly trigger cleanup to ensure heartbeat is cancelled
             self._on_close(1000, "Graceful closure")
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+        if self.settings:
+            try:
+                await self.settings.close()
+            except Exception:
+                pass
         if self._http_client:
             await self._http_client.aclose()
         return True
@@ -829,7 +918,16 @@ class QuotexAPI:
     @property
     def login(self) -> Login:
         """Returns the Login action handler."""
-        return Login(self)
+        proxy_url: str | None = None
+        if self.proxy_config and self.proxy_config.url:
+            proxy_url = self.proxy_config.url
+        elif isinstance(self.proxies, str) and "://" in self.proxies:
+            proxy_url = self.proxies
+        return Login(
+            self,
+            proxies=proxy_url,
+            proxy_config=self.proxy_config,
+        )
 
     @property
     def ssid(self) -> Ssid:
