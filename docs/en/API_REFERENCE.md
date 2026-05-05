@@ -387,11 +387,13 @@ await client.start_candles_stream("EURUSD", 60)
 ---
 
 ### `stop_candles_stream(asset) → None`
-Unsubscribes from the candle stream.
+Unsubscribe from the candle stream and clean up the replay state.
 
 ```python
 await client.stop_candles_stream("EURUSD")
 ```
+
+> v1.3.0: also drops the asset from the reconnect-replay lists (`subscribe_candle`, `subscribe_candle_all_size`) and the subscribe-once cache (`_subscribed_assets`). Long sessions that rotate through assets no longer accumulate dead entries that get re-subscribed on every reconnect.
 
 ---
 
@@ -417,13 +419,15 @@ latest = prices[-1] if prices else None
 ---
 
 ### `start_realtime_sentiment(asset, period=0, timeout=30) → dict`
-Starts following trader-sentiment data.
+Subscribe to the trader-sentiment feed and wait for the first payload.
 
 ```python
 await client.start_realtime_sentiment("EURUSD", 60)
 sentiment = await client.get_realtime_sentiment("EURUSD")
 # {"call": 65, "put": 35}   (percentages)
 ```
+
+> v1.3.0: event-driven (waits on `sentiment_ready_<asset>`); previously polled every 200 ms. Returns the moment data lands instead of after a poll cycle. The fast path returns immediately when data is already cached.
 
 ---
 
@@ -511,20 +515,40 @@ if status:
 
 ---
 
-### `open_pending(amount, asset, direction, duration, open_time=None) → tuple[bool, Any]`
-Places a pending order to be executed at a specific future time.
+### `open_pending(amount, asset, direction, duration, open_time=None, confirm_timeout=30.0) → tuple[bool, Any]`
+Place a time-based pending order. Verified end-to-end against `ws2.qxbroker.com` in v1.2/v1.3.
 
 ```python
 status, data = await client.open_pending(
-    amount=10.0,
-    asset="EURUSD",
-    direction="call",
-    duration=60,
-    open_time="14:30",   # HH:MM, or None for next candle
+    amount=1.0,
+    asset="EURUSD_otc",
+    direction="call",       # "call"/"put" or "up"/"down"
+    duration=60,            # resulting trade duration in seconds
+    open_time=None,         # None → auto-schedule to next 60s boundary ≥90s ahead
+    confirm_timeout=30.0,   # how long to wait for the broker ACK (v1.2.0+)
 )
 ```
 
-> ℹ️ The `open_time` is optional. If omitted, the broker schedules it at the next natural timeframe boundary.
+| Param | Notes |
+|---|---|
+| `open_time` | `None` for auto-schedule, `"DD/MM HH:MM"` user-local, or pre-formatted ISO 8601 UTC. The wrapper auto-detects ISO and passes it straight through (v1.2.1+). Integer values are rejected by the broker with `open_time_min`. |
+| `confirm_timeout` | Event-driven wait on `pending_confirmed` (v1.2.0+); default 30 s. |
+
+> Wire shape (verified live capture): `{"openType": 0, "asset": …, "openTime": "…Z", "timeframe": …, "command": "call"|"put", "amount": …}`. See [Advanced Features → Pending Orders](12.%20Advanced%20Features#pending-orders-time-based-and-quote-triggered) for the full reference.
+
+---
+
+### `open_pending_at_price(amount, asset, direction, quote, period="M1", timeout=30.0) → tuple[bool, Any]`
+> ⚠️ **Experimental** — only time-based mode has been verified end-to-end against the broker.
+
+Place a quote-triggered pending order that fires when the asset's price reaches `quote`.
+
+```python
+status, data = await client.open_pending_at_price(
+    amount=1, asset="EURUSD_otc", direction="call",
+    quote=1.0852, period="M1",
+)
+```
 
 ---
 
@@ -539,8 +563,8 @@ result = await client.sell_option(["id1", "id2"])
 
 ---
 
-### `check_win(order_id, duration=0) → tuple[str, float]`
-Waits for a trade to settle and returns the result.
+### `check_win(order_id, duration=0, timeout=None) → tuple[str, float]`
+Block until the order settles; return `(status, profit)`. Event-driven in v1.2.0+ — wakes the moment the broker emits the close payload, instead of polling every 200 ms.
 
 ```python
 win, profit = await client.check_win(trade_id, duration=60)
@@ -550,10 +574,22 @@ else:
     print(f"Lost. Amount: {profit:.2f}")
 ```
 
+| Param | Notes |
+|---|---|
+| `duration` | Used to size the default timeout (`duration + 30 s`). |
+| `timeout` | Explicit deadline; defaults to `duration + 30` or `300` if `duration=0`. |
+
 | Returns | Description |
 |---|---|
 | `("win", profit)` | Trade won |
 | `("loss", profit)` | Trade lost |
+
+Works for both immediate `buy()` orders and time-based `open_pending()` tickets — the lifecycle bridge mirrors the executed-trade close back onto the pending ticket.
+
+---
+
+### `wait_for_order_close(order_id, duration=0, timeout=None) → tuple[str, float]`
+Public alias for `check_win` — clearer for callers who aren't guessing at win/loss. Same semantics; same return.
 
 ---
 

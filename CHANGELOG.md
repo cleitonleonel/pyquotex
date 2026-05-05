@@ -1,0 +1,196 @@
+# Changelog
+
+All notable changes to **pyquotex** are documented in this file. Format follows
+the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) convention; the
+project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.3.0] — 2026-05-05
+
+A focused robustness + speed audit on top of v1.2.1. Nine fixes; 12 new
+regression tests; full suite **138/138 green**. All changes are additive — no
+public-API breakage.
+
+### Performance
+
+- **`check_connect()` no longer sleeps 2 s on every call.** The unconditional
+  `await asyncio.sleep(2)` in `Quotex._check_connect` was a leftover; the
+  `auth_status` read is synchronous. Every public method that calls
+  `check_connect()` (~9 of them: `get_balance`, `get_candles`, `open_pending`,
+  `start_candles_all_size_stream`, …) returns ~2 s sooner.
+- **`realtime_price` is `deque(maxlen=1000)`** instead of `defaultdict(list)`
+  with `list.pop(0)` capping. O(n) → O(1) per tick. Compounds badly on bursty
+  multi-asset price streams.
+- **Profile UTC offset cached per session.** `Quotex.open_pending` no longer
+  makes an HTTP call to `/api/v1/cabinets/digest` on every pending order. Cache
+  is reset on reconnect via the supervisor's `on_reconnect` hook.
+- **`start_realtime_sentiment`, `start_candles_one_stream`,
+  `start_candles_all_size_stream` are event-driven** (was 200 ms polling
+  loops). New events fired by `_on_message`: `sentiment_ready_<asset>`,
+  `candle_generated_<asset>_<size>`, `candle_generated_all_<asset>`.
+  `start_candles_all_size_stream` also stopped re-issuing `subscribe_all_size`
+  on every poll iteration — a known ban-risk pattern.
+- **`pending_ticket_map` close-mirror lookup is O(1)** via a new
+  `_exec_to_pending` reverse index. Previous code scanned the whole map on
+  every close (O(n) per close, O(n²) over a session under high pending
+  volume). Defensive fallback scan kept for callers that mutate the forward
+  map directly.
+
+### Reliability
+
+- **Concurrent `connect()` calls are serialised via `asyncio.Lock`.** Two
+  callers in the same loop used to create duplicate `QuotexAPI` instances and
+  authenticate twice — account-lock risk.
+- **Heartbeat task signals `status_changed=ERROR` on send failure** instead of
+  silently breaking. The reconnect supervisor now wakes immediately on a dead
+  heartbeat.
+- **`stop_candles_stream(asset)` cleans up the reconnect-replay lists**
+  (`subscribe_candle`, `subscribe_candle_all_size`) and the subscribe-once
+  cache (`_subscribed_assets`). Long sessions that rotate through assets no
+  longer accumulate dead entries that get re-subscribed on every reconnect.
+- **Belt-and-suspenders cleanup in the reconnect supervisor.** `_on_close`
+  and `ReconnectSupervisor._attempt_reconnect` both clear
+  `_active_pending` / `pending_ticket_map` / `_exec_to_pending`, so a hard-
+  error path that bypasses `_on_close` can't leak bridge state.
+
+### Tests
+
+- `tests/test_v13_robustness_speed.py` — 12 new regression tests covering
+  every fix.
+
+### Documentation
+
+- New "What's new in v1.3.0" section in `docs/en/12. Advanced Features.md`.
+- `docs/en/2. Connection and Authentication.md` flags the
+  `check_connect()` latency improvement and the `connect()` lock.
+- `docs/en/API_REFERENCE.md` signatures refreshed for `open_pending`,
+  `open_pending_at_price`, `check_win`, `wait_for_order_close`,
+  `stop_candles_stream`, `start_realtime_sentiment`.
+- `README.md` adds a v1.3.0 highlights block and refreshes the version
+  comparison table.
+
+---
+
+## [1.2.1] — 2026-05-05
+
+### Documentation
+
+- New "Historical Data Depth" section in `docs/en/12. Advanced Features.md`
+  explaining the broker's ~200-candle cap and how the existing
+  `get_historical_candles()` helper paginates and stitches batches across
+  parallel workers. Includes sizing formula, supported periods, progress
+  callback, ban-avoidance guidelines, and a SQLite caching recipe.
+- `docs/en/4. Market Data Retrieval.md` — callout pointing readers from the
+  natural search path to the new section.
+
+No code changes.
+
+---
+
+## [1.2.0] — 2026-05-05
+
+End-to-end-verified pending orders, lifecycle bridge for `check_win`, and
+cumulative work since v1.1.0.
+
+### Added
+
+- **OTC pending orders that actually fire.** Wire-spec rewrite verified live
+  against `ws2.qxbroker.com`: `openType=0`, `openTime` as ISO 8601 UTC string,
+  `timeframe`, `command` as the string `"call"`/`"put"`, `amount` as float.
+  Integer `command` values are stored as `null` in the broker DB and the
+  trade never executes — fixed.
+- **`Quotex.open_pending_at_price()`** — quote-triggered pending mode (fires
+  when the asset price hits a level). Marked experimental until live-verified.
+- **Pending lifecycle bridge.** `_active_pending`, `pending_ticket_map`, and
+  the `_on_message` handlers correlate `s_pending/create` →
+  `f_pending/opened` (pre-fire vs. hard-fail distinction) → `s_pending/opened`
+  → `s_orders/close`, mirroring the executed-trade close back onto the
+  pending ticket so `check_win(pending_id)` returns the broker-settled
+  outcome instead of timing out.
+- **`Quotex.wait_for_order_close()`** — public alias for `check_win` with a
+  clearer name for callers that aren't guessing at win/loss.
+- **`buy(... confirm_timeout=10.0)`** — silent failures surface in 10 s
+  instead of `duration + 5` (was 305 s on a 5-minute trade).
+- **Faster buy + result tracking.** `start_realtime_price`, `check_win`, and
+  the buy-confirm wait are event-driven. Subscribe-once cache for repeated
+  buys on the same asset. Dropped duplicate `settings/apply` and pre-order
+  `tick` heartbeat. Dropped `get_server_time` HTTP round-trip on the buy hot
+  path. Typical hot-asset `buy()` round-trip went from ~300–600 ms to
+  ~50–150 ms.
+
+### Fixed
+
+- `pending_id` is now extracted from `data["pending"]["ticket"]` (the actual
+  broker shape) instead of always-None `data.get("id")`.
+- `instruments_follow` no longer duplicates the pending-create payload on
+  the wire; emits the real `instruments/follow` event.
+- `Quotex.open_pending` accepts ISO 8601 strings without corruption (the
+  wrapper used to feed any non-None `open_time` through
+  `expiration.get_next_timeframe`, which only knows `"DD/MM HH:MM"`).
+- Pending bridge state cleared on every disconnect/reconnect path so stale
+  in-flight tickets from a dropped socket can't cross-wire the next pending
+  on the same asset.
+- Asset-only fallback in the lifecycle handler removed — two pendings on the
+  same asset no longer cross-wire.
+- Same-UUID closes (the typical `ws2.qxbroker` case where the executed-trade
+  UUID equals the pending ticket UUID) no longer fire `order_closed_<id>`
+  twice.
+
+### Documentation
+
+- `docs/en/12. Advanced Features.md` — new sections for "Faster Buy + Result
+  Tracking" and "Pending Orders (time-based and quote-triggered)".
+- `docs/en/3. Trading Operations.md` — pending-orders example rewritten;
+  result-tracking section added.
+- PT/ES copies of section 12 deleted; localised indexes link back to the
+  English advanced-features page (English-only docs going forward).
+
+---
+
+## [1.1.0] — 2026-05-04
+
+First "private features in OSS" release. All additions are opt-in; existing
+code keeps working without changes.
+
+### Added
+
+- **`ProxyConfig`** — HTTP/SOCKS proxy + per-host DNS overrides + extra
+  headers + browser-impersonating TLS toggle. Plumbed through both the httpx
+  HTTP client and the websockets transport.
+- **Multilogin profile bootstrap** — `MultiloginConfig` + async
+  `MultiloginClient` for the v1 local agent and v3 cloud API. On
+  `Quotex.connect()` the profile is started and its proxy + UA inherited
+  automatically. Profile is stopped on `close()`.
+- **`SentimentMonitor`** — rolling per-asset history, z-score spike
+  detection, extreme-bias thresholds, Pearson divergence vs. price,
+  cooldown-debounced async/sync callback dispatch.
+- **`SentimentStore`** + **`SentimentCorrelationAnalyzer`** — SQLite-backed
+  persistence and cross-asset correlation matrix / divergence finder.
+- **`ReconnectPolicy` + `ReconnectSupervisor`** — exponential backoff with
+  jitter, captured account mode + subscription replay, observability stats,
+  custom `on_reconnect` rehydration hook. On by default
+  (`auto_reconnect=True`).
+- **Optional `curl_cffi` HTTP backend** — install via
+  `pip install pyquotex[stealth]`. `ProxyConfig(use_browser_tls=True)`
+  switches the HTTP transport to emit a real Chrome/Firefox TLS (JA3/JA4) +
+  HTTP/2 fingerprint.
+- **Optional `socks` extra** — `pip install pyquotex[socks]` for `socks5://`
+  proxy URLs.
+- Top-level imports for all new types: `from pyquotex import Quotex,
+  ProxyConfig, MultiloginConfig, MultiloginProfile, MultiloginClient,
+  SentimentMonitor, SentimentThresholds, SentimentSignal,
+  SentimentSnapshot, SentimentStore, SentimentCorrelationAnalyzer,
+  ReconnectPolicy, ReconnectStats, ReconnectSupervisor`.
+
+### Documentation
+
+- New `docs/en/12. Advanced Features.md` covering every new capability with
+  worked examples.
+- `examples/private_features.py` — end-to-end runnable demo of every
+  feature.
+
+---
+
+## [1.0.x] — historical
+
+See `git log master -- pyquotex/` for the prior history (`get_historical_candles`,
+deep-history audit, optimisation mixin wiring, strategy rewrite).
