@@ -4,7 +4,7 @@ import logging
 import os
 import ssl
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, Callable
 
 import certifi
@@ -101,6 +101,12 @@ class QuotexAPI:
         # pending ticket so ``check_win(pending_id)`` actually returns.
         self._active_pending: dict[str, str] = {}
         self.pending_ticket_map: dict[str, str] = {}
+        # Reverse index for the close-mirror lookup: executed_uuid →
+        # pending_ticket. Without this the close handler had to scan
+        # every entry in ``pending_ticket_map`` on each close
+        # (O(n) per close, O(n²) over the session under high pending
+        # volume). Always kept in sync with ``pending_ticket_map``.
+        self._exec_to_pending: dict[str, str] = {}
         self.account_balance: dict[str, Any] | None = None
         self.account_type: int | None = AccountType.DEMO
         self.tournament_id: int = 0
@@ -141,8 +147,12 @@ class QuotexAPI:
         self.get_candle_data: dict[str, Any] = {}
         self.historical_candles: dict[str, Any] = {}
         self.candle_v2_data: dict[str, Any] = {}
-        self.realtime_price: dict[str, list[dict[str, Any]]] = (
-            defaultdict(list)
+        # ``deque(maxlen=1000)`` evicts in O(1) — the previous
+        # ``defaultdict(list)`` + ``list.pop(0)`` cap (in ``_on_message``
+        # ~line 645) was O(n) per tick, which compounds badly under
+        # bursty price streams on multi-asset clients.
+        self.realtime_price: dict[str, deque[dict[str, Any]]] = (
+            defaultdict(lambda: deque(maxlen=1000))
         )
         self.realtime_price_data: list[Any] = []
         self.realtime_candles: dict[str, Any] = {}
@@ -187,8 +197,21 @@ class QuotexAPI:
             while self.state.status == WebsocketStatus.CONNECTED:
                 try:
                     await self.websocket.send('42["tick"]')
-                except Exception:
-                    break
+                except Exception as e:
+                    # A silent break would leave the supervisor blind:
+                    # the WS may eventually drop on the broker side
+                    # (server-timeout) but we can act faster by
+                    # signalling ERROR ourselves so the reconnect
+                    # supervisor wakes immediately.
+                    logger.warning("Heartbeat task failing: %s", e)
+                    self.state.status = WebsocketStatus.ERROR
+                    self.state.websocket_error_reason = (
+                        f"heartbeat send failed: {e}"
+                    )
+                    await self.event_registry.set_event(
+                        "status_changed", self.state.status
+                    )
+                    return
                 # Send it every 5 seconds as in legacy version
                 await asyncio.sleep(5)
 
@@ -310,11 +333,28 @@ class QuotexAPI:
                             self.candle_generated_all_size_check[
                                 str(asset)
                             ] = data
+                            # Wake any ``start_candles_one_stream`` /
+                            # ``start_candles_all_size_stream`` waiter
+                            # the instant data arrives — they used to
+                            # poll every 200ms.
+                            await self.event_registry.set_event(
+                                f'candle_generated_{asset}_{int(period)}',
+                                data,
+                            )
+                            await self.event_registry.set_event(
+                                f'candle_generated_all_{asset}',
+                                data,
+                            )
                     elif event == "sentiment":
                         asset = data.get("asset")
                         if asset:
                             self.traders_mood[asset] = data
                             self.realtime_sentiment[asset] = data
+                            # Wake ``start_realtime_sentiment`` —
+                            # used to poll every 200ms.
+                            await self.event_registry.set_event(
+                                f'sentiment_ready_{asset}', data
+                            )
                             if self.sentiment_monitor and isinstance(data, dict):
                                 bullish, bearish = (
                                     self.sentiment_monitor.feed_raw(asset, data)
@@ -434,18 +474,34 @@ class QuotexAPI:
                                 # Pending bridge: when the executed
                                 # trade closes, mirror the result onto
                                 # any pending ticket whose execution
-                                # was correlated to this order_id. Skip
-                                # the mirror if the pending ticket and
-                                # the executed UUID are the same string
+                                # was correlated to this order_id.
+                                # O(1) reverse-index lookup; the prior
+                                # implementation scanned the whole map
+                                # (O(n) per close, O(n²) over a session
+                                # under high pending volume).
+                                # Skip the listinfodata write + event
+                                # fire when ``pticket == str(order_id)``
                                 # (the typical ws2 same-UUID case) —
                                 # the explicit ``order_closed_{order_id}``
-                                # above already covered it and a second
-                                # fire would re-invoke listeners.
-                                for pticket, exec_id in list(
-                                        self.pending_ticket_map.items()
-                                ):
-                                    if exec_id != str(order_id):
-                                        continue
+                                # above already covered it.
+                                pticket = self._exec_to_pending.pop(
+                                    str(order_id), None
+                                )
+                                if pticket is None:
+                                    # Defensive fallback: if anything
+                                    # populated ``pending_ticket_map``
+                                    # without going through the
+                                    # ``s_pending/opened`` success path,
+                                    # the reverse index won't have an
+                                    # entry. Scan once to recover.
+                                    for pt, ex in list(
+                                            self.pending_ticket_map.items()
+                                    ):
+                                        if ex == str(order_id):
+                                            pticket = pt
+                                            break
+                                if pticket is not None:
+                                    self.pending_ticket_map.pop(pticket, None)
                                     if pticket != str(order_id):
                                         self.listinfodata.set(
                                             win, game_state, pticket, profit
@@ -457,8 +513,6 @@ class QuotexAPI:
                                         await self.event_registry.set_event(
                                             f'order_closed_{pticket}', order
                                         )
-                                    del self.pending_ticket_map[pticket]
-                                    break
 
                             # Pending lifecycle bridge: ``f_pending/opened``
                             # with ``error=None`` is a *pre-fire*
@@ -515,12 +569,14 @@ class QuotexAPI:
                                     self._active_pending.pop(match, None)
                                 elif is_success and not is_closed and match:
                                     # Trade just executed — record the
-                                    # ticket → executed UUID mapping so
-                                    # the close mirror above fires when
-                                    # ``s_orders/close`` arrives.
-                                    self.pending_ticket_map[match] = (
-                                        str(order_id)
-                                    )
+                                    # ticket → executed UUID mapping
+                                    # (and the reverse index) so the
+                                    # close mirror above can do an O(1)
+                                    # lookup when ``s_orders/close``
+                                    # arrives.
+                                    exec_uuid = str(order_id)
+                                    self.pending_ticket_map[match] = exec_uuid
+                                    self._exec_to_pending[exec_uuid] = match
                                     self._active_pending.pop(match, None)
 
                     # Always set buy_confirmed if it was an open request
@@ -636,13 +692,12 @@ class QuotexAPI:
                     )
                     self.timesync.server_timestamp = ts  # Sync server clock
 
-                    # Limit realtime_price history to 1000 entries
-                    # to prevent memory bloat
+                    # Bounded ring buffer (deque maxlen=1000) — eviction
+                    # is O(1) so this is safe under bursty multi-asset
+                    # streams. The previous list+pop(0) was O(n) per tick.
                     price_list = self.realtime_price[asset]
                     is_first_tick = len(price_list) == 0
                     price_list.append({"time": ts, "price": price})
-                    if len(price_list) > 1000:
-                        price_list.pop(0)
 
                     self.realtime_candles[asset] = message[0]
 
@@ -695,6 +750,7 @@ class QuotexAPI:
         # any new pending placed on the same asset.
         self._active_pending.clear()
         self.pending_ticket_map.clear()
+        self._exec_to_pending.clear()
 
         self.state.status = WebsocketStatus.DISCONNECTED
         try:
