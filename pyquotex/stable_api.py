@@ -1185,21 +1185,27 @@ class Quotex(OptimizedQuotexMixin):
             duration: int,
             open_time: str | None = None
     ) -> tuple[bool, Any]:
-        """Places a pending order to be executed at a specific future time."""
+        """Place a time-based pending order.
+
+        ``open_time`` is optional. When omitted the order is created
+        with the basic wire shape used by the Quotex web client (no
+        ``openTime`` field). When supplied as a ``"DD/MM HH:MM"`` (or
+        ``"YYYY/DD/MM HH:MM:SS"``) string, it is normalised to the ISO
+        timestamp the broker expects and included in the payload.
+        """
         if self.api is None:
             return False, "API not initialized"
 
         self.api.pending_id = None
-        user_settings = await self.get_profile()
-        offset_zone = user_settings.offset if user_settings else 0
-        open_time_int = expiration.get_next_timeframe(
-            int(time.time()),
-            offset_zone,
-            duration,
-            open_time
-        )
+        open_time_iso: str | None = None
+        if open_time is not None:
+            user_settings = await self.get_profile()
+            offset_zone = user_settings.offset if user_settings else 0
+            open_time_iso = expiration.get_next_timeframe(
+                int(time.time()), offset_zone, duration, open_time
+            )
         await self.api.open_pending(
-            amount, asset, direction, duration, open_time_int
+            amount, asset, direction, duration, open_time_iso
         )
         status_buy = False
         start = time.time()
@@ -1222,6 +1228,53 @@ class Quotex(OptimizedQuotexMixin):
             await self.api.instruments_follow(asset)
 
         return status_buy, self.api.pending_successful
+
+    async def open_pending_at_price(
+            self,
+            amount: float,
+            asset: str,
+            direction: str,
+            quote: float,
+            period: str = "M1",
+            timeout: float = 30.0,
+    ) -> tuple[bool, Any]:
+        """Place a quote-triggered pending order.
+
+        The order opens the moment the asset's price reaches ``quote``.
+        Unlike :meth:`open_pending` (time-based), this variant has no
+        ``time``/duration field — Quotex closes the resulting trade
+        according to the chart ``period`` (e.g. ``"M1"`` for the next
+        1-minute candle).
+
+        Args:
+            amount: Investment amount in account currency.
+            asset: Trading symbol.
+            direction: ``"call"`` / ``"put"`` or ``"up"`` / ``"down"``.
+            quote: Trigger price level.
+            period: Chart period code (``"M1"``, ``"M5"``, ``"M15"``,
+                ``"H1"``, …). Defaults to ``"M1"``.
+            timeout: How long to wait for the broker to acknowledge.
+        """
+        if self.api is None:
+            return False, "API not initialized"
+
+        self.api.pending_id = None
+        await self.api.open_pending_at_price(
+            amount, asset, direction, quote, period
+        )
+        start = time.time()
+        while await self.check_connect() and self.api.pending_id is None:
+            if time.time() - start > timeout:
+                logger.error("Timeout pending order at price.")
+                return False, "Timeout waiting for pending ID"
+            await asyncio.sleep(0.2)
+            if self.api.state.check_websocket_if_error:
+                return False, self.api.state.websocket_error_reason
+
+        if self.api.pending_id is not None:
+            await self.api.instruments_follow(asset)
+            return True, self.api.pending_successful
+        return False, self.api.pending_successful
 
     async def sell_option(
             self,

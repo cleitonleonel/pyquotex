@@ -88,46 +88,120 @@ async def test_buy_regular_binary_emits_binary_payload():
 
 
 @pytest.mark.asyncio
-async def test_open_pending_otc_includes_digital_option_type():
-    """The historical bug: OTC pending payload missed ``optionType``."""
+async def test_open_pending_otc_matches_wire_capture():
+    """Wire shape captured from the live Quotex web client::
+
+        {asset, amount, time, action, isDemo:true, tournamentId:null,
+         requestId}
+
+    Notably absent: ``optionType`` (broker rejects pending orders that
+    include it) and ``openTime`` (omitted unless the caller explicitly
+    schedules a future time).
+    """
     sent: list[str] = []
     api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
     api.send_websocket_request = lambda d: sent.append(d) or _noop()
     api.account_type = AccountType.DEMO
 
     await api.open_pending(
-        amount=10,
+        amount=1,
         asset="EURUSD_otc",
-        direction="call",
+        direction="up",
         duration=60,
-        open_time=1234567890,
     )
 
     event, payload = _decode(sent[0])
     assert event == "pending/create"
-    assert payload["optionType"] == int(OptionType.DIGITAL_OTC)
     assert payload["asset"] == "EURUSD_otc"
-    assert payload["openTime"] == 1234567890
+    assert payload["amount"] == 1
     assert payload["time"] == 60
+    assert payload["action"] == "up"
+    assert payload["isDemo"] is True              # bool, NOT int
+    assert payload["tournamentId"] is None        # JSON null, NOT 0
+    assert "requestId" in payload
+    # The two fields whose presence used to break OTC pending:
+    assert "optionType" not in payload
+    assert "openTime" not in payload
 
 
 @pytest.mark.asyncio
-async def test_open_pending_regular_uses_binary_option_type():
+async def test_open_pending_real_account_emits_false_isDemo():
+    sent: list[str] = []
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api.send_websocket_request = lambda d: sent.append(d) or _noop()
+    api.account_type = AccountType.REAL
+
+    await api.open_pending(
+        amount=10, asset="EURUSD", direction="down", duration=60,
+    )
+    _, payload = _decode(sent[0])
+    assert payload["isDemo"] is False
+
+
+@pytest.mark.asyncio
+async def test_open_pending_includes_open_time_when_provided():
+    """If the caller passes ``open_time`` for explicit scheduling, the
+    payload includes it. Default omits it (matching the wire capture)."""
     sent: list[str] = []
     api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
     api.send_websocket_request = lambda d: sent.append(d) or _noop()
     api.account_type = AccountType.DEMO
 
     await api.open_pending(
-        amount=10,
-        asset="EURUSD",
-        direction="put",
-        duration=300,
-        open_time=1234567890,
+        amount=1, asset="EURUSD", direction="up", duration=60,
+        open_time="2025-01-01T12:00:00.000Z",
+    )
+    _, payload = _decode(sent[0])
+    assert payload["openTime"] == "2025-01-01T12:00:00.000Z"
+
+
+@pytest.mark.asyncio
+async def test_open_pending_tournament_passthrough():
+    """When tournament_id is non-zero, it appears verbatim in the payload."""
+    sent: list[str] = []
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api.send_websocket_request = lambda d: sent.append(d) or _noop()
+    api.account_type = AccountType.DEMO
+    api.tournament_id = 4242
+
+    await api.open_pending(
+        amount=1, asset="EURUSD", direction="up", duration=60,
+    )
+    _, payload = _decode(sent[0])
+    assert payload["tournamentId"] == 4242
+
+
+@pytest.mark.asyncio
+async def test_open_pending_at_price_quote_payload():
+    """Quote-triggered pending payload from the wire capture::
+
+        {asset, amount, quote, period, action}
+    """
+    sent: list[str] = []
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api.send_websocket_request = lambda d: sent.append(d) or _noop()
+    api.account_type = AccountType.DEMO
+
+    await api.open_pending_at_price(
+        amount=1,
+        asset="EURUSD_otc",
+        direction="up",
+        quote=184.379,
+        period="M5",
     )
 
-    _, payload = _decode(sent[0])
-    assert payload["optionType"] == int(OptionType.BINARY)
+    event, payload = _decode(sent[0])
+    assert event == "pending/create"
+    assert payload["asset"] == "EURUSD_otc"
+    assert payload["amount"] == 1
+    assert payload["quote"] == 184.379
+    assert payload["period"] == "M5"
+    assert payload["action"] == "up"
+    assert payload["isDemo"] is True
+    assert payload["tournamentId"] is None
+    # No time, no openTime — quote-mode triggers on price, not duration.
+    assert "time" not in payload
+    assert "openTime" not in payload
 
 
 @pytest.mark.asyncio
