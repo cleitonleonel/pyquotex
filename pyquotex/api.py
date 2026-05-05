@@ -91,6 +91,16 @@ class QuotexAPI:
         self.current_period: int | None = None
         self.buy_successful: bool | None = None
         self.pending_successful: bool | None = None
+        # Pending-order lifecycle bridge — see ``_temp_status`` handling
+        # below. ``_active_pending`` maps a pending ticket UUID to the
+        # asset it was placed against, populated when the broker sends
+        # ``s_pending/create``. ``pending_ticket_map`` then maps the
+        # pending ticket to the *executed* trade UUID once the pending
+        # actually fires (``s_pending/opened``); when that executed
+        # trade closes we mirror the ``order_closed`` event back to the
+        # pending ticket so ``check_win(pending_id)`` actually returns.
+        self._active_pending: dict[str, str] = {}
+        self.pending_ticket_map: dict[str, str] = {}
         self.account_balance: dict[str, Any] | None = None
         self.account_type: int | None = AccountType.DEMO
         self.tournament_id: int = 0
@@ -421,6 +431,90 @@ class QuotexAPI:
                                 await self.event_registry.set_event(
                                     f'order_closed_{order_id}', order
                                 )
+                                # Pending bridge: when the executed
+                                # trade closes, mirror the result onto
+                                # any pending ticket whose execution
+                                # was correlated to this order_id.
+                                for pticket, exec_id in list(
+                                        self.pending_ticket_map.items()
+                                ):
+                                    if exec_id == str(order_id):
+                                        self.listinfodata.set(
+                                            win, game_state, pticket, profit
+                                        )
+                                        self.listinfodata.set(
+                                            win, game_state,
+                                            str(pticket), profit
+                                        )
+                                        await self.event_registry.set_event(
+                                            f'order_closed_{pticket}', order
+                                        )
+                                        del self.pending_ticket_map[pticket]
+                                        break
+
+                            # Pending lifecycle bridge: ``f_pending/opened``
+                            # with ``error=None`` is a *pre-fire*
+                            # notification, not a rejection. Only
+                            # ``f_pending/opened`` with a non-None error
+                            # is a hard fail. ``s_pending/opened`` (or
+                            # ``s_orders/open`` while a pending is
+                            # active) carries the executed trade UUID
+                            # we need to map back to the pending ticket.
+                            if 'pending/opened' in self._temp_status:
+                                is_hard_fail = (
+                                    'f_pending/opened' in self._temp_status
+                                    and order.get("error") is not None
+                                )
+                                is_success = (
+                                    's_pending/opened' in self._temp_status
+                                )
+                                ticket_ref = (
+                                    order.get("ticket")
+                                    or order.get("pendingTicket")
+                                )
+                                order_asset = order.get("asset")
+                                match = None
+                                if (
+                                        ticket_ref
+                                        and ticket_ref in self._active_pending
+                                ):
+                                    match = ticket_ref
+                                elif order_asset:
+                                    match = next(
+                                        (
+                                            t for t, a
+                                            in self._active_pending.items()
+                                            if a == order_asset
+                                        ),
+                                        None,
+                                    )
+                                if is_hard_fail and match:
+                                    # Resolve as loss immediately so
+                                    # ``check_win(pending_id)`` returns.
+                                    self.listinfodata.set(
+                                        "loss", 1, match, 0
+                                    )
+                                    self.listinfodata.set(
+                                        "loss", 1, str(match), 0
+                                    )
+                                    await self.event_registry.set_event(
+                                        f'order_closed_{match}', order
+                                    )
+                                    self._active_pending.pop(match, None)
+                                elif is_success and not is_closed and match:
+                                    # Trade just executed — record the
+                                    # ticket → executed UUID mapping so
+                                    # the close mirror above fires when
+                                    # ``s_orders/close`` arrives. Note:
+                                    # in current ws2.qxbroker behaviour
+                                    # the executed trade often reuses
+                                    # the same UUID as the pending
+                                    # ticket; the map handles both
+                                    # same-UUID and different-UUID cases.
+                                    self.pending_ticket_map[match] = (
+                                        str(order_id)
+                                    )
+                                    self._active_pending.pop(match, None)
 
                     # Always set buy_confirmed if it was an open request
                     if (
@@ -437,11 +531,21 @@ class QuotexAPI:
                             pending_obj = data.get("pending")
                             if not isinstance(pending_obj, dict):
                                 pending_obj = data
-                            self.pending_id = (
+                            ticket = (
                                 pending_obj.get("ticket")
                                 or pending_obj.get("id")
                             )
+                            self.pending_id = ticket
                             self.pending_successful = True
+                            # Track the ticket → asset mapping so the
+                            # pending/opened lifecycle handler can
+                            # correlate the executed-trade UUID back
+                            # to this pending ticket later.
+                            asset_for_ticket = pending_obj.get("asset")
+                            if ticket and asset_for_ticket:
+                                self._active_pending[ticket] = (
+                                    asset_for_ticket
+                                )
                             await self.event_registry.set_event(
                                 'pending_confirmed', data
                             )
@@ -822,8 +926,13 @@ class QuotexAPI:
 
         * ``openType`` — ``0`` means the time-scheduled flavour. The
           quote-triggered variant uses ``1``.
-        * ``command`` — ``0`` for *up* / *call*, ``1`` for *down* /
-          *put*. Replaces the old string ``action`` field.
+        * ``command`` — **must be the string** ``"call"`` (up) or
+          ``"put"`` (down). Sending an integer (``0``/``1``/``2``)
+          looks accepted at create time but the server stores it as
+          ``null`` in the order DB; when the pending later fires at
+          ``openTime`` the executor reads ``command=null`` and emits
+          ``f_pending/opened`` with ``error: 9`` — the trade never
+          executes. Verified end-to-end against ``ws2.qxbroker.com``.
         * ``timeframe`` — duration of the resulting trade in seconds.
           Replaces the old ``time`` field.
         * ``openTime`` — **must** be an ISO 8601 UTC string with the
@@ -842,7 +951,7 @@ class QuotexAPI:
         """
         from datetime import datetime, timezone
 
-        command = 1 if direction in ("down", "put") else 0
+        command = "put" if direction in ("down", "put") else "call"
 
         if open_time is None:
             # Auto-schedule: next ``duration`` boundary at least 90 s
@@ -887,9 +996,13 @@ class QuotexAPI:
               "asset": "EURUSD_otc",
               "quote": 184.379,
               "period": "M1",
-              "command": 0,
+              "command": "call",
               "amount": 1.0
             }
+
+        ``command`` is the string ``"call"``/``"put"`` (matching
+        :meth:`open_pending` and :meth:`buy`); see the time-mode
+        docstring for why integer commands break execution.
 
         .. note::
             The exact wire shape for quote-mode has not yet been
@@ -897,7 +1010,7 @@ class QuotexAPI:
             has). The mapping follows the time-mode pattern with
             field substitutions captured from the web-client modal.
         """
-        command = 1 if direction in ("down", "put") else 0
+        command = "put" if direction in ("down", "put") else "call"
         payload: dict[str, Any] = {
             "openType": 1,
             "asset": asset,
