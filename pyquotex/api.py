@@ -764,12 +764,18 @@ class QuotexAPI:
             open_time: int
     ) -> None:
         """Places a pending order to be executed at a specific future time."""
+        from .utils.option_type import resolve_option_type
+
+        option_type = resolve_option_type(
+            asset, duration, is_fast_option=False, is_pending=True
+        )
         payload = {
             "asset": asset,
             "amount": amount,
             "action": direction,
             "time": duration,
             "openTime": open_time,
+            "optionType": int(option_type),
             "isDemo": int(self.account_type) if self.account_type is not None else AccountType.DEMO,
             "tournamentId": self.tournament_id,
             "requestId": int(time.time())
@@ -777,16 +783,18 @@ class QuotexAPI:
         data = f'42["pending/create", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
-    async def instruments_follow(
-            self,
-            amount: float | int,
-            asset: str,
-            direction: str,
-            duration: int,
-            open_time: int
-    ) -> None:
-        """Alias for open_pending or similar follow request."""
-        await self.open_pending(amount, asset, direction, duration, open_time)
+    async def instruments_follow(self, asset: str) -> None:
+        """Subscribe to the instrument feed for a pending order's asset.
+
+        Quotex emits ``instruments/follow`` so the client receives candle
+        and price updates for an asset whose pending order has been
+        accepted but hasn't fired yet. Previously this method was an
+        alias of ``open_pending`` — that bug duplicated every pending
+        order on the wire.
+        """
+        payload = {"asset": asset}
+        data = f'42["instruments/follow", {json.dumps_str(payload)}]'
+        await self.send_websocket_request(data)
 
     async def start_websocket(self) -> tuple[bool, str]:
         """
