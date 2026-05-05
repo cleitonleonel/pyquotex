@@ -121,6 +121,16 @@ class Quotex(OptimizedQuotexMixin):
         # on the same asset don't re-issue the 3 subscribe WS frames.
         # Cleared on reconnect by ReconnectSupervisor.on_reconnect().
         self._subscribed_assets: set[str] = set()
+        # Profile offset is fixed for a session (the broker doesn't change
+        # a user's timezone mid-flight). Caching it here lets
+        # ``open_pending`` skip the per-call HTTP round-trip to
+        # ``/api/v1/cabinets/digest``. Reset on reconnect so a fresh login
+        # picks up any out-of-band change.
+        self._profile_offset_cache: int | None = None
+        # Single-flight lock around ``connect()`` so two concurrent
+        # callers can't race into duplicate logins / overwriting
+        # ``self.api``.
+        self._connect_lock: asyncio.Lock = asyncio.Lock()
         self.account_is_demo: int = AccountType.DEMO
         self.suspend: float = 0.2
         self.codes_asset: dict[str, str] = {}
@@ -143,8 +153,18 @@ class Quotex(OptimizedQuotexMixin):
 
     @staticmethod
     async def _check_connect(state: Any) -> bool:
-        """Check connection using the per-instance state object."""
-        await asyncio.sleep(2)
+        """Check connection using the per-instance state object.
+
+        v1.3.0: dropped the unconditional ``await asyncio.sleep(2)``
+        that used to live here. Every public method that calls
+        :meth:`check_connect` was paying a 2-second tax on every
+        invocation — see :meth:`get_balance`, :meth:`get_candles`,
+        :meth:`open_pending`, :meth:`start_candles_all_size_stream`,
+        etc. The sleep was a leftover from when the function waited
+        for the WS to come up; the auth_status flag is now updated
+        synchronously by ``_on_message`` so the read is correct
+        immediately.
+        """
         return state.auth_status == AuthStatus.AUTHENTICATED
 
     async def check_connect(self) -> bool:
@@ -598,9 +618,23 @@ class Quotex(OptimizedQuotexMixin):
         return new_candles
 
     async def connect(self) -> tuple[bool, str]:
-        """Establishes a connection to the Quotex API."""
+        """Establishes a connection to the Quotex API.
+
+        Single-flighted via ``self._connect_lock`` so two concurrent
+        callers see the same outcome. Without the lock both coroutines
+        would create a fresh ``QuotexAPI`` instance and authenticate
+        twice, which can lock the account.
+        """
+        async with self._connect_lock:
+            return await self._connect_unlocked()
+
+    async def _connect_unlocked(self) -> tuple[bool, str]:
         if self.api and await self.check_connect():
             return True, "Already connected"
+
+        # New session — drop the cached profile offset so a fresh
+        # login picks up any out-of-band timezone change.
+        self._profile_offset_cache = None
 
         await self._start_multilogin_if_configured()
 
@@ -638,15 +672,16 @@ class Quotex(OptimizedQuotexMixin):
             self.session_data = {}
             return False, "Websocket connection rejected."
 
-        # Drop the subscribe-cache after reconnect so the next
-        # start_candles_stream re-issues the subscribe frames against
-        # the fresh socket. ReconnectSupervisor already replays
-        # subscribe_candle/all_size/mood; this just resets our local
-        # short-circuit set.
+        # Drop the subscribe-cache + cached profile offset after
+        # reconnect so the next ``start_candles_stream`` re-issues the
+        # subscribe frames against the fresh socket and the next
+        # ``open_pending`` re-fetches the offset (in case a re-login
+        # picked up a different profile).
         if self.api.reconnect_supervisor is not None:
-            self.api.reconnect_supervisor.on_reconnect(
-                self._subscribed_assets.clear
-            )
+            def _on_reconnect() -> None:
+                self._subscribed_assets.clear()
+                self._profile_offset_cache = None
+            self.api.reconnect_supervisor.on_reconnect(_on_reconnect)
 
         return check, reason
 
@@ -1091,6 +1126,23 @@ class Quotex(OptimizedQuotexMixin):
             return await self.api.get_profile()
         return None
 
+    async def _get_cached_profile_offset(self) -> int:
+        """Return the user's UTC offset (seconds), cached for the
+        session.
+
+        ``open_pending`` calls this per-trade so any HTTP latency on
+        the digest endpoint compounds. The offset doesn't change for
+        the duration of a session, so caching is safe; the cache is
+        cleared by the reconnect supervisor on a successful reconnect
+        in case a re-login pulled a different profile.
+        """
+        if self._profile_offset_cache is not None:
+            return self._profile_offset_cache
+        user_settings = await self.get_profile()
+        offset = user_settings.offset if user_settings else 0
+        self._profile_offset_cache = offset
+        return offset
+
     async def get_server_time(self) -> int:
         """Retrieves and syncs the server time."""
         if self.api is None:
@@ -1225,8 +1277,7 @@ class Quotex(OptimizedQuotexMixin):
         if isinstance(open_time, str) and ("T" in open_time or "Z" in open_time):
             open_time_iso = open_time
         else:
-            user_settings = await self.get_profile()
-            offset_zone = user_settings.offset if user_settings else 0
+            offset_zone = await self._get_cached_profile_offset()
             open_time_iso = expiration.get_next_timeframe(
                 int(time.time()), offset_zone, duration, open_time
             )
@@ -1518,10 +1569,35 @@ class Quotex(OptimizedQuotexMixin):
         return investments_settings
 
     async def stop_candles_stream(self, asset: str) -> None:
-        """Stops streaming candle data for a specified asset."""
-        if self.api:
-            await self.api.unsubscribe_realtime_candle(asset)
-            await self.api.unfollow_candle(asset)
+        """Stops streaming candle data for a specified asset.
+
+        Also drops the asset from the subscribe-replay lists so the
+        reconnect supervisor doesn't re-subscribe to a stream the
+        user explicitly stopped following. Without this, a long
+        session that rotates through assets accumulates dead entries
+        and every reconnect spams subscribes for assets the strategy
+        no longer cares about.
+        """
+        if not self.api:
+            return
+        await self.api.unsubscribe_realtime_candle(asset)
+        await self.api.unfollow_candle(asset)
+        # Drop from the candle-stream replay list (entries are
+        # ``"<asset>,<period>"`` so we filter by prefix).
+        prefix = f"{asset},"
+        self.subscribe_candle = [
+            s for s in self.subscribe_candle if not s.startswith(prefix)
+        ]
+        # Drop from the all-size replay list (entries are bare asset).
+        if asset in self.subscribe_candle_all_size:
+            self.subscribe_candle_all_size.remove(asset)
+        # Drop from the subscribe-once short-circuit cache so a future
+        # ``start_candles_stream`` for this asset re-issues the WS
+        # frames against the live socket.
+        self._subscribed_assets = {
+            key for key in self._subscribed_assets
+            if not key.startswith(prefix)
+        }
 
     async def start_signals_data(self) -> None:
         """Subscribes to the global trading signals stream."""
@@ -1591,20 +1667,30 @@ class Quotex(OptimizedQuotexMixin):
             period: int = 0,
             timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
-        """Starts following real-time trader sentiment for an asset."""
+        """Start following real-time trader sentiment for an asset.
+
+        Event-driven: awaits the ``sentiment_ready_<asset>`` registry
+        event fired by ``_on_message`` the first time a sentiment
+        payload lands. The previous implementation polled every 200ms.
+        """
         if self.api is None:
             raise RuntimeError("API not initialized")
 
         await self.start_candles_stream(asset, period)
-        start = time.time()
-        while True:
-            if self.api.realtime_sentiment.get(asset):
-                return self.api.realtime_sentiment[asset]
-            if time.time() - start > timeout:
-                raise TimeoutError(
-                    f"Timeout waiting for realtime sentiment data for {asset}."
-                )
-            await asyncio.sleep(0.2)
+
+        # Fast path — data may already be cached from a previous call.
+        if self.api.realtime_sentiment.get(asset):
+            return self.api.realtime_sentiment[asset]
+
+        try:
+            await self.api.event_registry.wait_event(
+                f'sentiment_ready_{asset}', timeout=timeout
+            )
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"Timeout waiting for realtime sentiment data for {asset}."
+            ) from exc
+        return self.api.realtime_sentiment.get(asset, {})
 
     async def start_realtime_candle(
             self,
@@ -1678,76 +1764,95 @@ class Quotex(OptimizedQuotexMixin):
 
         return None, "OperationID Not Found."
 
-    async def start_candles_one_stream(self, asset: str, size: int) -> bool:
-        """Internal helper to start a single candle stream."""
+    async def start_candles_one_stream(
+            self, asset: str, size: int, timeout: float = 20.0
+    ) -> bool:
+        """Subscribe to a single candle stream and wait for first data.
+
+        Event-driven: awaits the
+        ``candle_generated_<asset>_<size>`` registry event fired by
+        ``_on_message`` the instant the broker emits a matching
+        ``candle-generated`` message. The previous implementation
+        polled the shared ``candle_generated_check`` dict every 200ms.
+        """
         if self.api is None:
+            return False
+        if not hasattr(self.api, "candle_generated_check"):
             return False
 
         if not (str(asset + "," + str(size)) in self.subscribe_candle):
             self.subscribe_candle.append((asset + "," + str(size)))
-        start = time.time()
-        # This part assumes api has these attributes, might need check
-        if not hasattr(self.api, "candle_generated_check"):
-            return False
 
+        # Reset any prior data + clear the event so a stale fire from
+        # an earlier call doesn't spuriously satisfy this wait.
         self.api.candle_generated_check[str(asset)][int(size)] = {}
-        # Send the subscribe request exactly once before polling.
-        # Calling follow_candle() inside the loop would spam the server
-        # with up to 100 subscribe messages (20 s / 0.2 s) before data
-        # arrives — a ban/rate-limit risk explicitly warned about in README.
+        event_key = f'candle_generated_{asset}_{int(size)}'
+        await self.api.event_registry.clear_event(event_key)
+
         try:
             await self.api.follow_candle(self.codes_asset[asset])
         except Exception as e:
             logger.error('**error** start_candles_stream reconnect: %s', e)
             await self.connect()
-        while True:
-            if time.time() - start > 20:
-                logger.error(
-                    '**error** start_candles_one_stream late for 20 sec'
-                )
-                return False
-            try:
-                if self.api.candle_generated_check[str(asset)][int(size)]:
-                    return True
-            except (KeyError, TypeError):
-                pass
-            await asyncio.sleep(0.2)
 
-    async def start_candles_all_size_stream(self, asset: str) -> bool:
-        """Internal helper to subscribe to all candle sizes for an asset."""
-        if self.api is None:
+        try:
+            await self.api.event_registry.wait_event(
+                event_key, timeout=timeout
+            )
+            return True
+        except TimeoutError:
+            logger.error(
+                'start_candles_one_stream: no candle for %s:%s within %ss',
+                asset, size, timeout,
+            )
             return False
 
+    async def start_candles_all_size_stream(
+            self, asset: str, timeout: float = 20.0
+    ) -> bool:
+        """Subscribe to all candle sizes for an asset; wait for first data.
+
+        Event-driven: awaits the ``candle_generated_all_<asset>``
+        registry event fired by ``_on_message`` the instant the broker
+        emits a matching ``candle-generated`` message. The previous
+        implementation polled every 200ms AND re-issued
+        ``subscribe_all_size`` on every poll iteration — up to 100
+        subscribe sends in 20s, a known ban-risk pattern.
+        """
+        if self.api is None:
+            return False
         if not hasattr(self.api, "candle_generated_all_size_check"):
             return False
 
         self.api.candle_generated_all_size_check[str(asset)] = {}
         if not (str(asset) in self.subscribe_candle_all_size):
             self.subscribe_candle_all_size.append(str(asset))
-        start = time.time()
-        while await self.check_connect():
-            if self.api is None: break
-            if time.time() - start > 20:
-                logger.error(
-                    f'**error** fail {asset} '
-                    'start_candles_all_size_stream late for 10 sec'
-                )
-                return False
-            try:
-                if self.api.candle_generated_all_size_check[str(asset)]:
-                    return True
-            except (KeyError, TypeError):
-                pass
-            try:
-                # Assuming api has subscribe_all_size
-                if hasattr(self.api, "subscribe_all_size"):
-                    self.api.subscribe_all_size(self.codes_asset[asset])
-            except Exception as e:
-                logger.error(
-                    '**error** start_candles_all_size_stream reconnect: %s', e
-                )
-                await self.connect()
-            await asyncio.sleep(0.2)
+
+        event_key = f'candle_generated_all_{asset}'
+        await self.api.event_registry.clear_event(event_key)
+
+        # Subscribe ONCE, before waiting — the previous impl re-fired
+        # this on every 200ms poll iteration, spamming the broker.
+        try:
+            if hasattr(self.api, "subscribe_all_size"):
+                self.api.subscribe_all_size(self.codes_asset[asset])
+        except Exception as e:
+            logger.error(
+                '**error** start_candles_all_size_stream reconnect: %s', e
+            )
+            await self.connect()
+
+        try:
+            await self.api.event_registry.wait_event(
+                event_key, timeout=timeout
+            )
+            return True
+        except TimeoutError:
+            logger.error(
+                'start_candles_all_size_stream: no candle for %s within %ss',
+                asset, timeout,
+            )
+            return False
         return False
 
     async def start_mood_stream(

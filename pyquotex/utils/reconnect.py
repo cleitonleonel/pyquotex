@@ -217,7 +217,11 @@ class ReconnectSupervisor:
             # Defensive: drop any pending-order bridge state from the
             # dead socket. ``QuotexAPI._on_close`` already does this on
             # graceful drops, but a hard error path may bypass it.
-            for attr in ("_active_pending", "pending_ticket_map"):
+            for attr in (
+                    "_active_pending",
+                    "pending_ticket_map",
+                    "_exec_to_pending",
+            ):
                 state = getattr(self.api, attr, None)
                 if isinstance(state, dict):
                     state.clear()
