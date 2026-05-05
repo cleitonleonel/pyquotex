@@ -70,7 +70,7 @@ async def martingale_apply(amount, asset_name, direction, duration, balance, mar
 
         await analise_sentiment(asset_name, duration)
 
-        result = await check_result(buy_info, direction)
+        result = await check_result(buy_info, direction, duration)
 
         if result == "Win":
             balance, profit = await calculate_profit(asset_name, amount, balance)
@@ -86,40 +86,36 @@ async def martingale_apply(amount, asset_name, direction, duration, balance, mar
     return balance, 0, False
 
 
-async def check_result(buy_data, direction):
+async def check_result(buy_data, direction, duration):
     """
-    Check the result of the trade based on real-time price and direction.
+    Wait for the broker's close payload and return the outcome.
+
+    Replaces the old realtime-price spin loop with an event-driven
+    wait on ``order_closed_{id}`` — sub-millisecond latency and
+    correct semantics (the broker's settled payout, not a guess at the
+    current spot vs. open price).
 
     Args:
-        buy_data (dict): Information about the trade, including open price and close timestamp.
-        direction (str): The direction of the trade, either "call" or "put".
+        buy_data (dict): Information about the trade, must include
+            ``id`` (returned by :meth:`Quotex.buy`).
+        direction (str): "call" or "put" (kept for API compatibility).
+        duration (int): Option duration in seconds — used to size the
+            wait timeout.
 
     Returns:
         str: The result of the trade ("Win", "Loss", or "Doji").
     """
-    open_price = buy_data.get('openPrice')
-
-    while True:
-        prices = await client.get_realtime_price(buy_data['asset'])
-
-        if not prices:
-            continue
-
-        current_price = prices[-1]['price']
-
-        print(f"\nCurrent Price: {current_price}, Open Price: {open_price}")
-
-        if (direction == "call" and current_price > open_price) or (
-                direction == "put" and current_price < open_price):
-            print("Result: WIN")
-            return 'Win'
-        elif (direction == "call" and current_price <= open_price) or (
-                direction == "put" and current_price >= open_price):
-            print("Result: LOSS")
-            return 'Loss'
-        else:
-            print("Result: DOJI")
-            return 'Doji'
+    status, profit = await client.wait_for_order_close(
+        buy_data['id'], duration=duration
+    )
+    print(
+        f"\nResult: {status.upper()} (profit={profit}, direction={direction})"
+    )
+    if status == 'win':
+        return 'Win'
+    if profit == 0:
+        return 'Doji'
+    return 'Loss'
 
 
 async def trade_and_monitor():
@@ -160,7 +156,7 @@ async def trade_and_monitor():
 
                     await analise_sentiment(asset_name, duration)
 
-                    result = await check_result(buy_info, direction)
+                    result = await check_result(buy_info, direction, duration)
 
                     if result == "Win":
                         balance, profit = await calculate_profit(asset_name, amount, balance)

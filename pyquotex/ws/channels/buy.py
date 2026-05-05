@@ -65,9 +65,9 @@ class Buy(Base):
             "optionType": int(option_type),
         }
 
-        data = f'42["tick"]'
-        await self.send_websocket_request(data)
-
+        # The heartbeat task pings ``42["tick"]`` every 5s; an extra
+        # tick before each order is pure overhead. Send the order
+        # directly.
         data = f'42["orders/open",{json.dumps_str(payload)}]'
         logger.debug(data)
         await self.send_websocket_request(data)
