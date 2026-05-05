@@ -1183,7 +1183,8 @@ class Quotex(OptimizedQuotexMixin):
             asset: str,
             direction: str,
             duration: int,
-            open_time: str | None = None
+            open_time: str | None = None,
+            confirm_timeout: float = 30.0,
     ) -> tuple[bool, Any]:
         """Place a time-based pending order.
 
@@ -1194,11 +1195,20 @@ class Quotex(OptimizedQuotexMixin):
         before reaching the wire — the broker rejects raw integers
         with ``{"error": "open_time_min"}`` regardless of how far
         ahead they point.
+
+        Args:
+            confirm_timeout: How long (s) to wait for the broker's
+                ``s_pending/create`` ack. Default 30 s.
         """
         if self.api is None:
             return False, "API not initialized"
+        if not isinstance(duration, int) or duration <= 0:
+            return False, "duration must be a positive integer"
 
         self.api.pending_id = None
+        self.api.pending_successful = None
+        await self.api.event_registry.clear_event('pending_confirmed')
+
         # Always compute the ISO string. Skipping this branch when
         # ``open_time`` was None used to leak through to the lower
         # layer's auto-schedule fallback, which (in older versions)
@@ -1214,27 +1224,31 @@ class Quotex(OptimizedQuotexMixin):
         await self.api.open_pending(
             amount, asset, direction, duration, open_time_iso
         )
-        status_buy = False
-        start = time.time()
-        while await self.check_connect() and self.api.pending_id is None:
-            if time.time() - start > 30:
-                logger.error("Timeout pending order.")
-                return False, "Timeout waiting for pending ID"
-            await asyncio.sleep(0.2)
-            if self.api.state.check_websocket_if_error:
-                return False, self.api.state.websocket_error_reason
 
-        # Loop exited normally — pending_id was set (success path).
-        # Only follow up when we actually have an id; if the loop was
-        # broken by disconnect the early returns above already handled it.
-        if self.api.pending_id is not None:
-            status_buy = True
-            # Subscribe to the instrument feed so candle/price updates
-            # keep flowing while we wait for the pending to fire. This
-            # used to (incorrectly) re-send the pending/create payload.
-            await self.api.instruments_follow(asset)
+        # Event-driven wait — the broker emits ``pending_confirmed``
+        # the instant ``s_pending/create`` arrives. The previous
+        # implementation polled ``self.api.pending_id`` every 200 ms
+        # for up to 30 s, adding a full poll cycle of jitter even
+        # when the ack came back in milliseconds.
+        try:
+            await self.api.event_registry.wait_event(
+                'pending_confirmed', timeout=confirm_timeout
+            )
+        except TimeoutError:
+            logger.error("Timeout pending order.")
+            return False, "Timeout waiting for pending ID"
 
-        return status_buy, self.api.pending_successful
+        if self.api.state.check_websocket_if_error:
+            return False, self.api.state.websocket_error_reason
+
+        if self.api.pending_id is None:
+            return False, "Pending order not confirmed"
+
+        # Subscribe to the instrument feed so candle/price updates
+        # keep flowing while we wait for the pending to fire. This
+        # used to (incorrectly) re-send the pending/create payload.
+        await self.api.instruments_follow(asset)
+        return True, self.api.pending_successful
 
     async def open_pending_at_price(
             self,
@@ -1266,22 +1280,28 @@ class Quotex(OptimizedQuotexMixin):
             return False, "API not initialized"
 
         self.api.pending_id = None
+        self.api.pending_successful = None
+        await self.api.event_registry.clear_event('pending_confirmed')
         await self.api.open_pending_at_price(
             amount, asset, direction, quote, period
         )
-        start = time.time()
-        while await self.check_connect() and self.api.pending_id is None:
-            if time.time() - start > timeout:
-                logger.error("Timeout pending order at price.")
-                return False, "Timeout waiting for pending ID"
-            await asyncio.sleep(0.2)
-            if self.api.state.check_websocket_if_error:
-                return False, self.api.state.websocket_error_reason
 
-        if self.api.pending_id is not None:
-            await self.api.instruments_follow(asset)
-            return True, self.api.pending_successful
-        return False, self.api.pending_successful
+        try:
+            await self.api.event_registry.wait_event(
+                'pending_confirmed', timeout=timeout
+            )
+        except TimeoutError:
+            logger.error("Timeout pending order at price.")
+            return False, "Timeout waiting for pending ID"
+
+        if self.api.state.check_websocket_if_error:
+            return False, self.api.state.websocket_error_reason
+
+        if self.api.pending_id is None:
+            return False, "Pending order not confirmed"
+
+        await self.api.instruments_follow(asset)
+        return True, self.api.pending_successful
 
     async def sell_option(
             self,

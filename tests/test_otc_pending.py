@@ -537,6 +537,28 @@ async def test_real_socket_io_frame_sequence_drives_bridge():
 
 
 # -----------------------------------------------------------------
+# v1.2.0 release-audit fixes (HIGH crash + MED stability)
+# -----------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_open_pending_rejects_zero_duration():
+    """Auto-schedule path computes ``min_open // duration`` — a zero
+    or negative ``duration`` would have raised ZeroDivisionError or
+    produced garbage. Caller must get a clean ValueError instead."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api.send_websocket_request = lambda d: _noop()
+
+    with pytest.raises(ValueError):
+        await api.open_pending(
+            amount=1, asset="EURUSD", direction="up", duration=0,
+        )
+    with pytest.raises(ValueError):
+        await api.open_pending(
+            amount=1, asset="EURUSD", direction="up", duration=-30,
+        )
+
+
+# -----------------------------------------------------------------
 # Existing instruments_follow regression test (unchanged)
 # -----------------------------------------------------------------
 

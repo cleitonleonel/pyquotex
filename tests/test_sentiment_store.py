@@ -62,6 +62,23 @@ def test_query_latest_returns_most_recent_in_asc_order():
     store.close()
 
 
+def test_store_write_after_close_is_silent_noop():
+    """A live SentimentMonitor task may briefly outlive its store
+    during shutdown. Writing to a closed store must be a logged
+    no-op rather than a sqlite ProgrammingError that tears down the
+    websocket consumer."""
+    store = SentimentStore(":memory:")
+    store.close()
+
+    # Both write and the read methods must handle the closed state.
+    store.write(SentimentSnapshot("X", 0.5, 0.5, 1.0))
+    assert store.query("X") == []
+    assert store.query_latest("X", limit=10) == []
+    assert store.assets() == []
+    # Idempotent close.
+    store.close()
+
+
 def test_correlation_via_store_uses_latest_window():
     store = SentimentStore(":memory:")
     # First 50 rows: A and B perfectly aligned (corr ≈ +1).
