@@ -1173,6 +1173,7 @@ class Quotex(OptimizedQuotexMixin):
         await self.api.open_pending(
             amount, asset, direction, duration, open_time_int
         )
+        status_buy = False
         start = time.time()
         while await self.check_connect() and self.api.pending_id is None:
             if time.time() - start > 30:

@@ -19,6 +19,7 @@ from .network.settings import Settings
 from .utils import json_utils as json
 from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
+from .utils.option_type import resolve_option_type
 from .utils.proxy_config import ProxyConfig
 from .utils.reconnect import ReconnectPolicy, ReconnectSupervisor
 from .utils.sentiment import SentimentMonitor
@@ -764,8 +765,6 @@ class QuotexAPI:
             open_time: int
     ) -> None:
         """Places a pending order to be executed at a specific future time."""
-        from .utils.option_type import resolve_option_type
-
         option_type = resolve_option_type(
             asset, duration, is_fast_option=False, is_pending=True
         )
