@@ -21,6 +21,7 @@ Welcome to the pyquotex documentation!
 - [Technical Aspects](10.%20Technical%20Aspects)
 - [Considerations and Warnings](11.%20Considerations%20and%20Warnings)
 - [Advanced Features](12.%20Advanced%20Features)
+- [Web API (REST + WebSocket, v1.4.0+)](13.%20Web%20API)
 
 ---
 

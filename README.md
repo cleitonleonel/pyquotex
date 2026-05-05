@@ -72,14 +72,15 @@ poetry add "pyquotex[fast] @ git+https://github.com/cleitonleonel/pyquotex.git"
 
 Outros extras opcionais:
 
-| Extra | Adiciona / Adds / Añade |
+| Extra | Adds |
 | --- | --- |
-| `fast` | `orjson` para parse JSON mais rápido |
-| `socks` | `httpx[socks]` para URLs `socks5://` |
-| `stealth` | `curl_cffi` para fingerprint TLS de navegador real (Chrome/Firefox) |
+| `fast` | `orjson` for faster JSON parsing |
+| `socks` | `httpx[socks]` for `socks5://` proxy URLs |
+| `stealth` | `curl_cffi` for browser-grade TLS fingerprints (Chrome/Firefox) |
+| `webapi` | `fastapi` + `uvicorn` for the bundled REST + WebSocket API server (v1.4.0+) |
 
 ```bash
-pip install 'pyquotex[fast,socks,stealth]'
+pip install 'pyquotex[fast,socks,stealth,webapi]'
 ```
 
 *Nota: No Termux (Android), recomendamos usar a instalação padrão sem `orjson` para evitar erros de compilação.*
@@ -187,8 +188,10 @@ Typical hot-asset numbers measured in the in-sandbox simulation:
 - [Advanced Features](docs/en/12.%20Advanced%20Features.md) — start here
 - [API Reference](docs/en/API_REFERENCE.md) — every public method's signature + behaviour
 - [Trading Operations](docs/en/3.%20Trading%20Operations.md) — buy / pending / result tracking
+- [Web API (REST + WebSocket, v1.4.0+)](docs/en/13.%20Web%20API.md) — `pip install pyquotex[webapi]`, then `python -m pyquotex.webapi` or `docker compose up`
 - [CHANGELOG](CHANGELOG.md) — version-by-version history
-- 🧪 [`examples/private_features.py`](examples/private_features.py) — end-to-end runnable demo
+- 🧪 [`examples/private_features.py`](examples/private_features.py) — end-to-end library demo
+- 🌐 [`examples/webapi_demo.py`](examples/webapi_demo.py) — REST + WebSocket client demo
 
 ---
 

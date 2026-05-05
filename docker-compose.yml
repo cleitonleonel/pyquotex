@@ -1,0 +1,36 @@
+# pyquotex web API — local dev / single-host deployment.
+#
+# Usage:
+#   1. Copy ``.env.example`` to ``.env`` (or just export the vars below).
+#   2. ``docker compose up --build``
+#   3. Browse http://localhost:8000/docs for the Swagger UI.
+#
+# All configuration is env-var driven; see pyquotex/webapi/config.py
+# for the full list and defaults.
+
+services:
+  webapi:
+    build: .
+    image: pyquotex-webapi:latest
+    container_name: pyquotex-webapi
+    restart: unless-stopped
+    ports:
+      - "${PYQUOTEX_PORT:-8000}:8000"
+    environment:
+      # Broker credentials — REQUIRED.
+      PYQUOTEX_EMAIL: "${PYQUOTEX_EMAIL:?PYQUOTEX_EMAIL is required}"
+      PYQUOTEX_PASSWORD: "${PYQUOTEX_PASSWORD:?PYQUOTEX_PASSWORD is required}"
+      # Web-API auth — REQUIRED. Anyone with this key can place trades.
+      PYQUOTEX_API_KEY: "${PYQUOTEX_API_KEY:?PYQUOTEX_API_KEY is required}"
+      # Optional knobs.
+      PYQUOTEX_ACCOUNT_MODE: "${PYQUOTEX_ACCOUNT_MODE:-PRACTICE}"
+      PYQUOTEX_LANG: "${PYQUOTEX_LANG:-en}"
+      PYQUOTEX_CORS_ORIGINS: "${PYQUOTEX_CORS_ORIGINS:-*}"
+      PYQUOTEX_RESULT_POLL_TIMEOUT: "${PYQUOTEX_RESULT_POLL_TIMEOUT:-90}"
+      PYQUOTEX_RELAY_POLL_INTERVAL: "${PYQUOTEX_RELAY_POLL_INTERVAL:-0.1}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
