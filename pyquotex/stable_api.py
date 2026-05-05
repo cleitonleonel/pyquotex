@@ -1209,18 +1209,27 @@ class Quotex(OptimizedQuotexMixin):
         self.api.pending_successful = None
         await self.api.event_registry.clear_event('pending_confirmed')
 
-        # Always compute the ISO string. Skipping this branch when
-        # ``open_time`` was None used to leak through to the lower
-        # layer's auto-schedule fallback, which (in older versions)
-        # produced an integer the broker rejects. Computing it here
-        # also lets us factor in the user's timezone offset so the
-        # auto-scheduled UTC string is correctly aligned to their
-        # local minute boundary.
-        user_settings = await self.get_profile()
-        offset_zone = user_settings.offset if user_settings else 0
-        open_time_iso = expiration.get_next_timeframe(
-            int(time.time()), offset_zone, duration, open_time
-        )
+        # Decide what to forward as ``open_time``:
+        #   * an ISO 8601 string (caller already wire-ready)
+        #     → pass straight through unchanged.
+        #   * a ``"DD/MM HH:MM"`` user-local string
+        #     → normalise via ``get_next_timeframe`` using the user's
+        #       profile UTC offset.
+        #   * ``None``
+        #     → also normalise via ``get_next_timeframe`` so the auto-
+        #       schedule lands on the next user-local minute boundary
+        #       converted to UTC. (Skipping this branch when
+        #       ``open_time`` was None used to leak through to the
+        #       lower layer's UTC-only auto-schedule, which ignored
+        #       the user's local clock entirely.)
+        if isinstance(open_time, str) and ("T" in open_time or "Z" in open_time):
+            open_time_iso = open_time
+        else:
+            user_settings = await self.get_profile()
+            offset_zone = user_settings.offset if user_settings else 0
+            open_time_iso = expiration.get_next_timeframe(
+                int(time.time()), offset_zone, duration, open_time
+            )
         await self.api.open_pending(
             amount, asset, direction, duration, open_time_iso
         )
