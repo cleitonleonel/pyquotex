@@ -1173,6 +1173,7 @@ class Quotex(OptimizedQuotexMixin):
         await self.api.open_pending(
             amount, asset, direction, duration, open_time_int
         )
+        status_buy = False
         start = time.time()
         while await self.check_connect() and self.api.pending_id is None:
             if time.time() - start > 30:
@@ -1187,9 +1188,10 @@ class Quotex(OptimizedQuotexMixin):
         # broken by disconnect the early returns above already handled it.
         if self.api.pending_id is not None:
             status_buy = True
-            await self.api.instruments_follow(
-                amount, asset, direction, duration, open_time_int
-            )
+            # Subscribe to the instrument feed so candle/price updates
+            # keep flowing while we wait for the pending to fire. This
+            # used to (incorrectly) re-send the pending/create payload.
+            await self.api.instruments_follow(asset)
 
         return status_buy, self.api.pending_successful
 
