@@ -428,7 +428,19 @@ class QuotexAPI:
                             and isinstance(data, dict)
                     ):
                         if 'pending' in self._temp_status:
-                            self.pending_id = data.get("id")
+                            # The ``s_pending/create`` payload wraps
+                            # the ticket under ``{"pending": {...}}``;
+                            # there's no top-level ``id`` field, which
+                            # is why ``data.get("id")`` used to leave
+                            # ``pending_id`` permanently None and the
+                            # caller's poll loop always timed out.
+                            pending_obj = data.get("pending")
+                            if not isinstance(pending_obj, dict):
+                                pending_obj = data
+                            self.pending_id = (
+                                pending_obj.get("ticket")
+                                or pending_obj.get("id")
+                            )
                             self.pending_successful = True
                             await self.event_registry.set_event(
                                 'pending_confirmed', data
@@ -781,47 +793,78 @@ class QuotexAPI:
             asset: str,
             direction: str,
             duration: int,
-            open_time: int | str | None = None,
+            open_time: str | None = None,
     ) -> None:
         """Place a time-based pending order.
 
-        Wire shape captured from the Quotex web client (verified via
-        the live ``app.js`` socket emit)::
+        Wire shape verified by live capture against
+        ``ws2.qxbroker.com``::
 
             {
-              "asset": "EURUSD_OTC",
-              "amount": 1,
-              "time": 60,
-              "action": "up",
-              "isDemo": true,
-              "tournamentId": null,
-              "requestId": 1746450000
+              "openType": 0,
+              "asset": "AUDNZD_otc",
+              "openTime": "2026-05-05T14:03:00.000Z",
+              "timeframe": 60,
+              "command": 0,
+              "amount": 1.0
             }
 
-        Notable departures from the previous implementation:
+        Server confirms with ``s_pending/create`` carrying a
+        ``ticket`` UUID under the ``"pending"`` key.
 
-        * ``optionType`` is **not** in the wire payload — the broker
-          rejected pending orders that included it. Removed.
-        * ``isDemo`` is a JSON boolean (``true``/``false``), not an
-          integer.
-        * ``tournamentId`` defaults to ``null``, not ``0``.
-        * ``openTime`` is optional. The basic web-client capture omits
-          it entirely; we only include it if the caller passes a
-          non-``None`` value (e.g. for explicit future scheduling).
+        The previous capture (``action`` / ``time`` / ``isDemo`` /
+        ``tournamentId`` / ``requestId``) turned out to belong to a
+        different broker version or modal; the live ``ws2`` server
+        rejects that shape. This shape is the one that actually
+        produces an accepted ``s_pending/create`` response.
+
+        Notes on the fields:
+
+        * ``openType`` — ``0`` means the time-scheduled flavour. The
+          quote-triggered variant uses ``1``.
+        * ``command`` — ``0`` for *up* / *call*, ``1`` for *down* /
+          *put*. Replaces the old string ``action`` field.
+        * ``timeframe`` — duration of the resulting trade in seconds.
+          Replaces the old ``time`` field.
+        * ``openTime`` — **must** be an ISO 8601 UTC string with the
+          ``YYYY-MM-DDTHH:MM:SS.000Z`` format. Integers (any value)
+          are rejected with ``{"error": "open_time_min"}``. When
+          ``open_time`` is ``None``, this method auto-schedules to
+          the next ``duration`` boundary at least 90 s ahead.
+
+        Args:
+            amount: Investment amount.
+            asset: Trading pair (``"EURUSD_otc"``, ``"AUDNZD_otc"``…).
+            direction: ``"up"`` / ``"call"`` or ``"down"`` / ``"put"``.
+            duration: Resulting trade duration in seconds.
+            open_time: Explicit ISO 8601 UTC string for the schedule
+                window. ``None`` → auto-schedule.
         """
-        is_demo = bool(self.account_type == AccountType.DEMO)
+        from datetime import datetime, timezone
+
+        command = 1 if direction in ("down", "put") else 0
+
+        if open_time is None:
+            # Auto-schedule: next ``duration`` boundary at least 90 s
+            # ahead, expressed as a UTC ISO string.
+            now = int(time.time())
+            min_open = now + 90
+            ts = ((min_open // duration) + 1) * duration
+            open_time_iso = datetime.fromtimestamp(
+                ts, tz=timezone.utc
+            ).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        else:
+            open_time_iso = open_time
+
         payload: dict[str, Any] = {
+            "openType": 0,
             "asset": asset,
-            "amount": amount,
-            "time": duration,
-            "action": direction,
-            "isDemo": is_demo,
-            "tournamentId": self.tournament_id or None,
-            "requestId": int(time.time()),
+            "openTime": open_time_iso,
+            "timeframe": int(duration),
+            "command": command,
+            "amount": float(amount),
         }
-        if open_time is not None:
-            payload["openTime"] = open_time
-        data = f'42["pending/create", {json.dumps_str(payload)}]'
+        data = f'42["pending/create",{json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def open_pending_at_price(
@@ -834,32 +877,36 @@ class QuotexAPI:
     ) -> None:
         """Place a quote-triggered pending order.
 
-        The order fires when the asset's price reaches ``quote``. The
-        wire shape captured from the Quotex web client::
+        Quote-mode pending fires when the asset price hits ``quote``.
+        Wire shape mirrors :meth:`open_pending` but with
+        ``openType=1``, ``quote`` (instead of ``openTime``), and
+        ``period`` (instead of ``timeframe``)::
 
             {
-              "asset": "EURUSD_OTC",
-              "amount": 1,
+              "openType": 1,
+              "asset": "EURUSD_otc",
               "quote": 184.379,
               "period": "M1",
-              "action": "up"
+              "command": 0,
+              "amount": 1.0
             }
 
-        ``period`` is the chart period code: ``"M1"`` (1 min),
-        ``"M5"`` (5 min), ``"M15"`` (15 min), ``"H1"`` (1 hour), etc.
+        .. note::
+            The exact wire shape for quote-mode has not yet been
+            verified end-to-end against the broker (only time-mode
+            has). The mapping follows the time-mode pattern with
+            field substitutions captured from the web-client modal.
         """
-        is_demo = bool(self.account_type == AccountType.DEMO)
+        command = 1 if direction in ("down", "put") else 0
         payload: dict[str, Any] = {
+            "openType": 1,
             "asset": asset,
-            "amount": amount,
             "quote": float(quote),
             "period": period,
-            "action": direction,
-            "isDemo": is_demo,
-            "tournamentId": self.tournament_id or None,
-            "requestId": int(time.time()),
+            "command": command,
+            "amount": float(amount),
         }
-        data = f'42["pending/create", {json.dumps_str(payload)}]'
+        data = f'42["pending/create",{json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
 
     async def instruments_follow(self, asset: str) -> None:
