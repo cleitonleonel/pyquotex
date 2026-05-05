@@ -20,8 +20,11 @@ Bem-vindo à documentação do pyquotex!
 - [Exemplos Básicos](9.%20Exemplos%20Básicos)
 - [Aspectos Técnicos](10.%20Aspectos%20Técnicos)
 - [Considerações e Avisos](11.%20Considerações%20e%20Advertências)
-- [Recursos Avançados](12.%20Recursos%20Avançados)
 
 ---
+
+> **Nota sobre os recursos avançados (v1.2+):** Multilogin, proxy/DNS,
+> sentimento avançado, auto-reconexão, ordens pendentes etc. estão
+> documentados apenas em inglês em [Advanced Features](../en/12.%20Advanced%20Features).
 
 pyquotex é uma biblioteca Python projetada para integrar com a API da Quotex, permitindo operações automatizadas com facilidade.
