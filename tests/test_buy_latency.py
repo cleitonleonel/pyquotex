@@ -249,6 +249,42 @@ async def test_start_candles_stream_caches_subscriptions():
 
 
 @pytest.mark.asyncio
+async def test_open_pending_passes_iso_open_time_through_unchanged():
+    """Caller-supplied ISO 8601 strings are wire-ready and must skip
+    the user-local timezone normalisation. Before the fix the wrapper
+    fed any non-None ``open_time`` through ``get_next_timeframe``,
+    which only knows ``"DD/MM HH:MM"`` and explodes on ISO input."""
+    sent: list[str] = []
+    client = _build_client(sent)
+
+    async def fake_profile():
+        return SimpleNamespace(offset=0)
+    client.get_profile = fake_profile  # type: ignore[assignment]
+
+    async def deliver_create_ack() -> None:
+        await asyncio.sleep(0.005)
+        client.api.pending_id = "ticket-iso"
+        client.api.pending_successful = True
+        await client.api.event_registry.set_event(
+            'pending_confirmed', {"pending": {"ticket": "ticket-iso"}}
+        )
+
+    asyncio.create_task(deliver_create_ack())
+    ok, _ = await client.open_pending(
+        amount=1, asset="EURUSD_otc", direction="call", duration=60,
+        open_time="2026-05-05T15:01:00.000Z",   # already ISO
+        confirm_timeout=2.0,
+    )
+    assert ok is True
+
+    pending_frame = next(f for f in sent if "pending/create" in f)
+    payload = json.loads(pending_frame[2:])[1]
+    assert payload["openTime"] == "2026-05-05T15:01:00.000Z", (
+        "ISO string must reach the wire unchanged"
+    )
+
+
+@pytest.mark.asyncio
 async def test_open_pending_is_event_driven():
     """``Quotex.open_pending`` must wake within milliseconds of the
     broker's ``s_pending/create`` (delivered as the
