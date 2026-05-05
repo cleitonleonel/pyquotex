@@ -110,7 +110,7 @@ async def test_open_pending_matches_verified_wire_spec():
         "asset": "AUDNZD_otc",
         "openTime": "2026-05-05T14:03:00.000Z",
         "timeframe": 60,
-        "command": 0,            # 0 = up
+        "command": "call",       # string, not int — server stores int as null
         "amount": 1.0,           # float, not int
     }
 
@@ -129,7 +129,10 @@ async def test_open_pending_command_down_for_put_direction():
             open_time="2026-05-05T14:03:00.000Z",
         )
         _, payload = _decode(sent[0])
-        assert payload["command"] == 1, f"{direction!r} → command must be 1"
+        assert payload["command"] == "put", (
+            f"{direction!r} → command must be 'put' (string), "
+            f"got {payload['command']!r}"
+        )
 
 
 @pytest.mark.asyncio
@@ -146,7 +149,10 @@ async def test_open_pending_command_up_for_call_direction():
             open_time="2026-05-05T14:03:00.000Z",
         )
         _, payload = _decode(sent[0])
-        assert payload["command"] == 0, f"{direction!r} → command must be 0"
+        assert payload["command"] == "call", (
+            f"{direction!r} → command must be 'call' (string), "
+            f"got {payload['command']!r}"
+        )
 
 
 @pytest.mark.asyncio
@@ -212,7 +218,7 @@ async def test_open_pending_at_price_quote_payload():
         "asset": "EURUSD_otc",
         "quote": 184.379,
         "period": "M5",
-        "command": 0,
+        "command": "call",        # string, matches time-mode convention
         "amount": 1.0,
     }
 
@@ -254,6 +260,136 @@ def test_pending_id_falls_back_to_id_for_flat_responses():
         pending_obj = flat
     pending_id = pending_obj.get("ticket") or pending_obj.get("id")
     assert pending_id == "abc123"
+
+
+# -----------------------------------------------------------------
+# Bug 4 — pending lifecycle bridge (active_pending + ticket_map)
+# -----------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_active_pending_populated_on_s_pending_create():
+    """When ``s_pending/create`` arrives, the ticket→asset mapping must
+    land in ``_active_pending`` so the later pending/opened lifecycle
+    handler can correlate the executed-trade UUID."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._temp_status = '451-["s_pending/create",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "pending": {
+            "ticket": "ticket-abc",
+            "asset": "EURUSD_otc",
+            "openType": 0,
+        }
+    })
+    await api._on_message(raw)
+    assert api.pending_id == "ticket-abc"
+    assert api._active_pending == {"ticket-abc": "EURUSD_otc"}
+
+
+@pytest.mark.asyncio
+async def test_pending_pre_fire_does_not_resolve_check_win():
+    """``f_pending/opened`` with ``error=None`` is a pre-fire
+    notification (NOT a hard rejection). It must not fire the
+    ``order_closed_<ticket>`` event or set listinfodata to loss."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {"ticket-abc": "EURUSD_otc"}
+
+    api._temp_status = '451-["f_pending/opened",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": "exec-123",
+        "asset": "EURUSD_otc",
+        "ticket": "ticket-abc",
+        "error": None,        # ← pre-fire, NOT a rejection
+    })
+    await api._on_message(raw)
+
+    # The bridge must NOT have flipped this to loss / closed.
+    assert api.listinfodata.get("ticket-abc") in (None, {}) or \
+        api.listinfodata.get("ticket-abc").get("game_state") != 1
+    assert api._active_pending.get("ticket-abc") == "EURUSD_otc"
+
+
+@pytest.mark.asyncio
+async def test_pending_hard_fail_resolves_as_loss():
+    """``f_pending/opened`` with a non-None ``error`` is a hard
+    rejection — resolve the pending ticket as a zero-profit loss
+    immediately so the caller's ``check_win`` returns instead of
+    blocking."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {"ticket-abc": "EURUSD_otc"}
+
+    api._temp_status = '451-["f_pending/opened",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": "exec-123",
+        "asset": "EURUSD_otc",
+        "ticket": "ticket-abc",
+        "error": 9,           # ← hard fail
+    })
+    await api._on_message(raw)
+
+    info = api.listinfodata.get("ticket-abc")
+    assert info is not None
+    assert info.get("win") == "loss"
+    assert info.get("game_state") == 1
+    # Active pending entry consumed.
+    assert "ticket-abc" not in api._active_pending
+
+
+@pytest.mark.asyncio
+async def test_pending_success_records_ticket_to_executed_id():
+    """``s_pending/opened`` (the success notification) records the
+    ticket → executed-trade UUID mapping so a later close on the
+    executed trade can be mirrored back to the pending ticket."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {"ticket-abc": "EURUSD_otc"}
+
+    api._temp_status = '451-["s_pending/opened",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": "exec-456",
+        "asset": "EURUSD_otc",
+        "ticket": "ticket-abc",
+    })
+    await api._on_message(raw)
+
+    assert api.pending_ticket_map == {"ticket-abc": "exec-456"}
+    assert "ticket-abc" not in api._active_pending
+
+
+@pytest.mark.asyncio
+async def test_pending_close_mirrors_to_pending_ticket():
+    """When the executed trade closes, the close event + listinfodata
+    update must be mirrored back to the original pending ticket so
+    ``check_win(pending_id)`` returns the actual win/loss + profit."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api.pending_ticket_map = {"ticket-abc": "exec-456"}
+
+    closed_event_payload: dict[str, Any] = {}
+
+    async def grab_event(payload):
+        closed_event_payload.update(payload or {})
+
+    # Subscribe to the pending-ticket close event so we can verify it fires.
+    listener_event = await api.event_registry.get_event(
+        "order_closed_ticket-abc"
+    )
+
+    api._temp_status = '451-["s_orders/closed",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": "exec-456",
+        "asset": "EURUSD_otc",
+        "profit": 0.93,
+        "status": "closed",
+    })
+    await api._on_message(raw)
+
+    info = api.listinfodata.get("ticket-abc")
+    assert info is not None
+    assert info.get("win") == "win"
+    assert info.get("game_state") == 1
+    assert info.get("profit") == 0.93
+    # The ticket → executed mapping is consumed once mirrored.
+    assert "ticket-abc" not in api.pending_ticket_map
+    # And the event is set so wait_for_order_close('ticket-abc') wakes.
+    assert listener_event.is_set()
 
 
 # -----------------------------------------------------------------
