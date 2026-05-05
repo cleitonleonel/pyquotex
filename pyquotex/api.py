@@ -412,6 +412,17 @@ class QuotexAPI:
                                 win, game_state, str(order_id), profit
                             )
 
+                            # When the order has closed, wake any
+                            # check_win() / wait_for_order_close() that
+                            # is awaiting this id. The other ``order``
+                            # message format already fires this event
+                            # in the explicit branch above; we mirror
+                            # it here so both protocols are covered.
+                            if is_closed:
+                                await self.event_registry.set_event(
+                                    f'order_closed_{order_id}', order
+                                )
+
                     # Always set buy_confirmed if it was an open request
                     if (
                             any(x in self._temp_status for x in ['orders/open', 'pending/create'])
@@ -503,14 +514,23 @@ class QuotexAPI:
                     )
                     self.timesync.server_timestamp = ts  # Sync server clock
 
-                    # Limit realtime_price history to 1000 entries 
+                    # Limit realtime_price history to 1000 entries
                     # to prevent memory bloat
                     price_list = self.realtime_price[asset]
+                    is_first_tick = len(price_list) == 0
                     price_list.append({"time": ts, "price": price})
                     if len(price_list) > 1000:
                         price_list.pop(0)
 
                     self.realtime_candles[asset] = message[0]
+
+                    # Fire a per-asset readiness event the first time a
+                    # price arrives so ``start_realtime_price`` can wait
+                    # event-driven instead of polling every 200ms.
+                    if is_first_tick:
+                        await self.event_registry.set_event(
+                            f'price_ready_{asset}', message[0]
+                        )
 
         except Exception as e:
             logger.error("Error in _on_message: %s", e)

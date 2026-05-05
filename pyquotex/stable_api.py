@@ -116,6 +116,11 @@ class Quotex(OptimizedQuotexMixin):
         self.subscribe_candle: list[str] = []
         self.subscribe_candle_all_size: list[str] = []
         self.subscribe_mood: list[str] = []
+        # Cache of (asset, period) tuples already subscribed to a candle
+        # stream — short-circuits start_candles_stream() so repeated buys
+        # on the same asset don't re-issue the 3 subscribe WS frames.
+        # Cleared on reconnect by ReconnectSupervisor.on_reconnect().
+        self._subscribed_assets: set[str] = set()
         self.account_is_demo: int = AccountType.DEMO
         self.suspend: float = 0.2
         self.codes_asset: dict[str, str] = {}
@@ -633,6 +638,16 @@ class Quotex(OptimizedQuotexMixin):
             self.session_data = {}
             return False, "Websocket connection rejected."
 
+        # Drop the subscribe-cache after reconnect so the next
+        # start_candles_stream re-issues the subscribe frames against
+        # the fresh socket. ReconnectSupervisor already replays
+        # subscribe_candle/all_size/mood; this just resets our local
+        # short-circuit set.
+        if self.api.reconnect_supervisor is not None:
+            self.api.reconnect_supervisor.on_reconnect(
+                self._subscribed_assets.clear
+            )
+
         return check, reason
 
     async def reconnect(self) -> None:
@@ -1102,9 +1117,17 @@ class Quotex(OptimizedQuotexMixin):
             asset: str,
             direction: str,
             duration: int,
-            time_mode: str = "TIME"
+            time_mode: str = "TIME",
+            confirm_timeout: float = 10.0,
     ) -> tuple[bool, Any]:
-        """Buy Binary option"""
+        """Buy Binary option.
+
+        Args:
+            confirm_timeout: How long to wait for the broker's
+                ``buy_confirmed`` ack. The WS round-trip is normally
+                <1 s; we cap at 10 s so a silent failure surfaces fast
+                instead of blocking for ``duration + 5`` seconds.
+        """
         if self.api is None:
             return False, "API not initialized"
 
@@ -1117,21 +1140,26 @@ class Quotex(OptimizedQuotexMixin):
         # race with WS response
         await self.api.event_registry.clear_event('buy_confirmed')
 
-        # Ensure price data is arriving and server is synced
+        # Ensure price stream is live before placing the order. The
+        # previous implementation also called ``settings_apply`` and
+        # ``get_server_time`` here, but:
+        #   * ``Buy.__call__`` issues ``settings_apply`` itself with
+        #     the correctly-resolved expiration + ``end_time``, so a
+        #     duplicate from this layer was wasted bandwidth.
+        #   * ``get_server_time`` was an HTTP round-trip whose only
+        #     side effect was setting ``timesync.server_timestamp``,
+        #     which is already updated by every price tick — pure
+        #     overhead, removed.
         await self.start_realtime_price(asset, duration)
-        await self.get_server_time()
-        await self.api.settings_apply(asset, duration, is_fast_option)
 
         await self.api.buy(
             amount, asset, direction, duration, request_id, is_fast_option
         )
 
-        timeout = duration + 5 if duration else 30
-
         try:
             # Wait for WebSocket event signaling buy confirmation
             event_data = await self.api.event_registry.wait_event(
-                'buy_confirmed', timeout=timeout
+                'buy_confirmed', timeout=confirm_timeout
             )
         except TimeoutError as e:
             logger.error(str(e))
@@ -1286,37 +1314,83 @@ class Quotex(OptimizedQuotexMixin):
             await asyncio.sleep(1)
 
     async def check_win(
-            self, order_id: str | int, duration: int = 0
+            self,
+            order_id: str | int,
+            duration: int = 0,
+            timeout: float | None = None,
     ) -> tuple[str, float]:
-        """Checks if a trade operation resulted in a win based on its ID."""
+        """Block until ``order_id`` closes; return ``(win|loss, profit)``.
+
+        Event-driven: awaits the ``order_closed_{order_id}`` registry
+        event fired by :meth:`QuotexAPI._on_message` the moment the
+        broker emits the close payload. The previous implementation
+        polled :class:`ListInfoData` every 200ms and added up to a full
+        poll cycle of jitter to every result.
+
+        Args:
+            order_id: Order id returned by :meth:`buy`.
+            duration: Option duration in seconds — used to size the
+                default timeout (``duration + 30s``).
+            timeout: Optional explicit deadline in seconds. Defaults to
+                ``duration + 30`` if ``duration`` is set, else ``300``.
+        """
         if self.api is None:
             return "loss", 0.0
 
-        start_time = time.time()
-        while await self.check_connect():
-            # Safety timeout after 5 minutes
-            if time.time() - start_time > 300:
-                break
+        # Fast path: result might already be cached if we got here
+        # right after the close arrived on the WS.
+        data = self.api.listinfodata.get(order_id)
+        if data and data.get("game_state") == 1:
+            self.api.listinfodata.delete(order_id)
+            return (
+                data.get("win", "loss"), float(data.get("profit", 0))
+            )
 
-            data_dict = self.api.listinfodata.get(order_id)
-            if data_dict and data_dict.get("game_state") == 1:
-                self.api.listinfodata.delete(order_id)
-                win = data_dict.get("win", "loss")
-                profit = float(data_dict.get("profit", 0))
-                return win, profit
-            await asyncio.sleep(0.2)
+        deadline = timeout if timeout is not None else (
+            duration + 30 if duration else 300
+        )
+        try:
+            await self.api.event_registry.wait_event(
+                f'order_closed_{order_id}', timeout=deadline
+            )
+        except TimeoutError:
+            return "loss", 0.0
 
-        return "loss", 0.0
+        data = self.api.listinfodata.get(order_id) or {}
+        self.api.listinfodata.delete(order_id)
+        return data.get("win", "loss"), float(data.get("profit", 0))
+
+    async def wait_for_order_close(
+            self,
+            order_id: str | int,
+            duration: int = 0,
+            timeout: float | None = None,
+    ) -> tuple[str, float]:
+        """Public alias for :meth:`check_win` — semantically clearer
+        for callers that aren't guessing at win/loss."""
+        return await self.check_win(order_id, duration=duration, timeout=timeout)
 
     async def start_candles_stream(
             self, asset: str = "EURUSD", period: int = 0
     ) -> None:
-        """Start streaming candle data for a specified asset."""
-        if self.api:
+        """Start streaming candle data for a specified asset.
+
+        Idempotent: short-circuits when ``(asset, period)`` is already
+        in :attr:`_subscribed_assets`. The cache is cleared on
+        reconnect so the next call after a drop re-issues the
+        subscribes against the fresh socket.
+        """
+        if not self.api:
+            return
+        key = f"{asset},{period}"
+        if key in self._subscribed_assets:
             self.api.current_asset = asset
-            await self.api.subscribe_realtime_candle(asset, period)
-            await self.api.chart_notification(asset)
-            await self.api.follow_candle(asset)
+            return
+        self.api.current_asset = asset
+        await self.api.subscribe_realtime_candle(asset, period)
+        await self.api.chart_notification(asset)
+        await self.api.follow_candle(asset)
+        self._subscribed_assets.add(key)
 
     async def store_settings_apply(
             self,
@@ -1395,20 +1469,32 @@ class Quotex(OptimizedQuotexMixin):
             period: int = 0,
             timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
-        """Starts following real-time price for an asset."""
+        """Start following real-time price for an asset.
+
+        Event-driven: awaits the ``price_ready_{asset}`` registry event
+        fired by :meth:`QuotexAPI._on_message` the first time a price
+        tick lands. The previous implementation polled every 200ms,
+        adding up to a full poll cycle of jitter even when the tick
+        had already arrived.
+        """
         if self.api is None:
             raise RuntimeError("API not initialized")
 
         await self.start_candles_stream(asset, period)
-        start = time.time()
-        while True:
-            if self.api.realtime_price.get(asset):
-                return self.api.realtime_price
-            if time.time() - start > timeout:
-                raise TimeoutError(
-                    f"Timeout waiting for realtime price data for {asset}."
-                )
-            await asyncio.sleep(0.2)
+
+        # Fast path: data is already cached for this asset.
+        if self.api.realtime_price.get(asset):
+            return self.api.realtime_price
+
+        try:
+            await self.api.event_registry.wait_event(
+                f'price_ready_{asset}', timeout=timeout
+            )
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"Timeout waiting for realtime price data for {asset}."
+            ) from exc
+        return self.api.realtime_price
 
     async def start_realtime_sentiment(
             self,
