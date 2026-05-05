@@ -19,7 +19,6 @@ from .network.settings import Settings
 from .utils import json_utils as json
 from .utils.account_type import AccountType
 from .utils.async_utils import EventRegistry
-from .utils.option_type import resolve_option_type
 from .utils.proxy_config import ProxyConfig
 from .utils.reconnect import ReconnectPolicy, ReconnectSupervisor
 from .utils.sentiment import SentimentMonitor
@@ -782,22 +781,83 @@ class QuotexAPI:
             asset: str,
             direction: str,
             duration: int,
-            open_time: int
+            open_time: int | str | None = None,
     ) -> None:
-        """Places a pending order to be executed at a specific future time."""
-        option_type = resolve_option_type(
-            asset, duration, is_fast_option=False, is_pending=True
-        )
-        payload = {
+        """Place a time-based pending order.
+
+        Wire shape captured from the Quotex web client (verified via
+        the live ``app.js`` socket emit)::
+
+            {
+              "asset": "EURUSD_OTC",
+              "amount": 1,
+              "time": 60,
+              "action": "up",
+              "isDemo": true,
+              "tournamentId": null,
+              "requestId": 1746450000
+            }
+
+        Notable departures from the previous implementation:
+
+        * ``optionType`` is **not** in the wire payload — the broker
+          rejected pending orders that included it. Removed.
+        * ``isDemo`` is a JSON boolean (``true``/``false``), not an
+          integer.
+        * ``tournamentId`` defaults to ``null``, not ``0``.
+        * ``openTime`` is optional. The basic web-client capture omits
+          it entirely; we only include it if the caller passes a
+          non-``None`` value (e.g. for explicit future scheduling).
+        """
+        is_demo = bool(self.account_type == AccountType.DEMO)
+        payload: dict[str, Any] = {
             "asset": asset,
             "amount": amount,
-            "action": direction,
             "time": duration,
-            "openTime": open_time,
-            "optionType": int(option_type),
-            "isDemo": int(self.account_type) if self.account_type is not None else AccountType.DEMO,
-            "tournamentId": self.tournament_id,
-            "requestId": int(time.time())
+            "action": direction,
+            "isDemo": is_demo,
+            "tournamentId": self.tournament_id or None,
+            "requestId": int(time.time()),
+        }
+        if open_time is not None:
+            payload["openTime"] = open_time
+        data = f'42["pending/create", {json.dumps_str(payload)}]'
+        await self.send_websocket_request(data)
+
+    async def open_pending_at_price(
+            self,
+            amount: float | int,
+            asset: str,
+            direction: str,
+            quote: float,
+            period: str = "M1",
+    ) -> None:
+        """Place a quote-triggered pending order.
+
+        The order fires when the asset's price reaches ``quote``. The
+        wire shape captured from the Quotex web client::
+
+            {
+              "asset": "EURUSD_OTC",
+              "amount": 1,
+              "quote": 184.379,
+              "period": "M1",
+              "action": "up"
+            }
+
+        ``period`` is the chart period code: ``"M1"`` (1 min),
+        ``"M5"`` (5 min), ``"M15"`` (15 min), ``"H1"`` (1 hour), etc.
+        """
+        is_demo = bool(self.account_type == AccountType.DEMO)
+        payload: dict[str, Any] = {
+            "asset": asset,
+            "amount": amount,
+            "quote": float(quote),
+            "period": period,
+            "action": direction,
+            "isDemo": is_demo,
+            "tournamentId": self.tournament_id or None,
+            "requestId": int(time.time()),
         }
         data = f'42["pending/create", {json.dumps_str(payload)}]'
         await self.send_websocket_request(data)
