@@ -47,3 +47,8 @@ browser/
 
 .venv/
 scripts/
+# Local artifacts
+sentiment.db
+*.db
+session.json
+settings/config.ini
