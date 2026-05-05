@@ -4,6 +4,61 @@ All notable changes to **pyquotex** are documented in this file. Format follows
 the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) convention; the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-05-05
+
+Bundled REST + WebSocket API server. Single-tenant: one shared
+`Quotex` client lives for the lifetime of the FastAPI app and serves
+every request. Optional install via `pip install pyquotex[webapi]` —
+the core library has no FastAPI dependency.
+
+### Added
+
+- **`pyquotex.webapi`** — a complete FastAPI application:
+  - 9 REST endpoints — `POST /auth/connect`, `GET /account/balance`,
+    `GET /account/profile`, `GET /market/candles`,
+    `GET /market/historical-candles`, `GET /market/sentiment/{asset}`,
+    `POST /trades/buy`, `POST /trades/pending`,
+    `POST /trades/pending-at-price`, `GET /trades/{id}/result`,
+    `DELETE /trades/{id}`.
+  - 2 WebSocket relays — `WS /stream/prices?asset=…` and
+    `WS /stream/sentiment?asset=…`. A single broker subscription is
+    multiplexed across all WS clients listening to the same asset;
+    backpressure handled per-subscriber (oldest-tick-dropped on full
+    queue).
+  - Public `GET /health` (no auth) for readiness probes — reports
+    broker connection state, auth status, reconnect stats, and
+    in-flight pending count.
+  - `GET /docs` — Swagger UI; `GET /openapi.json` — schema.
+  - Bearer-token auth via `X-API-Key` header, `Authorization: Bearer
+    …`, or query string (`?api_key=…`) on WS upgrades. **Refuses to
+    start without `PYQUOTEX_API_KEY`.**
+  - All configuration env-var driven (see `pyquotex/webapi/config.py`).
+- **Entrypoint** — `python -m pyquotex.webapi`.
+- **`Dockerfile`** — multi-stage non-root image with built-in
+  `HEALTHCHECK` against `/health`.
+- **`docker-compose.yml`** — single-service deployment; the broker
+  credentials and API key come from env or a `.env` file.
+- **`docs/en/13. Web API.md`** — endpoint reference, install + run
+  instructions, configuration matrix, operational notes, curl + Python
+  client snippets.
+- **`examples/webapi_demo.py`** — end-to-end runnable demo (REST +
+  WebSocket via `httpx` + `websockets`).
+- New optional extra `pyquotex[webapi]` (FastAPI + uvicorn[standard] +
+  pydantic).
+
+### Tests
+
+- `tests/test_webapi/` — 28 tests using `app.dependency_overrides` to
+  inject a fully mocked Quotex client; covers auth (header + bearer +
+  query-string), all REST endpoints (success / validation / broker-
+  error mapping), the WebSocket relay (key check, initial deltas, mid-
+  stream broadcasts, sentiment shape).
+- Full unit + webapi suite: **166 / 166 green** (138 prior + 28 new).
+
+### Backward compatibility
+
+100 % additive. No public-API changes to the core library.
+
 ## [1.3.0] — 2026-05-05
 
 A focused robustness + speed audit on top of v1.2.1. Nine fixes; 12 new
