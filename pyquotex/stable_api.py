@@ -1187,23 +1187,30 @@ class Quotex(OptimizedQuotexMixin):
     ) -> tuple[bool, Any]:
         """Place a time-based pending order.
 
-        ``open_time`` is optional. When omitted the order is created
-        with the basic wire shape used by the Quotex web client (no
-        ``openTime`` field). When supplied as a ``"DD/MM HH:MM"`` (or
-        ``"YYYY/DD/MM HH:MM:SS"``) string, it is normalised to the ISO
-        timestamp the broker expects and included in the payload.
+        ``open_time`` may be ``None`` (auto-schedule to the next
+        ``duration`` boundary) or a ``"DD/MM HH:MM"`` /
+        ``"YYYY/DD/MM HH:MM:SS"`` string in the user's local time.
+        Either way the value is converted to a UTC ISO 8601 string
+        before reaching the wire — the broker rejects raw integers
+        with ``{"error": "open_time_min"}`` regardless of how far
+        ahead they point.
         """
         if self.api is None:
             return False, "API not initialized"
 
         self.api.pending_id = None
-        open_time_iso: str | None = None
-        if open_time is not None:
-            user_settings = await self.get_profile()
-            offset_zone = user_settings.offset if user_settings else 0
-            open_time_iso = expiration.get_next_timeframe(
-                int(time.time()), offset_zone, duration, open_time
-            )
+        # Always compute the ISO string. Skipping this branch when
+        # ``open_time`` was None used to leak through to the lower
+        # layer's auto-schedule fallback, which (in older versions)
+        # produced an integer the broker rejects. Computing it here
+        # also lets us factor in the user's timezone offset so the
+        # auto-scheduled UTC string is correctly aligned to their
+        # local minute boundary.
+        user_settings = await self.get_profile()
+        offset_zone = user_settings.offset if user_settings else 0
+        open_time_iso = expiration.get_next_timeframe(
+            int(time.time()), offset_zone, duration, open_time
+        )
         await self.api.open_pending(
             amount, asset, direction, duration, open_time_iso
         )
