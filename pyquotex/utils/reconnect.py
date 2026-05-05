@@ -214,6 +214,14 @@ class ReconnectSupervisor:
 
     async def _attempt_reconnect(self) -> bool:
         try:
+            # Defensive: drop any pending-order bridge state from the
+            # dead socket. ``QuotexAPI._on_close`` already does this on
+            # graceful drops, but a hard error path may bypass it.
+            for attr in ("_active_pending", "pending_ticket_map"):
+                state = getattr(self.api, attr, None)
+                if isinstance(state, dict):
+                    state.clear()
+
             ok, reason = await self.api.start_websocket()
             if not ok:
                 self.stats.last_error = str(reason)
