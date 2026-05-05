@@ -393,6 +393,150 @@ async def test_pending_close_mirrors_to_pending_ticket():
 
 
 # -----------------------------------------------------------------
+# Release-audit regression tests (clear on disconnect, no cross-wire,
+# no double-close, real socket.io frame integration)
+# -----------------------------------------------------------------
+
+def test_on_close_clears_pending_bridge_state():
+    """Stale entries in ``_active_pending`` / ``pending_ticket_map`` from
+    a dropped socket would cross-wire the next pending placed on the
+    same asset. ``_on_close`` must drop them."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {"old-ticket": "EURUSD_otc"}
+    api.pending_ticket_map = {"old-ticket": "old-exec"}
+
+    api._on_close(1000, "test")
+
+    assert api._active_pending == {}
+    assert api.pending_ticket_map == {}
+
+
+@pytest.mark.asyncio
+async def test_two_pendings_same_asset_dont_cross_wire():
+    """Two pendings on the same asset back-to-back must not be
+    correlated to each other via the asset fallback. The previous
+    asset-fallback would have matched the wrong ticket."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {
+        "ticket-A": "EURUSD_otc",
+        "ticket-B": "EURUSD_otc",
+    }
+
+    api._temp_status = '451-["s_pending/opened",{"_placeholder":true,"num":0}]'
+    # A success notification carrying ticket-B explicitly. Asset alone
+    # would have ambiguously matched either; only the explicit ticket
+    # field is safe.
+    raw = json.dumps({
+        "id": "exec-B",
+        "asset": "EURUSD_otc",
+        "ticket": "ticket-B",
+    })
+    await api._on_message(raw)
+
+    # ticket-B was correlated; ticket-A is still in flight.
+    assert api.pending_ticket_map == {"ticket-B": "exec-B"}
+    assert "ticket-A" in api._active_pending
+    assert "ticket-B" not in api._active_pending
+
+
+@pytest.mark.asyncio
+async def test_unmatchable_pending_opened_does_not_steal_other_ticket():
+    """If ``s_pending/opened`` arrives without a ticket field AND the
+    UUID is unrelated to any pending, the bridge must NOT pick a
+    pending by asset alone. Better to no-op than to mismatch."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    api._active_pending = {"ticket-A": "EURUSD_otc"}
+
+    api._temp_status = '451-["s_pending/opened",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": "stranger-uuid",
+        "asset": "EURUSD_otc",
+        # ticket field missing
+    })
+    await api._on_message(raw)
+
+    assert api.pending_ticket_map == {}        # nothing recorded
+    assert "ticket-A" in api._active_pending   # still in flight
+
+
+@pytest.mark.asyncio
+async def test_same_uuid_close_does_not_double_fire():
+    """When the executed trade reuses the pending ticket UUID (the
+    typical ws2 behaviour), the close path must fire
+    ``order_closed_<id>`` exactly once, not twice."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+    same_uuid = "f0b7f86b-6263-48c5-b16c-1d1152170219"
+    api.pending_ticket_map = {same_uuid: same_uuid}
+
+    fire_count = 0
+
+    async def listener(_):
+        nonlocal fire_count
+        fire_count += 1
+
+    event = await api.event_registry.get_event(f"order_closed_{same_uuid}")
+    # Inject one listener so we can count actual invocations.
+    # (event_registry exposes an AsyncEvent whose ``set`` only fires
+    # once for asyncio.Event semantics — our listener counter checks
+    # whether we *attempted* to fire twice.)
+
+    # Patch the underlying set to count calls.
+    original_set_event = api.event_registry.set_event
+    async def counting_set_event(key, data=None):
+        if key == f"order_closed_{same_uuid}":
+            await listener(data)
+        await original_set_event(key, data)
+    api.event_registry.set_event = counting_set_event
+
+    api._temp_status = '451-["s_orders/closed",{"_placeholder":true,"num":0}]'
+    raw = json.dumps({
+        "id": same_uuid,
+        "asset": "EURUSD_otc",
+        "profit": 1.5,
+        "status": "closed",
+    })
+    await api._on_message(raw)
+
+    # The explicit branch fires once; the bridge mirror must skip
+    # because pticket == str(order_id).
+    assert fire_count == 1, f"order_closed fired {fire_count} times"
+    # And the bridge entry was still consumed.
+    assert same_uuid not in api.pending_ticket_map
+
+
+@pytest.mark.asyncio
+async def test_real_socket_io_frame_sequence_drives_bridge():
+    """Integration: drive the actual ``_on_message`` parsing with a
+    realistic socket.io 51-/binary frame pair instead of pre-setting
+    ``_temp_status``. This verifies the framing path the bridge
+    relies on is wired correctly end-to-end."""
+    api = QuotexAPI("qxbroker.com", "u@u.com", "pw", "en")
+
+    # Step 1: control frame announces a placeholder for s_pending/create.
+    control = '451-["s_pending/create",{"_placeholder":true,"num":0}]'
+    await api._on_message(control)
+    assert "s_pending/create" in api._temp_status, (
+        "control-frame parser must store the routing in _temp_status"
+    )
+
+    # Step 2: data frame carries the actual JSON payload.
+    data_frame = json.dumps({
+        "pending": {
+            "ticket": "real-ticket-1",
+            "asset": "AUDNZD_otc",
+            "openType": 0,
+        }
+    })
+    await api._on_message(data_frame)
+
+    # Bridge populated by the real frame sequence.
+    assert api.pending_id == "real-ticket-1"
+    assert api._active_pending == {"real-ticket-1": "AUDNZD_otc"}
+    # ``_temp_status`` is consumed after the data payload.
+    assert api._temp_status == ""
+
+
+# -----------------------------------------------------------------
 # Existing instruments_follow regression test (unchanged)
 # -----------------------------------------------------------------
 

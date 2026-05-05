@@ -434,11 +434,19 @@ class QuotexAPI:
                                 # Pending bridge: when the executed
                                 # trade closes, mirror the result onto
                                 # any pending ticket whose execution
-                                # was correlated to this order_id.
+                                # was correlated to this order_id. Skip
+                                # the mirror if the pending ticket and
+                                # the executed UUID are the same string
+                                # (the typical ws2 same-UUID case) —
+                                # the explicit ``order_closed_{order_id}``
+                                # above already covered it and a second
+                                # fire would re-invoke listeners.
                                 for pticket, exec_id in list(
                                         self.pending_ticket_map.items()
                                 ):
-                                    if exec_id == str(order_id):
+                                    if exec_id != str(order_id):
+                                        continue
+                                    if pticket != str(order_id):
                                         self.listinfodata.set(
                                             win, game_state, pticket, profit
                                         )
@@ -449,8 +457,8 @@ class QuotexAPI:
                                         await self.event_registry.set_event(
                                             f'order_closed_{pticket}', order
                                         )
-                                        del self.pending_ticket_map[pticket]
-                                        break
+                                    del self.pending_ticket_map[pticket]
+                                    break
 
                             # Pending lifecycle bridge: ``f_pending/opened``
                             # with ``error=None`` is a *pre-fire*
@@ -472,22 +480,26 @@ class QuotexAPI:
                                     order.get("ticket")
                                     or order.get("pendingTicket")
                                 )
-                                order_asset = order.get("asset")
+                                # Match the pending ticket by:
+                                #   1. an explicit ``ticket`` /
+                                #      ``pendingTicket`` field, or
+                                #   2. the same UUID being reused for
+                                #      the executed trade (verified ws2
+                                #      behaviour).
+                                # The earlier asset-only fallback was
+                                # unsafe — two pendings on the same
+                                # asset back-to-back would cross-wire.
                                 match = None
                                 if (
                                         ticket_ref
                                         and ticket_ref in self._active_pending
                                 ):
                                     match = ticket_ref
-                                elif order_asset:
-                                    match = next(
-                                        (
-                                            t for t, a
-                                            in self._active_pending.items()
-                                            if a == order_asset
-                                        ),
-                                        None,
-                                    )
+                                elif (
+                                        order_id
+                                        and str(order_id) in self._active_pending
+                                ):
+                                    match = str(order_id)
                                 if is_hard_fail and match:
                                     # Resolve as loss immediately so
                                     # ``check_win(pending_id)`` returns.
@@ -505,12 +517,7 @@ class QuotexAPI:
                                     # Trade just executed — record the
                                     # ticket → executed UUID mapping so
                                     # the close mirror above fires when
-                                    # ``s_orders/close`` arrives. Note:
-                                    # in current ws2.qxbroker behaviour
-                                    # the executed trade often reuses
-                                    # the same UUID as the pending
-                                    # ticket; the map handles both
-                                    # same-UUID and different-UUID cases.
+                                    # ``s_orders/close`` arrives.
                                     self.pending_ticket_map[match] = (
                                         str(order_id)
                                     )
@@ -681,6 +688,13 @@ class QuotexAPI:
         if self.heartbeat_task:
             self.heartbeat_task.cancel()
             self.heartbeat_task = None
+
+        # Drop the pending-order lifecycle state. Anything still
+        # in-flight on the dropped socket cannot be reconciled — and
+        # leaking the entries into the next session would cross-wire
+        # any new pending placed on the same asset.
+        self._active_pending.clear()
+        self.pending_ticket_map.clear()
 
         self.state.status = WebsocketStatus.DISCONNECTED
         try:
@@ -1004,11 +1018,13 @@ class QuotexAPI:
         :meth:`open_pending` and :meth:`buy`); see the time-mode
         docstring for why integer commands break execution.
 
-        .. note::
-            The exact wire shape for quote-mode has not yet been
-            verified end-to-end against the broker (only time-mode
-            has). The mapping follows the time-mode pattern with
-            field substitutions captured from the web-client modal.
+        .. warning::
+            **Experimental — not end-to-end verified.** Only time-mode
+            (:meth:`open_pending`) has been confirmed against
+            ``ws2.qxbroker.com``. The quote-mode wire shape mirrors
+            the time-mode pattern with field substitutions captured
+            from the web-client modal, but has not been observed
+            firing live. Test on a demo account before relying on it.
         """
         command = "put" if direction in ("down", "put") else "call"
         payload: dict[str, Any] = {
