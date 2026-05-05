@@ -285,10 +285,18 @@ class SentimentStore:
             self.path, isolation_level=None, check_same_thread=False
         )
         self._conn.executescript(self._SCHEMA)
+        self._closed = False
 
     def write(
             self, snapshot: SentimentSnapshot, price: float | None = None
     ) -> None:
+        if self._closed:
+            # Use-after-close is silently a no-op rather than a crash.
+            # The sentiment monitor task may briefly outlive the store
+            # during shutdown; we'd rather drop a sample than tear down
+            # the live websocket consumer with a sqlite ProgrammingError.
+            logger.debug("SentimentStore.write() skipped — store is closed")
+            return
         self._conn.execute(
             "INSERT OR REPLACE INTO sentiment_snapshots "
             "(asset, timestamp, bullish, bearish, price) "
@@ -309,6 +317,8 @@ class SentimentStore:
             end: float | None = None,
             limit: int | None = None,
     ) -> list[SentimentSnapshot]:
+        if self._closed:
+            return []
         sql = (
             "SELECT asset, timestamp, bullish, bearish "
             "FROM sentiment_snapshots WHERE asset = ?"
@@ -341,6 +351,8 @@ class SentimentStore:
         ``query(limit=N)`` returns the oldest N rows, which is rarely
         what an analyzer wants — use this helper for "latest window".
         """
+        if self._closed:
+            return []
         rows = self._conn.execute(
             "SELECT asset, timestamp, bullish, bearish "
             "FROM sentiment_snapshots WHERE asset = ? "
@@ -356,12 +368,17 @@ class SentimentStore:
         ]
 
     def assets(self) -> list[str]:
+        if self._closed:
+            return []
         rows = self._conn.execute(
             "SELECT DISTINCT asset FROM sentiment_snapshots"
         ).fetchall()
         return [r[0] for r in rows]
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self._conn.close()
 
 

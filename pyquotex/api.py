@@ -965,6 +965,10 @@ class QuotexAPI:
         """
         from datetime import datetime, timezone
 
+        if not isinstance(duration, int) or duration <= 0:
+            raise ValueError(
+                f"duration must be a positive integer (got {duration!r})"
+            )
         command = "put" if direction in ("down", "put") else "call"
 
         if open_time is None:

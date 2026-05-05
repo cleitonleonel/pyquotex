@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -245,6 +246,45 @@ async def test_start_candles_stream_caches_subscriptions():
     await client.start_candles_stream("EURUSD", 30)
     after_third = len(sent)
     assert after_third > after_second
+
+
+@pytest.mark.asyncio
+async def test_open_pending_is_event_driven():
+    """``Quotex.open_pending`` must wake within milliseconds of the
+    broker's ``s_pending/create`` (delivered as the
+    ``pending_confirmed`` event) — not poll on a 200ms cycle."""
+    sent: list[str] = []
+    client = _build_client(sent)
+
+    # Stub get_profile so the high-level open_pending doesn't try to
+    # talk to the network.
+    async def fake_profile():
+        ns = SimpleNamespace(offset=0)
+        return ns
+    client.get_profile = fake_profile  # type: ignore[assignment]
+
+    async def deliver_pending_confirmed() -> None:
+        await asyncio.sleep(0.005)
+        client.api.pending_id = "ticket-xyz"
+        client.api.pending_successful = True
+        await client.api.event_registry.set_event(
+            'pending_confirmed', {"pending": {"ticket": "ticket-xyz"}}
+        )
+
+    asyncio.create_task(deliver_pending_confirmed())
+    t0 = time.perf_counter()
+    ok, msg = await client.open_pending(
+        amount=1, asset="EURUSD_otc", direction="up", duration=60,
+        confirm_timeout=2.0,
+    )
+    elapsed = time.perf_counter() - t0
+
+    assert ok is True
+    # Old polling impl floored at 200ms cycle; we must be well below.
+    assert elapsed < 0.2, (
+        f"open_pending took {elapsed:.3f}s — still polling instead of "
+        f"awaiting pending_confirmed?"
+    )
 
 
 @pytest.mark.asyncio
