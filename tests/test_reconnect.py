@@ -145,6 +145,72 @@ async def test_disabled_policy_does_not_reconnect():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_treats_failed_send_ssid_as_failed_attempt():
+    """Quotex SSIDs expire after a few hours. Once expired, the WS
+    handshake still succeeds but ``s_authorization`` is rejected and
+    ``send_ssid()`` returns False. Previously the supervisor ignored
+    that bool, declared the reconnect successful, and exited the loop
+    leaving the API stuck with ``connected=False, auth=FAILED``. The
+    fix:
+      * count a False ``send_ssid()`` as a failed attempt
+      * clear the cached SSID so the next attempt re-runs HTTP login
+    """
+    state = SimpleNamespace(
+        status=WebsocketStatus.CONNECTED,
+        websocket_error_reason=None,
+        SSID="cached-but-now-expired",
+    )
+
+    async def start_websocket() -> tuple[bool, str]:
+        state.status = WebsocketStatus.CONNECTED
+        return True, "Connected"
+
+    # First call: stale SSID — broker rejects. Second call: succeeds.
+    ssid_results = [False, True]
+
+    async def send_ssid() -> bool:
+        return ssid_results.pop(0)
+
+    async def change_account(*_a, **_kw) -> None:
+        pass
+
+    api = SimpleNamespace(
+        state=state,
+        event_registry=EventRegistry(),
+        account_type=1,
+        tournament_id=0,
+        start_websocket=start_websocket,
+        send_ssid=send_ssid,
+        change_account=change_account,
+        _client_ref=None,
+    )
+
+    sup = ReconnectSupervisor(
+        api,
+        ReconnectPolicy(initial_delay=0.0, jitter=0.0, max_attempts=5),
+    )
+    sup.poll_interval = 0.01
+    sup.capture()
+    sup.start()
+    await asyncio.sleep(0)
+    api.state.status = WebsocketStatus.DISCONNECTED
+
+    ok = await _wait_until(lambda: sup.stats.successful_reconnects == 1)
+    await sup.stop()
+
+    assert ok, "supervisor never recovered after stale-SSID rejection"
+    # The first attempt was an auth failure → counted as failed,
+    # not successful. The second attempt (with a fresh login) wins.
+    assert sup.stats.failed_reconnects == 1
+    assert sup.stats.successful_reconnects == 1
+    # SSID cleared after the rejection so start_websocket() will
+    # re-run authenticate() on the next attempt.
+    assert api.state.SSID == ""
+    assert "expired" in (sup.stats.last_error or "").lower() or \
+        "rejected" in (sup.stats.last_error or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_on_reconnect_callback_fires():
     api = _fake_api(start_results=[(True, "ok")])
     sup = ReconnectSupervisor(
