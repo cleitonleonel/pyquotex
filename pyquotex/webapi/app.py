@@ -1,6 +1,7 @@
 """FastAPI application factory + lifespan management."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -9,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings
+from .otp import OtpManager
 from .relays import StreamRelay
 from .routers import account as account_router
 from .routers import auth as auth_router
@@ -32,15 +34,23 @@ async def lifespan(app: FastAPI):
     startup on broker reachability so the container can boot even if
     the broker is briefly unreachable. Health probes will report
     ``connected=false`` until the first successful connect.
+
+    The :class:`OtpManager` is wired into ``Quotex`` as the
+    ``on_otp_callback`` so that broker-emailed PIN prompts route
+    through ``POST /auth/otp`` instead of trying to read from stdin
+    (which would hang inside a container).
     """
     from pyquotex.stable_api import Quotex
 
     settings: Settings = app.state.settings
 
+    otp_manager = OtpManager(timeout=settings.otp_timeout)
+
     client = Quotex(
         email=settings.email,
         password=settings.password,
         lang=settings.lang,
+        on_otp_callback=otp_manager.callback,
     )
     client.set_account_mode(settings.account_mode)
 
@@ -52,6 +62,10 @@ async def lifespan(app: FastAPI):
 
     app.state.quotex_client = client
     app.state.stream_relay = relay
+    app.state.otp_manager = otp_manager
+    # Tracks the in-flight ``Quotex.connect()`` task so /auth/connect
+    # is non-blocking and /auth/otp can join on it.
+    app.state.connect_task = None
     logger.info(
         "pyquotex web API starting (host=%s port=%s account_mode=%s)",
         settings.host, settings.port, settings.account_mode,
@@ -61,6 +75,15 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("pyquotex web API shutting down — closing client")
+        # Cancel any in-flight connect so the lifespan exits cleanly.
+        task = getattr(app.state, "connect_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        otp_manager.reset()
         try:
             await relay.shutdown()
         except Exception as e:

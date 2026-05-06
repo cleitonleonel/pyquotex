@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pyquotex.stable_api import Quotex
 
     from .config import Settings
+    from .otp import OtpManager
     from .relays import StreamRelay
 
 
@@ -37,3 +38,10 @@ def get_relay(request: Request) -> "StreamRelay":
     if relay is None:
         raise RuntimeError("Stream relay not initialised.")
     return relay
+
+
+def get_otp_manager(request: Request) -> "OtpManager":
+    mgr = getattr(request.app.state, "otp_manager", None)
+    if mgr is None:
+        raise RuntimeError("OTP manager not initialised.")
+    return mgr

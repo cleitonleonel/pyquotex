@@ -1174,12 +1174,51 @@ class QuotexAPI:
             await asyncio.sleep(0.1)
         return False, "Timeout"
 
-    async def send_ssid(self) -> bool:
-        """Sends the SSID token to the WebSocket to authorize the
-        connection."""
-        if not self.state.SSID: return False
+    async def send_ssid(self, auth_timeout: float = 10.0) -> bool:
+        """Send the SSID token and wait for the broker's authorization
+        response before returning.
+
+        v1.4.x bugfix: previously fired-and-forgot — the caller had to
+        guess when ``auth_status`` had flipped to ``AUTHENTICATED``.
+        Quotex's ``s_authorization`` response lands ~500–1000 ms after
+        the SSID frame, so callers that immediately read
+        ``auth_status`` would race and see ``NOT_AUTHENTICATED``,
+        falsely concluding "Websocket connection rejected." (V1.2.x
+        masked this with an unconditional 2 s ``asyncio.sleep`` inside
+        ``check_connect``; v1.3.0 dropped the sleep for latency, but
+        without a proper auth wait the race was exposed.)
+
+        Returns:
+            ``True`` iff ``auth_status`` is ``AUTHENTICATED`` after the
+            broker replied. ``False`` on rejection or timeout.
+        """
+        if not self.state.SSID:
+            return False
+
+        # Clear any stale ``auth_changed`` event from a previous
+        # connect — otherwise ``wait_event`` returns immediately with
+        # the previous result.
+        await self.event_registry.clear_event("auth_changed")
+        # Reset auth_status to the in-flight value so a stale flip
+        # from a prior session doesn't claim "AUTHENTICATED" before
+        # the broker has actually responded.
+        if self.state.auth_status != AuthStatus.FAILED:
+            self.state.auth_status = AuthStatus.AUTHENTICATING
+
         await self.ssid(self.state.SSID)
-        return True
+
+        try:
+            await self.event_registry.wait_event(
+                "auth_changed", timeout=auth_timeout,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning(
+                "send_ssid: timed out after %ss waiting for "
+                "broker authorization response", auth_timeout,
+            )
+            return False
+
+        return self.state.auth_status == AuthStatus.AUTHENTICATED
 
     async def connect(self, is_demo: bool) -> tuple[bool, str]:
         """
@@ -1195,10 +1234,21 @@ class QuotexAPI:
             AccountType.DEMO if is_demo else AccountType.REAL
         )
         ok, reason = await self.start_websocket()
-        if ok:
-            await self.send_ssid()
-            self._start_reconnect_supervisor()
-        return ok, reason
+        if not ok:
+            return ok, reason
+
+        if not await self.send_ssid():
+            # WS came up but the broker didn't authorize — surface the
+            # specific reason if it set one (``authorization/reject``
+            # writes ``websocket_error_reason``); otherwise it's a
+            # timeout.
+            return False, (
+                self.state.websocket_error_reason
+                or "Authorization timeout"
+            )
+
+        self._start_reconnect_supervisor()
+        return True, reason
 
     def _start_reconnect_supervisor(self) -> None:
         """Spawn the reconnect supervisor on first successful connect."""

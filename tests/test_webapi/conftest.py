@@ -16,7 +16,13 @@ from fastapi.testclient import TestClient
 
 from pyquotex.global_value import AuthStatus, WebsocketStatus
 from pyquotex.webapi.config import Settings
-from pyquotex.webapi.deps import get_client, get_relay, get_settings
+from pyquotex.webapi.deps import (
+    get_client,
+    get_otp_manager,
+    get_relay,
+    get_settings,
+)
+from pyquotex.webapi.otp import OtpManager
 from pyquotex.webapi.relays import StreamRelay
 from pyquotex.webapi.routers import account as account_router
 from pyquotex.webapi.routers import auth as auth_router
@@ -36,7 +42,15 @@ def settings() -> Settings:
         account_mode="PRACTICE",
         result_poll_timeout=2.0,
         relay_poll_interval=0.02,
+        # Tight grace window so the OTP-pending tests don't sleep 8s.
+        connect_otp_grace=0.1,
+        otp_timeout=5.0,
     )
+
+
+@pytest.fixture
+def otp_manager() -> OtpManager:
+    return OtpManager(timeout=5.0)
 
 
 @pytest.fixture
@@ -122,10 +136,10 @@ async def _noop_lifespan(app: FastAPI):
 
 
 @pytest.fixture
-def app(settings, fake_quotex):
+def app(settings, fake_quotex, otp_manager):
     """Build a FastAPI app exactly like ``create_app()`` would, but
     swap the lifespan for a no-op and inject the mock client + relay
-    via ``dependency_overrides``."""
+    + OTP manager via ``dependency_overrides``."""
     app = FastAPI(
         title="pyquotex web API (test)",
         version="test",
@@ -152,11 +166,18 @@ def app(settings, fake_quotex):
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_client] = lambda: fake_quotex
     app.dependency_overrides[get_relay] = lambda: relay
+    app.dependency_overrides[get_otp_manager] = lambda: otp_manager
+
+    # The auth router reads ``app.state.connect_task`` directly via
+    # Request.app.state (it's mutable shared state, not a dep). Seed
+    # it to None; tests that exercise the OTP flow will spawn one.
+    app.state.connect_task = None
 
     # WebSocket endpoints can't use Depends() for path/query params,
     # so they read state via Request → app.state. Mirror it there too.
     app.state.quotex_client = fake_quotex
     app.state.stream_relay = relay
+    app.state.otp_manager = otp_manager
     return app
 
 

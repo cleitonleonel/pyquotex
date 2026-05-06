@@ -19,18 +19,21 @@ RUN pip install --no-cache-dir --upgrade pip build \
 
 FROM python:3.12-slim AS runtime
 
-# Run as non-root.
+# Create the non-root user up front but stay root for the install
+# step — the previous version COPY'd /wheels then tried to ``rm -rf``
+# it as the unprivileged user, which fails because COPY defaults to
+# root ownership. Installing system-wide while root + dropping
+# privileges before CMD is the conventional container pattern.
 RUN useradd --create-home --shell /bin/bash pyquotex
+
+COPY --from=builder /wheels /tmp/wheels
+RUN pip install --no-cache-dir /tmp/wheels/*.whl \
+ && rm -rf /tmp/wheels
+
 USER pyquotex
 WORKDIR /home/pyquotex
 
-# Install the wheels built in the previous stage.
-COPY --from=builder /wheels /tmp/wheels
-RUN pip install --user --no-cache-dir /tmp/wheels/*.whl \
- && rm -rf /tmp/wheels
-
-ENV PATH="/home/pyquotex/.local/bin:${PATH}" \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PYQUOTEX_HOST=0.0.0.0 \
     PYQUOTEX_PORT=8000
 
