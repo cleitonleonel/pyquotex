@@ -37,6 +37,29 @@ new `/auth/otp` endpoint is genuinely new functionality) when tagging
 
 ### Fixed
 
+- **Stale-SSID reconnect lockup**: After a few hours the broker
+  expires the cached SSID server-side. On the next WS drop the TCP +
+  WS handshake still succeeds, but `s_authorization` is rejected, so
+  `send_ssid()` returns `False` and `auth_status` flips to `FAILED`.
+  The reconnect supervisor was *ignoring* that bool — it counted the
+  attempt as successful, replayed subscriptions, fired callbacks, and
+  exited the loop. Result (matches the user's `/health` output):
+  `connected=false, auth_status=FAILED, reconnect_attempts=1,
+  successful_reconnects=1`, with no further retry ever. Fix:
+  `ReconnectSupervisor._attempt_reconnect()` now treats a `False`
+  `send_ssid()` as a failed attempt, clears `state.SSID`, and lets
+  the next backoff-iteration's `start_websocket()` re-run the full
+  HTTP login via `authenticate()` to obtain a fresh token. New
+  regression test:
+  `tests/test_reconnect.py::test_supervisor_treats_failed_send_ssid_as_failed_attempt`.
+- **Production-quiet logs by default**: the webapi container ran at
+  INFO with uvicorn access logging on, producing one log line per WS
+  frame and per HTTP request. Defaults are now `WARNING` + access log
+  off; two new env vars (`PYQUOTEX_LOG_LEVEL`, `PYQUOTEX_ACCESS_LOG`)
+  let operators opt back in when troubleshooting. Chatty third-party
+  loggers (`websockets`, `httpx`, `httpcore`, `asyncio`) are pinned at
+  least one notch quieter than the user-selected root level so they
+  never dominate stdout.
 - **Auth-race regression from v1.3.0**: `Quotex.connect()` was
   falsely declaring "Websocket connection rejected." when in fact
   the broker had authenticated successfully ~800 ms after the SSID

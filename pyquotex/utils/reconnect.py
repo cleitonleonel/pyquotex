@@ -230,7 +230,21 @@ class ReconnectSupervisor:
             if not ok:
                 self.stats.last_error = str(reason)
                 return False
-            await self.api.send_ssid()
+            # Honor the send_ssid result. Quotex SSIDs have a server-side
+            # TTL (~hours); after expiry the WS handshake still succeeds
+            # but the broker rejects ``s_authorization``. Previously we
+            # ignored the bool here, so the supervisor declared success,
+            # exited, and left the API stuck at ``auth_status=FAILED``
+            # with no further retry. Now we retry — and on auth failure
+            # we drop the stale SSID so the next attempt re-runs the
+            # full HTTP login via ``authenticate()``.
+            if not await self.api.send_ssid():
+                self.stats.last_error = (
+                    self.api.state.websocket_error_reason
+                    or "Authorization rejected (SSID likely expired)"
+                )
+                self.api.state.SSID = ""
+                return False
             return True
         except Exception as e:
             logger.warning("Reconnect attempt failed: %s", e)
