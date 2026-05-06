@@ -28,6 +28,11 @@ services:
       PYQUOTEX_CORS_ORIGINS: "${PYQUOTEX_CORS_ORIGINS:-*}"
       PYQUOTEX_RESULT_POLL_TIMEOUT: "${PYQUOTEX_RESULT_POLL_TIMEOUT:-90}"
       PYQUOTEX_RELAY_POLL_INTERVAL: "${PYQUOTEX_RELAY_POLL_INTERVAL:-0.1}"
+      # Logging — production stays quiet by default. Bump to INFO or
+      # DEBUG when troubleshooting; flip ACCESS_LOG=1 for per-request
+      # uvicorn access lines.
+      PYQUOTEX_LOG_LEVEL: "${PYQUOTEX_LOG_LEVEL:-WARNING}"
+      PYQUOTEX_ACCESS_LOG: "${PYQUOTEX_ACCESS_LOG:-0}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)"]
       interval: 30s
