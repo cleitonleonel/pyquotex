@@ -932,4 +932,4 @@ async def scan_assets(client):
 ---
 
 *Generated for PyQuotex — Unofficial Quotex Library*
-*Source: [cleitonleonel/pyquotex](https://github.com/cleitonleonel/pyquotex)*
+*Source: [iahmedani/pyquotex](https://github.com/iahmedani/pyquotex) (fork of [cleitonleonel/pyquotex](https://github.com/cleitonleonel/pyquotex))*
