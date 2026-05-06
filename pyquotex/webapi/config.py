@@ -34,6 +34,16 @@ class Settings:
     # Long-poll timeout for /trades/{id}/result (seconds)
     result_poll_timeout: float = 90.0
 
+    # OTP / 2FA flow
+    # ``otp_timeout``: max seconds the broker callback will wait for
+    #   ``POST /auth/otp`` to deliver the PIN (broker invalidates the
+    #   PIN after a few minutes anyway).
+    # ``connect_otp_grace``: how long ``POST /auth/connect`` waits
+    #   before returning 202 + ``otp_required: true`` so the client
+    #   knows to call ``POST /auth/otp`` next.
+    otp_timeout: float = 300.0
+    connect_otp_grace: float = 8.0
+
     @classmethod
     def from_env(cls) -> "Settings":
         email = os.environ.get("PYQUOTEX_EMAIL", "").strip()
@@ -75,5 +85,11 @@ class Settings:
             ),
             result_poll_timeout=float(
                 os.environ.get("PYQUOTEX_RESULT_POLL_TIMEOUT", "90")
+            ),
+            otp_timeout=float(
+                os.environ.get("PYQUOTEX_OTP_TIMEOUT", "300")
+            ),
+            connect_otp_grace=float(
+                os.environ.get("PYQUOTEX_CONNECT_OTP_GRACE", "8")
             ),
         )

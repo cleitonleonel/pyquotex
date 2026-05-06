@@ -4,6 +4,63 @@ All notable changes to **pyquotex** are documented in this file. Format follows
 the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) convention; the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Two fixes on top of the v1.4.0 web API: the Docker build was broken and
+the OTP / 2FA flow couldn't surface the broker's email PIN. Pick either
+1.4.1 (since it's strictly additive on the webapi) or 1.5.0 (since the
+new `/auth/otp` endpoint is genuinely new functionality) when tagging
+— Keep a Changelog leaves the choice to the release.
+
+### Added
+
+- **`POST /auth/otp` endpoint** for headless OTP / 2FA login.
+  - `POST /auth/connect` no longer awaits `Quotex.connect()` directly;
+    it spawns the connect as a background task. If the broker prompts
+    for a PIN within `PYQUOTEX_CONNECT_OTP_GRACE` seconds (default 8),
+    the response is `202` with `otp_required: true` and an
+    `otp_prompt` carrying the broker-localised prompt text.
+  - The client then `POST /auth/otp` `{"code": "123456"}`, the
+    library's `on_otp_callback` is resolved with the code, and the
+    background connect task completes. Final status returned from the
+    OTP endpoint: `200` (success) / `502` (broker rejected) / `400`
+    (re-prompted on bad format) / `504` (deadline exceeded).
+  - `OtpManager` (in `pyquotex.webapi.otp`) bridges the broker
+    callback and the HTTP route through a single `asyncio.Future`.
+  - New env vars: `PYQUOTEX_OTP_TIMEOUT` (default 300 s),
+    `PYQUOTEX_CONNECT_OTP_GRACE` (default 8 s).
+  - New fields on `ConnectResponse`: `otp_required: bool`,
+    `otp_prompt: str | None` (default `false` / `null` so older
+    clients keep parsing).
+- 9 new OTP-flow regression tests in `tests/test_webapi/test_otp.py`.
+  Full webapi suite: **38 / 38 green**.
+
+### Fixed
+
+- **`Dockerfile` build failed with permission denied on `rm -rf
+  /tmp/wheels`.** The previous Dockerfile switched to the non-root
+  user before the `COPY --from=builder /wheels …` step. `COPY` lands
+  files as root regardless of the active `USER`, so the unprivileged
+  user couldn't clean up the staging directory after `pip install`.
+  Reordered: install wheels system-wide while still root, then drop
+  privileges before `CMD`. Also dropped the `--user` install flag and
+  the `PATH` munging since system-wide is the conventional pattern in
+  a container.
+- **`POST /auth/connect` returned `500 Internal Server Error` if the
+  broker login raised** (e.g. when running in a container where the
+  library's `input()` for an emailed PIN can't read from stdin). The
+  endpoint now wraps `client.connect()` so any exception is mapped to
+  a clean `502 Bad Gateway` with the broker error message — and the
+  OTP flow above eliminates the underlying cause for the most common
+  case.
+
+### Migration notes
+
+None. Both changes are strictly additive — existing clients see the
+same `200 / 502` shape they always did. The `otp_required` field on
+`ConnectResponse` defaults to `false`, so dropping it from a parser
+is also backward-compatible.
+
 ## [1.4.0] — 2026-05-05
 
 Bundled REST + WebSocket API server. Single-tenant: one shared

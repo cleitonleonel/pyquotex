@@ -21,6 +21,39 @@ class HealthResponse(BaseModel):
 # ----- Auth / account -----
 
 class ConnectResponse(BaseModel):
+    """Response from ``POST /auth/connect``.
+
+    ``otp_required=True`` means the broker emailed a PIN and the
+    library is blocked waiting for it. The caller should ``POST
+    /auth/otp`` with the code, then re-call ``POST /auth/connect`` (or
+    just wait — the original connect task will complete on its own).
+
+    HTTP status ``200`` when ``connected=True``; ``202`` when an OTP
+    is pending; ``502`` on broker error.
+    """
+    connected: bool
+    message: str
+    balance: float | None = None
+    profile_id: int | None = None
+    nickname: str | None = None
+    currency: str | None = None
+    # OTP / 2FA flow
+    otp_required: bool = False
+    otp_prompt: str | None = Field(
+        default=None,
+        description="Human-readable prompt forwarded from the broker.",
+    )
+
+
+class OtpRequest(BaseModel):
+    code: str = Field(
+        ..., min_length=1,
+        description="The PIN code received by email.",
+    )
+
+
+class OtpResponse(BaseModel):
+    accepted: bool
     connected: bool
     message: str
     balance: float | None = None
