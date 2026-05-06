@@ -2,7 +2,7 @@
 
 ---
 <p align="center">
-  <a href="https://github.com/cleitonleonel/pyquotex">
+  <a href="https://github.com/iahmedani/pyquotex">
     <img src="pyquotex.png" alt="pyquotex" width="350" height="auto" title="PyQuotex"/>
   </a>
 </p>
@@ -12,6 +12,32 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-green" alt="Python Versions"/>
 </p>
+
+---
+
+## 🍴 About this Fork
+
+This repository (`iahmedani/pyquotex`) is a **fork** of the original
+[`cleitonleonel/pyquotex`](https://github.com/cleitonleonel/pyquotex) by
+Cleiton Leonel Creton. It continues development with additional fixes,
+performance work, and a bundled REST + WebSocket API server.
+
+What's added in this fork on top of upstream:
+
+- **v1.2** — Multilogin profiles (v1 agent + v3 cloud), proxy + DNS
+  overrides, browser-grade TLS via `curl_cffi`, sentiment monitor with
+  spike + divergence detection, sentiment persistence (SQLite),
+  cross-asset sentiment correlation, auto-reconnect with subscription
+  replay, verified pending-order wire format + lifecycle bridge.
+- **v1.3** — Latency + robustness audit (event-driven streams, O(1)
+  data structures, concurrent-connect lock, heartbeat error signal).
+- **v1.4** — Bundled FastAPI + WebSocket relay (`pyquotex.webapi`),
+  Docker image, two-step `POST /auth/otp` PIN flow, auth-race fix in
+  `send_ssid()` so successful logins are no longer reported as 502.
+
+All public API additions are additive — code that worked on upstream
+continues to work here. See [`CHANGELOG.md`](CHANGELOG.md) for the
+version-by-version history.
 
 ---
 
@@ -43,7 +69,10 @@ Prover ferramentas para desenvolvedores integrarem seus sistemas com a plataform
 ---
 
 # 📚 Documentação Completa
-https://cleitonleonel.github.io/pyquotex/
+
+The [`docs/`](docs/) folder in this repo holds the full reference (EN /
+PT / ES). Start with [docs/en/12. Advanced Features.md](docs/en/12.%20Advanced%20Features.md)
+or [docs/en/API_REFERENCE.md](docs/en/API_REFERENCE.md).
 
 
 ## 🛠 Instalação
@@ -51,14 +80,14 @@ https://cleitonleonel.github.io/pyquotex/
 ### 1. Clone o repositório:
 
 ```bash
-git clone https://github.com/cleitonleonel/pyquotex.git
+git clone https://github.com/iahmedani/pyquotex.git
 cd pyquotex
 poetry install
 poetry run python app.py
 ```
 
 ```bash
-poetry add git+https://github.com/cleitonleonel/pyquotex.git
+poetry add git+https://github.com/iahmedani/pyquotex.git
 ```
 
 ### 3. Otimização de Performance (Opcional) / Optional Extras
@@ -67,7 +96,7 @@ Para melhor performance no processamento de dados (recomendado para uso em servi
 com suporte ao `orjson`:
 
 ```bash
-poetry add "pyquotex[fast] @ git+https://github.com/cleitonleonel/pyquotex.git"
+poetry add "pyquotex[fast] @ git+https://github.com/iahmedani/pyquotex.git"
 ```
 
 Outros extras opcionais:
@@ -88,7 +117,7 @@ pip install 'pyquotex[fast,socks,stealth,webapi]'
 ### 2.1. Instale com um comando no Termux (Android):
 
 ```shell
-curl -sSL https://raw.githubusercontent.com/cleitonleonel/pyquotex/refs/heads/master/run_in_termux.sh | sh
+curl -sSL https://raw.githubusercontent.com/iahmedani/pyquotex/refs/heads/master/run_in_termux.sh | sh
 ```
 
 
@@ -213,12 +242,6 @@ await client.api.event_registry.wait_event("auth_changed")
 
 ---
 
-## 🔒 Versão Privada Disponível
-
-Uma versão privada está disponível com recursos adicionais, estabilidade aprimorada e melhor suporte.
-
-👉 [Acesse a versão privada](https://t.me/pyquotex/852) para desbloquear o máximo do PyQuotex!
-
 ### 💥 Comparativo de Versões / Version Comparison
 
 | Feature                                                       | Open Source ✅                       | Private ✨            |
@@ -239,23 +262,18 @@ Uma versão privada está disponível com recursos adicionais, estabilidade apri
 
 ---
 
-## 🤝 Apoie este projeto
+## 🙏 Credits
 
-[![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cleiton.leonel)
+Original `PyQuotex` library by **Cleiton Leonel Creton**
+([github.com/cleitonleonel](https://github.com/cleitonleonel)). This
+fork builds on that foundation — the WebSocket protocol work,
+documentation skeleton, and Termux installer all come from upstream.
 
-### 💸 Criptomoedas
+## 🐛 Issues / Contributions
 
-* **Dogecoin (DOGE)**: `DMwSPQMk61hq49ChmTMkgyvUGZbVbWZekJ`
-* **Bitcoin (BTC)**: `bc1qtea29xkpyx9jxtp2kc74m83rwh93vjp7nhpgkm`
-* **Ethereum (ETH)**: `0x20d1AD19277CaFddeE4B8f276ae9f3E761523223`
-* **Solana (SOL)**: `4wbE2FVU9x4gVErVSsWwhcdXQnDBrBVQFvbMqaaykcqo`
-
----
-
-## 📞 Contato
-
-* Telegram: [cleitonlc](https://t.me/cleitonlc)
-* GitHub: [cleitonleonel](https://github.com/cleitonleonel)
-* LinkedIn: [Cleiton Leonel](https://www.linkedin.com/in/cleiton-leonel-creton-331138167/)
+Please open issues and pull requests against this fork at
+[`iahmedani/pyquotex`](https://github.com/iahmedani/pyquotex/issues).
+Bugs that also reproduce against the upstream repo are welcome to be
+reported there as well.
 
 ---

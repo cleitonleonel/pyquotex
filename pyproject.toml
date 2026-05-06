@@ -4,6 +4,8 @@ version = "1.4.1"
 description = "Quotex API Client written in Python."
 authors = [
     { name = "cleiton", email = "cleiton.leonel@gmail.com"}]
+maintainers = [
+    { name = "iahmedani" }]
 license = "MIT"
 readme = "README.md"
 packages = [{ include = "pyquotex" }]

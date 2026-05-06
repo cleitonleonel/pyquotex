@@ -44,6 +44,17 @@ class Settings:
     otp_timeout: float = 300.0
     connect_otp_grace: float = 8.0
 
+    # Logging
+    # ``log_level``: root + pyquotex log level. WARNING by default so
+    #   production stdout stays small (broker errors, reconnects,
+    #   broken-pipe warnings still surface). Set to INFO or DEBUG via
+    #   ``PYQUOTEX_LOG_LEVEL`` when investigating an issue.
+    # ``access_log``: uvicorn per-request access log. Off by default —
+    #   it doubles output and most ops setups already log at the
+    #   reverse-proxy layer. Set ``PYQUOTEX_ACCESS_LOG=1`` to enable.
+    log_level: str = "WARNING"
+    access_log: bool = False
+
     @classmethod
     def from_env(cls) -> "Settings":
         email = os.environ.get("PYQUOTEX_EMAIL", "").strip()
@@ -92,4 +103,10 @@ class Settings:
             connect_otp_grace=float(
                 os.environ.get("PYQUOTEX_CONNECT_OTP_GRACE", "8")
             ),
+            log_level=os.environ.get(
+                "PYQUOTEX_LOG_LEVEL", "WARNING"
+            ).upper(),
+            access_log=os.environ.get(
+                "PYQUOTEX_ACCESS_LOG", "0"
+            ).strip().lower() in ("1", "true", "yes", "on"),
         )
