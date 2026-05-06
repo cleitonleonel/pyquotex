@@ -37,6 +37,22 @@ new `/auth/otp` endpoint is genuinely new functionality) when tagging
 
 ### Fixed
 
+- **Auth-race regression from v1.3.0**: `Quotex.connect()` was
+  falsely declaring "Websocket connection rejected." when in fact
+  the broker had authenticated successfully ~800 ms after the SSID
+  send. v1.2.x had hidden the race behind a 2-second `asyncio.sleep`
+  in `_check_connect`; v1.3.0 dropped that sleep for latency without
+  replacing it with a proper auth wait.
+  Fix: `QuotexAPI.send_ssid()` now clears any stale `auth_changed`
+  event, sends the SSID, and waits on `auth_changed` (default 10 s
+  timeout). Returns `True` only when `state.auth_status ==
+  AUTHENTICATED`. `QuotexAPI.connect()` propagates the failure with
+  the broker's `websocket_error_reason` (when set) or
+  `"Authorization timeout"`. Reproduced from the live trace — the
+  only externally-visible symptom was `/auth/otp` returning
+  `502 Broker connect failed after OTP: Websocket connection
+  rejected.` immediately after a *correct* PIN had been accepted by
+  the broker.
 - **`Dockerfile` build failed with permission denied on `rm -rf
   /tmp/wheels`.** The previous Dockerfile switched to the non-root
   user before the `COPY --from=builder /wheels …` step. `COPY` lands
