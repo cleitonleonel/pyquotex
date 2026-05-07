@@ -236,6 +236,7 @@ export const telegram = {
 // ---------------------------------------------------------------------------
 
 export type ParserType = "template" | "regex";
+export type TradeMode = "live" | "scheduled" | "auto";
 
 export interface ParserTemplate {
   id: string;
@@ -244,19 +245,31 @@ export interface ParserTemplate {
   example: string;
 }
 
+export interface MartingalePayload {
+  enabled: boolean;
+  multiplier: number;
+  max_streak: number;
+  reset_on_win: boolean;
+}
+
 export interface ParserConfigPayload {
+  name: string;
+  priority: number;
   parser_type: ParserType;
   parser_config: Record<string, unknown>;
   timezone: string;
   timezone_offset_minutes: number;
   asset_aliases: Record<string, string>;
+  aggregate_window_seconds: number;
   default_stake: number;
   default_duration_seconds: number;
-  aggregate_window_seconds: number;
+  trade_mode: TradeMode;
+  martingale: MartingalePayload;
   enabled: boolean;
 }
 
 export interface ParserConfig extends ParserConfigPayload {
+  id: number;
   chat_id: number;
   created_at: string;
   updated_at: string;
@@ -271,6 +284,7 @@ export interface ParsedSignal {
   raw_text: string;
   parser_id: string;
   matched_groups: Record<string, string>;
+  trade_mode: TradeMode;
 }
 
 export interface ParserTestResponse {
@@ -286,22 +300,55 @@ export interface ParserTestMessage {
   received_at?: string;
 }
 
+export const DEFAULT_PARSER_CONFIG: ParserConfigPayload = {
+  name: "default",
+  priority: 100,
+  parser_type: "template",
+  parser_config: { template: "{DIRECTION} {ASSET} {DURATION}" },
+  timezone: "UTC",
+  timezone_offset_minutes: 0,
+  asset_aliases: {},
+  aggregate_window_seconds: 0,
+  default_stake: 1,
+  default_duration_seconds: 60,
+  trade_mode: "auto",
+  martingale: {
+    enabled: false,
+    multiplier: 2,
+    max_streak: 5,
+    reset_on_win: true,
+  },
+  enabled: true,
+};
+
 export const parsers = {
   templates: () => api<ParserTemplate[]>("/parsers/templates"),
 
-  list: () => api<ParserConfig[]>("/parsers/configs"),
+  list: (chatId?: number) => {
+    const path =
+      chatId !== undefined
+        ? `/parsers/configs?chat_id=${chatId}`
+        : "/parsers/configs";
+    return api<ParserConfig[]>(path);
+  },
 
-  get: (chatId: number) =>
-    api<ParserConfig>(`/parsers/configs/${chatId}`),
+  get: (configId: number) =>
+    api<ParserConfig>(`/parsers/configs/${configId}`),
 
-  upsert: (chatId: number, body: ParserConfigPayload) =>
-    api<ParserConfig>(`/parsers/configs/${chatId}`, {
+  create: (chatId: number, body: ParserConfigPayload) =>
+    api<ParserConfig>(`/parsers/configs`, {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId, ...body }),
+    }),
+
+  update: (configId: number, body: ParserConfigPayload) =>
+    api<ParserConfig>(`/parsers/configs/${configId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
 
-  remove: (chatId: number) =>
-    api<{ ok: true }>(`/parsers/configs/${chatId}`, { method: "DELETE" }),
+  remove: (configId: number) =>
+    api<{ ok: true }>(`/parsers/configs/${configId}`, { method: "DELETE" }),
 
   test: (config: ParserConfigPayload, messages: ParserTestMessage[]) =>
     api<ParserTestResponse>("/parsers/test", {

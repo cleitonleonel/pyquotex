@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -46,7 +47,37 @@ async def init_db() -> None:
     from autotrader import models  # noqa: F401, PLC0415
 
     async with engine.begin() as conn:
+        await _migrate_in_place(conn)
         await conn.run_sync(SQLModel.metadata.create_all)
+
+
+async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
+    """One-off in-place migrations.
+
+    SQLModel ``create_all`` only creates missing tables — it never
+    alters an existing one. When we change the shape of a table during
+    development the simplest path is: detect the old shape and drop the
+    table here so the subsequent create_all recreates it from the
+    current model. Any rows are lost; tell the user in the commit
+    message and the dashboard.
+
+    Each block is idempotent — once the new shape is in place the
+    detector returns False and we move on.
+    """
+    def _has_table(sync_conn: object, name: str) -> bool:
+        return inspect(sync_conn).has_table(name)  # type: ignore[arg-type]
+
+    def _columns(sync_conn: object, name: str) -> set[str]:
+        if not _has_table(sync_conn, name):
+            return set()
+        return {c["name"] for c in inspect(sync_conn).get_columns(name)}  # type: ignore[arg-type]
+
+    # parser_configs grew a row id + multi-per-chat support; the old
+    # singleton schema had ``chat_id`` as the primary key. Drop the
+    # table when we see the legacy shape.
+    cols = await conn.run_sync(_columns, "parser_configs")
+    if cols and "id" not in cols:
+        await conn.execute(text("DROP TABLE parser_configs"))
 
 
 async def close_db() -> None:

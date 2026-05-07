@@ -23,12 +23,19 @@ export default function ParsersIndex() {
     queryFn: telegram.watched,
   });
   const configs = useQuery<ParserConfig[]>({
-    queryKey: ["parsers", "configs"],
-    queryFn: parsers.list,
+    queryKey: ["parsers", "configs", "all"],
+    queryFn: () => parsers.list(),
   });
 
-  const byChatId = new Map<number, ParserConfig>();
-  for (const c of configs.data ?? []) byChatId.set(c.chat_id, c);
+  // Group configs by chat for the count badge.
+  const counts = new Map<number, number>();
+  const enabled = new Map<number, number>();
+  for (const c of configs.data ?? []) {
+    counts.set(c.chat_id, (counts.get(c.chat_id) ?? 0) + 1);
+    if (c.enabled) {
+      enabled.set(c.chat_id, (enabled.get(c.chat_id) ?? 0) + 1);
+    }
+  }
 
   const channels = watched.data ?? [];
 
@@ -37,8 +44,8 @@ export default function ParsersIndex() {
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Parsers</h2>
         <p className="text-sm text-muted-foreground">
-          Configure how each watched channel&rsquo;s messages translate into
-          structured signals. Click a channel to open the live tester.
+          Each channel can host multiple named parsers, ranked by priority.
+          Click a channel to manage its parser list.
         </p>
       </section>
 
@@ -61,7 +68,8 @@ export default function ParsersIndex() {
 
       <ul className="grid gap-4 md:grid-cols-2">
         {channels.map((channel) => {
-          const cfg = byChatId.get(channel.chat_id);
+          const count = counts.get(channel.chat_id) ?? 0;
+          const on = enabled.get(channel.chat_id) ?? 0;
           return (
             <li key={channel.chat_id}>
               <Link href={`/dashboard/parsers/${channel.chat_id}`}>
@@ -79,32 +87,15 @@ export default function ParsersIndex() {
                           {channel.chat_type ? ` · ${channel.chat_type}` : ""}
                         </CardDescription>
                       </div>
-                      <ParserStatusBadge cfg={cfg} />
+                      <CountBadge count={count} enabled={on} />
                     </div>
                   </CardHeader>
                   <CardContent>
-                    {cfg ? (
-                      <dl className="space-y-1 text-xs">
-                        <Row label="Type" value={cfg.parser_type} />
-                        <Row
-                          label="Default duration"
-                          value={`${cfg.default_duration_seconds}s`}
-                        />
-                        <Row label="Stake" value={String(cfg.default_stake)} />
-                        <Row
-                          label="Aggregate window"
-                          value={
-                            cfg.aggregate_window_seconds > 0
-                              ? `${cfg.aggregate_window_seconds}s`
-                              : "single message"
-                          }
-                        />
-                      </dl>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        No parser configured. Click to set one up.
-                      </p>
-                    )}
+                    <p className="text-sm text-muted-foreground">
+                      {count === 0
+                        ? "No parsers yet. Click to add one."
+                        : `${on} of ${count} enabled.`}
+                    </p>
                   </CardContent>
                 </Card>
               </Link>
@@ -116,17 +107,8 @@ export default function ParsersIndex() {
   );
 }
 
-function ParserStatusBadge({ cfg }: { cfg?: ParserConfig }) {
-  if (!cfg) return <Badge variant="outline">unset</Badge>;
-  if (!cfg.enabled) return <Badge variant="secondary">disabled</Badge>;
-  return <Badge variant="success">configured</Badge>;
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-mono">{value}</dd>
-    </div>
-  );
+function CountBadge({ count, enabled }: { count: number; enabled: number }) {
+  if (count === 0) return <Badge variant="outline">none</Badge>;
+  if (enabled === 0) return <Badge variant="secondary">{count} disabled</Badge>;
+  return <Badge variant="success">{enabled}/{count}</Badge>;
 }

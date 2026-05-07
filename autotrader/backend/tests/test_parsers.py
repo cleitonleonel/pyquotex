@@ -465,6 +465,32 @@ def test_test_endpoint_invalid_regex_returns_error(client: TestClient) -> None:
     assert "regex" in body["error"].lower() or "invalid" in body["error"].lower()
 
 
+def _new_config_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "chat_id": -1001,
+        "name": "default",
+        "priority": 100,
+        "parser_type": "template",
+        "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION}"},
+        "timezone": "UTC",
+        "timezone_offset_minutes": 0,
+        "asset_aliases": {"EUR/USD": "EURUSD_otc"},
+        "default_stake": 25,
+        "default_duration_seconds": 60,
+        "trade_mode": "auto",
+        "aggregate_window_seconds": 0,
+        "martingale": {
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+        },
+        "enabled": True,
+    }
+    body.update(overrides)
+    return body
+
+
 def test_config_crud(client: TestClient) -> None:
     headers = _login(client)
 
@@ -473,59 +499,168 @@ def test_config_crud(client: TestClient) -> None:
     assert r.status_code == 200
     assert r.json() == []
 
-    # Upsert one.
+    # Create.
+    r = client.post(
+        "/parsers/configs",
+        headers=headers,
+        json=_new_config_body(),
+    )
+    assert r.status_code == 201
+    created = r.json()
+    config_id = created["id"]
+    assert created["chat_id"] == -1001
+    assert created["name"] == "default"
+    assert created["asset_aliases"] == {"EUR/USD": "EURUSD_otc"}
+    assert created["martingale"]["enabled"] is False
+
+    # Get by id.
+    r = client.get(f"/parsers/configs/{config_id}", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["id"] == config_id
+
+    # Update — turn martingale on, change name.
     r = client.put(
-        "/parsers/configs/-1001",
+        f"/parsers/configs/{config_id}",
+        headers=headers,
+        json=_new_config_body(
+            name="aggressive",
+            martingale={
+                "enabled": True,
+                "multiplier": 2.5,
+                "max_streak": 3,
+                "reset_on_win": True,
+            },
+        ),
+    )
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["name"] == "aggressive"
+    assert updated["martingale"]["enabled"] is True
+    assert updated["martingale"]["multiplier"] == 2.5
+
+    # Filter list by chat_id.
+    r = client.get("/parsers/configs?chat_id=-1001", headers=headers)
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+    # Delete.
+    r = client.delete(f"/parsers/configs/{config_id}", headers=headers)
+    assert r.status_code == 200
+    r = client.get(f"/parsers/configs/{config_id}", headers=headers)
+    assert r.status_code == 404
+
+
+def test_multiple_configs_per_chat(client: TestClient) -> None:
+    """A single chat hosts several priority-ordered parsers."""
+    headers = _login(client)
+
+    r = client.post(
+        "/parsers/configs",
+        headers=headers,
+        json=_new_config_body(name="primary", priority=10),
+    )
+    assert r.status_code == 201
+    primary_id = r.json()["id"]
+
+    r = client.post(
+        "/parsers/configs",
+        headers=headers,
+        json=_new_config_body(
+            name="fallback",
+            priority=200,
+            parser_config={"template": "{ASSET} {DIRECTION} {DURATION}"},
+        ),
+    )
+    assert r.status_code == 201
+    fallback_id = r.json()["id"]
+    assert fallback_id != primary_id
+
+    r = client.get("/parsers/configs?chat_id=-1001", headers=headers)
+    body = r.json()
+    assert [c["name"] for c in body] == ["primary", "fallback"]
+
+
+def test_config_create_validates_pattern(client: TestClient) -> None:
+    headers = _login(client)
+    r = client.post(
+        "/parsers/configs",
+        headers=headers,
+        json=_new_config_body(parser_type="regex", parser_config={"pattern": "((((("}),
+    )
+    assert r.status_code == 400
+    assert "regex" in r.json()["detail"].lower() or "invalid" in r.json()["detail"].lower()
+
+
+def test_update_unknown_id_returns_404(client: TestClient) -> None:
+    headers = _login(client)
+    r = client.put(
+        "/parsers/configs/9999",
         headers=headers,
         json={
+            "name": "x",
+            "priority": 100,
             "parser_type": "template",
             "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION}"},
             "timezone": "UTC",
             "timezone_offset_minutes": 0,
-            "asset_aliases": {"EUR/USD": "EURUSD_otc"},
-            "default_stake": 25,
-            "default_duration_seconds": 60,
+            "asset_aliases": {},
             "aggregate_window_seconds": 0,
+            "default_stake": 1,
+            "default_duration_seconds": 60,
+            "trade_mode": "auto",
+            "martingale": {
+                "enabled": False,
+                "multiplier": 2.0,
+                "max_streak": 5,
+                "reset_on_win": True,
+            },
             "enabled": True,
+        },
+    )
+    assert r.status_code == 404
+
+
+def test_test_endpoint_scheduled_pin_rejects_live_signal(client: TestClient) -> None:
+    """trade_mode=scheduled rejects a parser output that has no fire_at."""
+    headers = _login(client)
+    r = client.post(
+        "/parsers/test",
+        headers=headers,
+        json={
+            "config": {
+                "parser_type": "template",
+                "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION}"},
+                "trade_mode": "scheduled",
+            },
+            "messages": [{"text": "BUY EURUSD 1m"}],
         },
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["chat_id"] == -1001
-    assert body["asset_aliases"] == {"EUR/USD": "EURUSD_otc"}
-
-    r = client.get("/parsers/configs/-1001", headers=headers)
-    assert r.status_code == 200
-
-    r = client.get("/parsers/configs", headers=headers)
-    assert len(r.json()) == 1
-
-    # Delete.
-    r = client.delete("/parsers/configs/-1001", headers=headers)
-    assert r.status_code == 200
-    r = client.get("/parsers/configs/-1001", headers=headers)
-    assert r.status_code == 404
+    assert body["matched"] is False
+    assert "scheduled" in body["error"]
 
 
-def test_config_upsert_validates_pattern(client: TestClient) -> None:
+def test_test_endpoint_live_pin_strips_fire_at(client: TestClient) -> None:
+    """trade_mode=live forces fire_at=None even if the parser extracted one."""
     headers = _login(client)
-    r = client.put(
-        "/parsers/configs/-1001",
+    r = client.post(
+        "/parsers/test",
         headers=headers,
         json={
-            "parser_type": "regex",
-            "parser_config": {"pattern": "((((("},
-            "timezone": "UTC",
-            "timezone_offset_minutes": 0,
-            "asset_aliases": {},
-            "default_stake": 1,
-            "default_duration_seconds": 60,
-            "aggregate_window_seconds": 0,
-            "enabled": True,
+            "config": {
+                "parser_type": "template",
+                "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION} at {TIME}"},
+                "trade_mode": "live",
+            },
+            "messages": [{"text": "BUY EURUSD 1m at 14:30"}],
         },
     )
-    assert r.status_code == 400
-    assert "regex" in r.json()["detail"].lower() or "invalid" in r.json()["detail"].lower()
+    assert r.status_code == 200
+    body = r.json()
+    assert body["matched"] is True
+    assert body["signal"]["fire_at"] is None
+    assert body["signal"]["trade_mode"] == "live"
 
 
 def test_config_endpoints_require_auth(client: TestClient) -> None:

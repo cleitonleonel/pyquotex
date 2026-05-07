@@ -1,46 +1,66 @@
-"""Per-channel parser configuration.
+"""Parser configurations — multiple per channel.
 
-Each watched Telegram channel can have its own parser type (template
-or regex), parser-specific config, timezone, asset alias map, default
-stake / duration, and an optional multi-message aggregation window.
+Each watched chat can host many named parser configs ranked by
+``priority`` (lower runs first). Phase 4's executor tries them in
+order and stops at the first match.
 
-We store the parser-specific config and the asset alias map as JSON
-columns so the schema doesn't need to grow when we add a parser type
-later.
+In addition to the parsing config itself we persist the trade-shaping
+knobs the user picks per parser:
+
+* ``trade_mode`` — ``live`` / ``scheduled`` / ``auto``. ``auto`` is the
+  default: a signal that carries a ``fire_at`` schedules a pending
+  order, otherwise it fires immediately. ``live`` and ``scheduled``
+  are pin overrides — useful when a single channel mixes signal
+  styles and the user wants strict separation per parser.
+* Martingale block (enabled / multiplier / max-streak / reset-on-win)
+  for losing-streak recovery sizing. Phase 4's executor reads this
+  config; the running streak counter lives in a separate state row.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlmodel import Field, SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from autotrader.models.base import utc_now
 
+TradeMode = Literal["live", "scheduled", "auto"]
+
 
 class ParserConfig(SQLModel, table=True):
-    """Singleton-per-channel — keyed by ``chat_id``."""
+    """One row per parser; many rows can share the same ``chat_id``."""
 
     __tablename__ = "parser_configs"
 
-    chat_id: int = Field(primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
+    chat_id: int = Field(index=True, nullable=False)
 
+    # Display
+    name: str = Field(default="", nullable=False)
+    priority: int = Field(default=100, nullable=False)  # lower runs first
+
+    # Parsing
     parser_type: str = Field(default="template", nullable=False)
     parser_config_json: str = Field(default="{}", nullable=False)
-
     timezone: str = Field(default="UTC", nullable=False)
     timezone_offset_minutes: int = Field(default=0, nullable=False)
-
     asset_aliases_json: str = Field(default="{}", nullable=False)
+    aggregate_window_seconds: int = Field(default=0, nullable=False)
 
+    # Trade shaping
     default_stake: float = Field(default=1.0, nullable=False)
     default_duration_seconds: int = Field(default=60, nullable=False)
+    trade_mode: str = Field(default="auto", nullable=False)
 
-    # 0 = single-message; > 0 = sliding-window multi-message aggregation.
-    aggregate_window_seconds: int = Field(default=0, nullable=False)
+    # Martingale (config only; runtime streak state is separate).
+    martingale_enabled: bool = Field(default=False, nullable=False)
+    martingale_multiplier: float = Field(default=2.0, nullable=False)
+    martingale_max_streak: int = Field(default=5, nullable=False)
+    martingale_reset_on_win: bool = Field(default=True, nullable=False)
 
     enabled: bool = Field(default=True, nullable=False)
 
@@ -73,56 +93,74 @@ class ParserConfig(SQLModel, table=True):
 # ---------------------------------------------------------------------------
 
 
-async def list_configs(session: AsyncSession) -> list[ParserConfig]:
-    result = await session.exec(select(ParserConfig))
+async def list_configs(
+    session: AsyncSession,
+    *,
+    chat_id: int | None = None,
+) -> list[ParserConfig]:
+    stmt = select(ParserConfig)
+    if chat_id is not None:
+        stmt = stmt.where(ParserConfig.chat_id == chat_id)
+    stmt = stmt.order_by(ParserConfig.chat_id, ParserConfig.priority, ParserConfig.id)  # type: ignore[arg-type]
+    result = await session.exec(stmt)
     return list(result.all())
 
 
-async def get_config(session: AsyncSession, chat_id: int) -> ParserConfig | None:
-    return await session.get(ParserConfig, chat_id)
+async def get_config(session: AsyncSession, config_id: int) -> ParserConfig | None:
+    return await session.get(ParserConfig, config_id)
 
 
-async def upsert_config(
+async def create_config(
     session: AsyncSession,
     *,
     chat_id: int,
-    parser_type: str,
-    parser_config: dict[str, Any],
-    timezone: str,
-    timezone_offset_minutes: int,
-    asset_aliases: dict[str, str],
-    default_stake: float,
-    default_duration_seconds: int,
-    aggregate_window_seconds: int,
-    enabled: bool,
+    payload: dict[str, Any],
 ) -> ParserConfig:
-    existing = await get_config(session, chat_id)
-    payload = {
-        "parser_type": parser_type,
-        "parser_config_json": json.dumps(parser_config),
-        "timezone": timezone,
-        "timezone_offset_minutes": timezone_offset_minutes,
-        "asset_aliases_json": json.dumps(asset_aliases),
-        "default_stake": default_stake,
-        "default_duration_seconds": default_duration_seconds,
-        "aggregate_window_seconds": aggregate_window_seconds,
-        "enabled": enabled,
-    }
-    if existing is None:
-        row = ParserConfig(chat_id=chat_id, **payload)
-        session.add(row)
-    else:
-        for key, value in payload.items():
-            setattr(existing, key, value)
-        existing.updated_at = utc_now()
-        row = existing
+    row = ParserConfig(
+        chat_id=chat_id,
+        parser_config_json=json.dumps(payload.get("parser_config", {})),
+        asset_aliases_json=json.dumps(payload.get("asset_aliases", {})),
+        **{
+            k: v
+            for k, v in payload.items()
+            if k
+            not in ("parser_config", "asset_aliases")
+            and hasattr(ParserConfig, k)
+            and k not in ("id", "chat_id", "created_at", "updated_at")
+        },
+    )
+    session.add(row)
     await session.commit()
     await session.refresh(row)
     return row
 
 
-async def delete_config(session: AsyncSession, chat_id: int) -> bool:
-    existing = await get_config(session, chat_id)
+async def update_config(
+    session: AsyncSession,
+    *,
+    config_id: int,
+    payload: dict[str, Any],
+) -> ParserConfig | None:
+    existing = await get_config(session, config_id)
+    if existing is None:
+        return None
+    for key, value in payload.items():
+        if key == "parser_config":
+            existing.parser_config_json = json.dumps(value)
+        elif key == "asset_aliases":
+            existing.asset_aliases_json = json.dumps(value)
+        elif key in ("id", "chat_id", "created_at", "updated_at"):
+            continue
+        elif hasattr(ParserConfig, key):
+            setattr(existing, key, value)
+    existing.updated_at = utc_now()
+    await session.commit()
+    await session.refresh(existing)
+    return existing
+
+
+async def delete_config(session: AsyncSession, config_id: int) -> bool:
+    existing = await get_config(session, config_id)
     if existing is None:
         return False
     await session.delete(existing)
