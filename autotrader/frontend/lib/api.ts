@@ -230,3 +230,82 @@ export const telegram = {
   unwatch: (chatId: number) =>
     api<{ ok: true }>(`/telegram/watch/${chatId}`, { method: "DELETE" }),
 };
+
+// ---------------------------------------------------------------------------
+// Parsers
+// ---------------------------------------------------------------------------
+
+export type ParserType = "template" | "regex";
+
+export interface ParserTemplate {
+  id: string;
+  label: string;
+  template: string;
+  example: string;
+}
+
+export interface ParserConfigPayload {
+  parser_type: ParserType;
+  parser_config: Record<string, unknown>;
+  timezone: string;
+  timezone_offset_minutes: number;
+  asset_aliases: Record<string, string>;
+  default_stake: number;
+  default_duration_seconds: number;
+  aggregate_window_seconds: number;
+  enabled: boolean;
+}
+
+export interface ParserConfig extends ParserConfigPayload {
+  chat_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParsedSignal {
+  asset: string;
+  direction: string;
+  duration_seconds: number;
+  stake: number | null;
+  fire_at: string | null;
+  raw_text: string;
+  parser_id: string;
+  matched_groups: Record<string, string>;
+}
+
+export interface ParserTestResponse {
+  matched: boolean;
+  signal: ParsedSignal | null;
+  error: string | null;
+  error_detail: Record<string, unknown> | null;
+}
+
+export interface ParserTestMessage {
+  text: string;
+  sender_id?: number;
+  received_at?: string;
+}
+
+export const parsers = {
+  templates: () => api<ParserTemplate[]>("/parsers/templates"),
+
+  list: () => api<ParserConfig[]>("/parsers/configs"),
+
+  get: (chatId: number) =>
+    api<ParserConfig>(`/parsers/configs/${chatId}`),
+
+  upsert: (chatId: number, body: ParserConfigPayload) =>
+    api<ParserConfig>(`/parsers/configs/${chatId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  remove: (chatId: number) =>
+    api<{ ok: true }>(`/parsers/configs/${chatId}`, { method: "DELETE" }),
+
+  test: (config: ParserConfigPayload, messages: ParserTestMessage[]) =>
+    api<ParserTestResponse>("/parsers/test", {
+      method: "POST",
+      body: JSON.stringify({ config, messages }),
+    }),
+};

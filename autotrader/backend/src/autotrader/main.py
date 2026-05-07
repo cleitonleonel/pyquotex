@@ -27,7 +27,7 @@ from autotrader.models.telegram_session import (
 from autotrader.models.telegram_session import (
     load_session as load_telegram_session,
 )
-from autotrader.routers import auth, broker, health, telegram
+from autotrader.routers import auth, broker, health, parsers, telegram
 from autotrader.services.quotex_manager import QuotexManager
 from autotrader.services.telegram_manager import TelegramManager
 
@@ -173,6 +173,7 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(broker.router)
 app.include_router(telegram.router)
+app.include_router(parsers.router)
 
 
 # Quiet uvicorn's per-request access logs in production; structlog handles
