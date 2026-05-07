@@ -23,6 +23,10 @@ class Settings(BaseSettings):
         env_prefix="AUTOTRADER_",
         extra="ignore",
         case_sensitive=False,
+        # Treat empty env vars as unset so docker-compose's ``${VAR:-}``
+        # interpolation falls back to the model defaults instead of
+        # failing the int/bool parsers with "".
+        env_ignore_empty=True,
     )
 
     # Single-user dashboard passcode (verified with Argon2id at runtime).
@@ -64,6 +68,10 @@ class TelegramSettings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="TELEGRAM_",
         extra="ignore",
+        # docker-compose passes ``TELEGRAM_API_ID=""`` when the user has
+        # not configured Telegram yet — without this flag, pydantic
+        # tries to parse "" as int and crashes on startup.
+        env_ignore_empty=True,
     )
 
     api_id: int | None = None
