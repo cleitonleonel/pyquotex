@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -16,8 +17,15 @@ from autotrader.config import settings
 from autotrader.db import AsyncSessionLocal, close_db, init_db
 from autotrader.logging_setup import configure_logging
 from autotrader.models.broker_credentials import load_credentials
-from autotrader.routers import auth, broker, health
+from autotrader.models.telegram_session import (
+    delete_session as delete_telegram_session,
+)
+from autotrader.models.telegram_session import (
+    load_session as load_telegram_session,
+)
+from autotrader.routers import auth, broker, health, telegram
 from autotrader.services.quotex_manager import QuotexManager
+from autotrader.services.telegram_manager import TelegramManager
 
 # Initialise logging at import time so anything emitted during module
 # import (e.g. configuration validation errors) is captured.
@@ -68,6 +76,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception as exc:  # pragma: no cover  (best-effort warm-up)
             log.warning("broker.autoconnect.failed", error=str(exc))
 
+    # Telegram manager + session restore. Phase 2 just keeps the
+    # client warm; Phase 3 attaches the live message handler.
+    telegram_manager = TelegramManager()
+    app.state.telegram_manager = telegram_manager
+    async with AsyncSessionLocal() as session:
+        tg_row = await load_telegram_session(session)
+    if tg_row is not None:
+        try:
+            ok = await telegram_manager.restore(
+                tg_row.session_string(),
+                phone=tg_row.phone,
+            )
+            if not ok:
+                # Session no longer valid — drop the encrypted row so
+                # the user is forced through a fresh login.
+                async with AsyncSessionLocal() as session:
+                    await delete_telegram_session(session)
+                log.warning("telegram.restore.invalidated_row")
+        except Exception as exc:  # pragma: no cover  (best-effort)
+            log.warning("telegram.restore.failed", error=str(exc))
+
     log.info(
         "autotrader.startup",
         version=__version__,
@@ -78,6 +107,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         log.info("autotrader.shutdown")
         await manager.disconnect()
+        with contextlib.suppress(Exception):
+            await telegram_manager._teardown_client()
         await close_db()
 
 
@@ -99,6 +130,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(broker.router)
+app.include_router(telegram.router)
 
 
 # Quiet uvicorn's per-request access logs in production; structlog handles

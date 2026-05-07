@@ -11,7 +11,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { type BrokerStatus, api, broker } from "@/lib/api";
+import {
+  type BrokerStatus,
+  type TelegramStatus,
+  api,
+  broker,
+  telegram,
+} from "@/lib/api";
 
 interface Health {
   status: string;
@@ -126,6 +132,57 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function TelegramSummaryCard() {
+  const { data, isLoading } = useQuery<TelegramStatus>({
+    queryKey: ["telegram", "status"],
+    queryFn: telegram.status,
+    refetchInterval: 15_000,
+  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Telegram</CardTitle>
+        <CardDescription>
+          {data?.logged_in
+            ? `Connected as ${data.first_name ?? "user"}.`
+            : "Not connected."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {data && (
+          <dl className="space-y-2 text-sm">
+            <Row
+              label="Login state"
+              value={
+                <Badge
+                  variant={data.logged_in ? "success" : "secondary"}
+                >
+                  {data.state}
+                </Badge>
+              }
+            />
+            {data.phone_masked && (
+              <Row label="Phone" value={data.phone_masked} />
+            )}
+            {data.username && (
+              <Row label="Username" value={`@${data.username}`} />
+            )}
+          </dl>
+        )}
+        <Link
+          href="/dashboard/telegram"
+          className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+        >
+          Manage
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
 function PhaseCard({
   title,
   phase,
@@ -154,19 +211,15 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
         <p className="text-sm text-muted-foreground">
-          Phase 1 — broker connection live. Telegram, parsers, pipeline,
-          and risk land in subsequent phases.
+          Phase 2 — broker + Telegram online. Parsers, pipeline, and
+          risk land in subsequent phases.
         </p>
       </section>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <HealthCard />
         <BrokerSummaryCard />
-        <PhaseCard
-          title="Telegram"
-          phase="Phase 2"
-          description="Pyrogram login, channel browser, watch list."
-        />
+        <TelegramSummaryCard />
         <PhaseCard
           title="Parsers"
           phase="Phase 3"

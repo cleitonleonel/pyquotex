@@ -147,3 +147,86 @@ export const broker = {
 
   balance: () => api<BrokerBalance>("/broker/balance"),
 };
+
+// ---------------------------------------------------------------------------
+// Telegram
+// ---------------------------------------------------------------------------
+
+export type TelegramLoginState =
+  | "idle"
+  | "awaiting_code"
+  | "awaiting_password"
+  | "logged_in"
+  | "error";
+
+export interface TelegramStatus {
+  state: TelegramLoginState;
+  logged_in: boolean;
+  awaiting_code: boolean;
+  awaiting_password: boolean;
+  phone_masked: string | null;
+  user_id: number | null;
+  username: string | null;
+  first_name: string | null;
+  last_error: string | null;
+}
+
+export interface TelegramDialog {
+  chat_id: number;
+  title: string;
+  chat_type: string;
+  username: string | null;
+  members_count: number | null;
+  is_verified: boolean;
+  watched: boolean;
+}
+
+export const telegram = {
+  status: () => api<TelegramStatus>("/telegram/status"),
+
+  login: (phone: string) =>
+    api<TelegramStatus>("/telegram/login", {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    }),
+
+  submitCode: (code: string) =>
+    api<TelegramStatus>("/telegram/code", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  submitPassword: (password: string) =>
+    api<TelegramStatus>("/telegram/password", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  cancel: () => api<{ ok: true }>("/telegram/cancel", { method: "POST" }),
+
+  logout: () => api<{ ok: true }>("/telegram/logout", { method: "POST" }),
+
+  dialogs: (q?: string, limit = 200) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    params.set("limit", String(limit));
+    return api<TelegramDialog[]>(`/telegram/dialogs?${params}`);
+  },
+
+  watched: () => api<TelegramDialog[]>("/telegram/watched"),
+
+  watch: (d: {
+    chat_id: number;
+    title: string;
+    chat_type: string;
+    username: string | null;
+    enabled: boolean;
+  }) =>
+    api<{ ok: true }>("/telegram/watch", {
+      method: "POST",
+      body: JSON.stringify(d),
+    }),
+
+  unwatch: (chatId: number) =>
+    api<{ ok: true }>(`/telegram/watch/${chatId}`, { method: "DELETE" }),
+};

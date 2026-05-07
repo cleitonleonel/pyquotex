@@ -10,6 +10,7 @@ import { getToken, logout } from "@/lib/api";
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/broker", label: "Broker" },
+  { href: "/dashboard/telegram", label: "Telegram" },
 ] as const;
 
 export default function DashboardLayout({

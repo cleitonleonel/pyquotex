@@ -28,6 +28,12 @@ os.environ.setdefault("AUTOTRADER_DB_URL", f"sqlite+aiosqlite:///{_db_path}")
 os.environ.setdefault("AUTOTRADER_LIVE_TRADING_ENABLED", "false")
 os.environ.setdefault("AUTOTRADER_CORS_ORIGINS", "*")
 
+# Telegram API credentials must be present *before* any module that
+# imports ``autotrader.config`` runs, because pydantic-settings reads
+# the env once at module load.
+os.environ.setdefault("TELEGRAM_API_ID", "12345")
+os.environ.setdefault("TELEGRAM_API_HASH", "deadbeef")
+
 
 @atexit.register
 def _cleanup_test_db() -> None:
