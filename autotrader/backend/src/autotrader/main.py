@@ -49,14 +49,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.quotex_manager = manager
 
     # Auto-load credentials and pre-warm the connection so the first
-    # trade after startup pays no login cost.
+    # trade after startup pays no login cost. If the broker requests
+    # an OTP we leave the connect parked in ``awaiting_otp`` — the
+    # user can finish it from the dashboard.
     async with AsyncSessionLocal() as session:
         creds = await load_credentials(session)
     if creds is not None:
         mode = creds.account_mode if creds.account_mode in ("PRACTICE", "REAL") else "PRACTICE"
         manager.set_credentials(creds.email(), creds.password(), mode)
-        ok, detail = await manager.connect()
-        log.info("broker.autoconnect", ok=ok, detail=detail)
+        try:
+            manager.begin_connect()
+            await manager.wait_settled(timeout=2.0)
+            log.info(
+                "broker.autoconnect",
+                state=manager.status().state,
+                last_error=manager.status().last_error,
+            )
+        except Exception as exc:  # pragma: no cover  (best-effort warm-up)
+            log.warning("broker.autoconnect.failed", error=str(exc))
 
     log.info(
         "autotrader.startup",

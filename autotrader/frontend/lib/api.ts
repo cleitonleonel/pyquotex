@@ -82,10 +82,19 @@ export function logout() {
 // ---------------------------------------------------------------------------
 
 export type AccountMode = "PRACTICE" | "REAL";
+export type ConnectState =
+  | "idle"
+  | "connecting"
+  | "awaiting_otp"
+  | "connected"
+  | "error";
 
 export interface BrokerStatus {
   configured: boolean;
   connected: boolean;
+  state: ConnectState;
+  awaiting_otp: boolean;
+  otp_prompt: string | null;
   email_masked: string | null;
   account_mode: AccountMode;
   connected_at: string | null;
@@ -95,6 +104,13 @@ export interface BrokerStatus {
 export interface BrokerBalance {
   balance: number;
   account_mode: AccountMode;
+}
+
+export interface BrokerConnectResponse {
+  connected: boolean;
+  state: ConnectState;
+  detail: string;
+  otp_prompt: string | null;
 }
 
 export const broker = {
@@ -109,7 +125,17 @@ export const broker = {
   deleteCredentials: () =>
     api<{ ok: true }>("/broker/credentials", { method: "DELETE" }),
 
-  connect: () => api<{ connected: boolean; detail: string }>("/broker/connect", { method: "POST" }),
+  connect: () =>
+    api<BrokerConnectResponse>("/broker/connect", { method: "POST" }),
+
+  submitOtp: (code: string) =>
+    api<BrokerStatus>("/broker/otp", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  cancelConnect: () =>
+    api<{ ok: true }>("/broker/cancel", { method: "POST" }),
 
   disconnect: () => api<{ ok: true }>("/broker/disconnect", { method: "POST" }),
 

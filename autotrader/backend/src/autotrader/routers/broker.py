@@ -1,8 +1,24 @@
 """Broker (Quotex) endpoints.
 
-All routes require a valid bearer token. The ``Manager``/``Session``
-dependencies pull the singleton ``QuotexManager`` and a per-request DB
-session, respectively.
+The connect flow is non-blocking by design — pyquotex sometimes needs
+an OTP / 2FA code, and we don't want a single HTTP request to block
+for 30+ seconds while the user types it.
+
+Flow:
+  1. ``PUT /broker/credentials`` — store email + password (encrypted).
+  2. ``POST /broker/connect``     — schedules a background connect.
+                                    Returns 200 if it settled inside
+                                    the brief grace window, else 202
+                                    with a ``state`` the frontend
+                                    polls on.
+  3. ``GET /broker/status``       — frontend polls; if state is
+                                    ``awaiting_otp`` it shows the
+                                    code-entry UI.
+  4. ``POST /broker/otp``         — submits the user-entered code,
+                                    unparking the connect coroutine.
+  5. ``POST /broker/cancel``      — abort an in-flight connect.
+
+All routes require a valid bearer token.
 """
 
 from __future__ import annotations
@@ -10,7 +26,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from autotrader.auth import Principal, require_auth
@@ -22,15 +38,18 @@ from autotrader.models.broker_credentials import (
 )
 from autotrader.services.quotex_manager import (
     AccountMode,
+    ConnectState,
     QuotexManagerError,
 )
 
 router = APIRouter(prefix="/broker", tags=["broker"], dependencies=[Depends(require_auth)])
 
-# Auth dependency injected at the router level above; we still take a
-# ``Principal`` in handlers that want to log the caller. Most handlers
-# don't need it.
 _Auth = Annotated[Principal, Depends(require_auth)]
+
+# How long ``POST /broker/connect`` will wait for a no-OTP login to
+# settle before returning 202 and letting the frontend poll. 1.5s
+# covers the warm-WS path with comfortable headroom.
+_CONNECT_WAIT_SECONDS = 1.5
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +60,9 @@ _Auth = Annotated[Principal, Depends(require_auth)]
 class StatusResponse(BaseModel):
     configured: bool
     connected: bool
+    state: ConnectState
+    awaiting_otp: bool
+    otp_prompt: str | None = None
     email_masked: str | None = None
     account_mode: AccountMode
     connected_at: datetime | None = None
@@ -57,9 +79,15 @@ class AccountModeRequest(BaseModel):
     mode: AccountMode
 
 
+class OTPRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=12)
+
+
 class ConnectResponse(BaseModel):
     connected: bool
+    state: ConnectState
     detail: str
+    otp_prompt: str | None = None
 
 
 class BalanceResponse(BaseModel):
@@ -71,6 +99,21 @@ class OkResponse(BaseModel):
     ok: Literal[True] = True
 
 
+def _status_payload(manager: ManagerDep) -> StatusResponse:
+    s = manager.status()
+    return StatusResponse(
+        configured=s.configured,
+        connected=s.connected,
+        state=s.state,
+        awaiting_otp=s.awaiting_otp,
+        otp_prompt=s.otp_prompt,
+        email_masked=s.email_masked,
+        account_mode=s.account_mode,
+        connected_at=s.connected_at,
+        last_error=s.last_error,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -78,15 +121,7 @@ class OkResponse(BaseModel):
 
 @router.get("/status", response_model=StatusResponse)
 async def status_endpoint(manager: ManagerDep) -> StatusResponse:
-    s = manager.status()
-    return StatusResponse(
-        configured=s.configured,
-        connected=s.connected,
-        email_masked=s.email_masked,
-        account_mode=s.account_mode,
-        connected_at=s.connected_at,
-        last_error=s.last_error,
-    )
+    return _status_payload(manager)
 
 
 @router.put("/credentials", response_model=OkResponse)
@@ -95,11 +130,7 @@ async def put_credentials(
     session: SessionDep,
     manager: ManagerDep,
 ) -> OkResponse:
-    """Store / replace the broker credentials.
-
-    Disconnects the manager if it was connected so the next ``connect``
-    uses the freshly-saved values.
-    """
+    """Store / replace the broker credentials."""
     try:
         manager._enforce_live_gate(body.account_mode)
     except QuotexManagerError as exc:
@@ -125,10 +156,18 @@ async def delete_credentials_endpoint(
 
 
 @router.post("/connect", response_model=ConnectResponse)
-async def connect_endpoint(manager: ManagerDep, session: SessionDep) -> ConnectResponse:
+async def connect_endpoint(
+    response: Response,
+    manager: ManagerDep,
+    session: SessionDep,
+) -> ConnectResponse:
+    """Kick off a connect attempt.
+
+    Returns 200 on the no-OTP fast path (login completed within the
+    grace window) and 202 otherwise — the frontend then polls
+    ``/broker/status`` and submits via ``/broker/otp`` when needed.
+    """
     if not manager.configured:
-        # Manager loses its in-memory creds across container restarts;
-        # fall back to the DB before refusing.
         creds = await load_credentials(session)
         if creds is None:
             raise HTTPException(
@@ -142,19 +181,69 @@ async def connect_endpoint(manager: ManagerDep, session: SessionDep) -> ConnectR
         )
 
     try:
-        ok, detail = await manager.connect()
+        manager.begin_connect()
     except QuotexManagerError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
-    if not ok:
+    # Give the fast path a brief window so non-OTP logins feel
+    # synchronous. OTP-bearing logins block on the user inside this
+    # window and bail out via state==awaiting_otp.
+    await manager.wait_settled(_CONNECT_WAIT_SECONDS)
+
+    s = manager.status()
+
+    if s.state == "connected":
+        return ConnectResponse(
+            connected=True,
+            state="connected",
+            detail="connected",
+        )
+    if s.state == "error":
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=detail,
+            detail=s.last_error or "connect failed",
         )
-    return ConnectResponse(connected=True, detail=detail)
+
+    response.status_code = status.HTTP_202_ACCEPTED
+    return ConnectResponse(
+        connected=False,
+        state=s.state,
+        detail=(
+            "broker requested an OTP — submit it via POST /broker/otp"
+            if s.state == "awaiting_otp"
+            else "still connecting — poll GET /broker/status"
+        ),
+        otp_prompt=s.otp_prompt,
+    )
+
+
+@router.post("/otp", response_model=StatusResponse)
+async def submit_otp_endpoint(
+    body: OTPRequest,
+    manager: ManagerDep,
+) -> StatusResponse:
+    try:
+        await manager.submit_otp(body.code)
+    except QuotexManagerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    # Same brief settle so the response usually reflects the final
+    # state (connected / error) rather than the optimistic
+    # "connecting" flip.
+    await manager.wait_settled(_CONNECT_WAIT_SECONDS)
+    return _status_payload(manager)
+
+
+@router.post("/cancel", response_model=OkResponse)
+async def cancel_endpoint(manager: ManagerDep) -> OkResponse:
+    await manager.cancel_connect()
+    return OkResponse()
 
 
 @router.post("/disconnect", response_model=OkResponse)
@@ -177,21 +266,12 @@ async def set_account_mode_endpoint(
             detail=str(exc),
         ) from exc
 
-    # Persist the choice so it survives container restarts.
     creds = await load_credentials(session)
     if creds is not None and creds.account_mode != body.mode:
         creds.account_mode = body.mode
         await session.commit()
 
-    s = manager.status()
-    return StatusResponse(
-        configured=s.configured,
-        connected=s.connected,
-        email_masked=s.email_masked,
-        account_mode=s.account_mode,
-        connected_at=s.connected_at,
-        last_error=s.last_error,
-    )
+    return _status_payload(manager)
 
 
 @router.get("/balance", response_model=BalanceResponse)
