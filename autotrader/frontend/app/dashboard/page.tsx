@@ -1,6 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -8,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { api } from "@/lib/api";
+import { type BrokerStatus, api, broker } from "@/lib/api";
 
 interface Health {
   status: string;
@@ -26,7 +29,7 @@ function HealthCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>API status</CardTitle>
+        <CardTitle>API</CardTitle>
         <CardDescription>Backend health and version.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -42,7 +45,13 @@ function HealthCard() {
             <Row label="Version" value={data.version} />
             <Row
               label="Live trading"
-              value={data.live_trading_enabled ? "enabled" : "disabled"}
+              value={
+                <Badge
+                  variant={data.live_trading_enabled ? "warning" : "outline"}
+                >
+                  {data.live_trading_enabled ? "ENABLED" : "disabled"}
+                </Badge>
+              }
             />
           </dl>
         )}
@@ -51,9 +60,66 @@ function HealthCard() {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function BrokerSummaryCard() {
+  const { data, isLoading } = useQuery<BrokerStatus>({
+    queryKey: ["broker", "status"],
+    queryFn: broker.status,
+    refetchInterval: 10_000,
+  });
+
   return (
-    <div className="flex justify-between">
+    <Card>
+      <CardHeader>
+        <CardTitle>Broker</CardTitle>
+        <CardDescription>
+          {data?.configured ? "Quotex credentials configured." : "Not configured."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {data && (
+          <dl className="space-y-2 text-sm">
+            <Row
+              label="Connection"
+              value={
+                <Badge variant={data.connected ? "success" : "secondary"}>
+                  {data.connected ? "connected" : "disconnected"}
+                </Badge>
+              }
+            />
+            <Row
+              label="Account"
+              value={
+                <Badge
+                  variant={
+                    data.account_mode === "REAL" ? "warning" : "outline"
+                  }
+                >
+                  {data.account_mode}
+                </Badge>
+              }
+            />
+            {data.email_masked && (
+              <Row label="Email" value={data.email_masked} />
+            )}
+          </dl>
+        )}
+        <Link
+          href="/dashboard/broker"
+          className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+        >
+          Manage
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-medium">{value}</dd>
     </div>
@@ -88,17 +154,14 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
         <p className="text-sm text-muted-foreground">
-          Phase 0 scaffold — feature panels arrive in subsequent phases.
+          Phase 1 — broker connection live. Telegram, parsers, pipeline,
+          and risk land in subsequent phases.
         </p>
       </section>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <HealthCard />
-        <PhaseCard
-          title="Broker"
-          phase="Phase 1"
-          description="Quotex login, balance, demo/real toggle."
-        />
+        <BrokerSummaryCard />
         <PhaseCard
           title="Telegram"
           phase="Phase 2"

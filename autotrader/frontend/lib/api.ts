@@ -76,3 +76,48 @@ export async function login(passcode: string): Promise<string> {
 export function logout() {
   setToken(null);
 }
+
+// ---------------------------------------------------------------------------
+// Broker
+// ---------------------------------------------------------------------------
+
+export type AccountMode = "PRACTICE" | "REAL";
+
+export interface BrokerStatus {
+  configured: boolean;
+  connected: boolean;
+  email_masked: string | null;
+  account_mode: AccountMode;
+  connected_at: string | null;
+  last_error: string | null;
+}
+
+export interface BrokerBalance {
+  balance: number;
+  account_mode: AccountMode;
+}
+
+export const broker = {
+  status: () => api<BrokerStatus>("/broker/status"),
+
+  putCredentials: (email: string, password: string, account_mode: AccountMode) =>
+    api<{ ok: true }>("/broker/credentials", {
+      method: "PUT",
+      body: JSON.stringify({ email, password, account_mode }),
+    }),
+
+  deleteCredentials: () =>
+    api<{ ok: true }>("/broker/credentials", { method: "DELETE" }),
+
+  connect: () => api<{ connected: boolean; detail: string }>("/broker/connect", { method: "POST" }),
+
+  disconnect: () => api<{ ok: true }>("/broker/disconnect", { method: "POST" }),
+
+  setAccountMode: (mode: AccountMode) =>
+    api<BrokerStatus>("/broker/account-mode", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+
+  balance: () => api<BrokerBalance>("/broker/balance"),
+};
