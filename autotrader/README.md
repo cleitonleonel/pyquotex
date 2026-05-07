@@ -22,10 +22,12 @@ Telegram-driven autotrader UI built on top of [pyquotex](../).
 cd autotrader
 cp .env.example .env
 
-# Generate a Fernet key and paste it into AUTOTRADER_FERNET_KEY:
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Generate a Fernet key (stdlib only, no extra installs) and paste it
+# into AUTOTRADER_FERNET_KEY:
+python3 -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
 
-# Set AUTOTRADER_PASSCODE to a long random string.
+# Set AUTOTRADER_PASSCODE to a long random string. A safe one-liner:
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
 docker compose up --build
 ```
