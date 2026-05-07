@@ -1,0 +1,55 @@
+# Autotrader — single-host docker-compose for the Telegram-driven autotrader.
+#
+# Build context for the backend is the *repository root* (one level up)
+# because the backend's pyproject.toml depends on the sibling pyquotex
+# package via a local path.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: autotrader/backend/Dockerfile
+    image: autotrader-api:latest
+    container_name: autotrader-api
+    restart: unless-stopped
+    ports:
+      - "${AUTOTRADER_API_PORT:-8000}:8000"
+    environment:
+      AUTOTRADER_PASSCODE: "${AUTOTRADER_PASSCODE:?AUTOTRADER_PASSCODE is required}"
+      AUTOTRADER_FERNET_KEY: "${AUTOTRADER_FERNET_KEY:?AUTOTRADER_FERNET_KEY is required}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      AUTOTRADER_LIVE_TRADING_ENABLED: "${AUTOTRADER_LIVE_TRADING_ENABLED:-false}"
+      AUTOTRADER_DB_URL: "sqlite+aiosqlite:////data/autotrader.db"
+      AUTOTRADER_LOG_LEVEL: "${AUTOTRADER_LOG_LEVEL:-INFO}"
+      AUTOTRADER_API_HOST: "0.0.0.0"
+      AUTOTRADER_API_PORT: "8000"
+      AUTOTRADER_CORS_ORIGINS: "${AUTOTRADER_CORS_ORIGINS:-http://localhost:3000}"
+    volumes:
+      - autotrader-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: "${NEXT_PUBLIC_API_BASE:-http://localhost:8000}"
+    image: autotrader-web:latest
+    container_name: autotrader-web
+    restart: unless-stopped
+    ports:
+      - "${AUTOTRADER_WEB_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: "${NEXT_PUBLIC_API_BASE:-http://localhost:8000}"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  autotrader-data:
