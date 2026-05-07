@@ -14,9 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from autotrader import __version__
 from autotrader.config import settings
+from autotrader.crypto import CryptoError
 from autotrader.db import AsyncSessionLocal, close_db, init_db
 from autotrader.logging_setup import configure_logging
-from autotrader.models.broker_credentials import load_credentials
+from autotrader.models.broker_credentials import (
+    delete_credentials,
+    load_credentials,
+)
 from autotrader.models.telegram_session import (
     delete_session as delete_telegram_session,
 )
@@ -49,7 +53,7 @@ def _broker_root_path() -> str:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (linear startup script)
     """Bootstraps DB + Quotex client; tears down on shutdown."""
     await init_db()
 
@@ -63,18 +67,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with AsyncSessionLocal() as session:
         creds = await load_credentials(session)
     if creds is not None:
-        mode = creds.account_mode if creds.account_mode in ("PRACTICE", "REAL") else "PRACTICE"
-        manager.set_credentials(creds.email(), creds.password(), mode)
         try:
-            manager.begin_connect()
-            await manager.wait_settled(timeout=2.0)
-            log.info(
-                "broker.autoconnect",
-                state=manager.status().state,
-                last_error=manager.status().last_error,
+            email = creds.email()
+            password = creds.password()
+        except CryptoError:
+            # Stored row was encrypted with a different Fernet key
+            # (rotated, lost, or .env mismatch). The blob is dead
+            # weight at this point — drop it so the user can re-enter
+            # via the UI instead of facing a perma-broken startup.
+            log.error(
+                "broker.creds.unreadable",
+                detail=(
+                    "stored broker credentials cannot be decrypted with the "
+                    "current AUTOTRADER_FERNET_KEY — clearing the row; "
+                    "re-enter credentials in the dashboard"
+                ),
             )
-        except Exception as exc:  # pragma: no cover  (best-effort warm-up)
-            log.warning("broker.autoconnect.failed", error=str(exc))
+            async with AsyncSessionLocal() as session:
+                await delete_credentials(session)
+        else:
+            mode = (
+                creds.account_mode
+                if creds.account_mode in ("PRACTICE", "REAL")
+                else "PRACTICE"
+            )
+            manager.set_credentials(email, password, mode)
+            try:
+                manager.begin_connect()
+                await manager.wait_settled(timeout=2.0)
+                log.info(
+                    "broker.autoconnect",
+                    state=manager.status().state,
+                    last_error=manager.status().last_error,
+                )
+            except Exception as exc:  # pragma: no cover  (best-effort warm-up)
+                log.warning("broker.autoconnect.failed", error=str(exc))
 
     # Telegram manager + session restore. Phase 2 just keeps the
     # client warm; Phase 3 attaches the live message handler.
@@ -84,18 +111,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         tg_row = await load_telegram_session(session)
     if tg_row is not None:
         try:
-            ok = await telegram_manager.restore(
-                tg_row.session_string(),
-                phone=tg_row.phone,
+            session_string = tg_row.session_string()
+        except CryptoError:
+            log.error(
+                "telegram.session.unreadable",
+                detail=(
+                    "stored Telegram session cannot be decrypted with the "
+                    "current AUTOTRADER_FERNET_KEY — clearing the row; "
+                    "re-login from the dashboard"
+                ),
             )
-            if not ok:
-                # Session no longer valid — drop the encrypted row so
-                # the user is forced through a fresh login.
-                async with AsyncSessionLocal() as session:
-                    await delete_telegram_session(session)
-                log.warning("telegram.restore.invalidated_row")
-        except Exception as exc:  # pragma: no cover  (best-effort)
-            log.warning("telegram.restore.failed", error=str(exc))
+            async with AsyncSessionLocal() as session:
+                await delete_telegram_session(session)
+        else:
+            try:
+                ok = await telegram_manager.restore(
+                    session_string,
+                    phone=tg_row.phone,
+                )
+                if not ok:
+                    # Session no longer valid (e.g. user revoked it from
+                    # the Telegram app). Drop the row so the user is
+                    # forced through a fresh login.
+                    async with AsyncSessionLocal() as session:
+                        await delete_telegram_session(session)
+                    log.warning("telegram.restore.invalidated_row")
+            except Exception as exc:  # pragma: no cover  (best-effort)
+                log.warning("telegram.restore.failed", error=str(exc))
 
     log.info(
         "autotrader.startup",
