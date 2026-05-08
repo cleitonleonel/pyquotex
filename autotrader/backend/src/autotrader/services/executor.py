@@ -139,12 +139,21 @@ class TradeExecutor:
         """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled)."""
         try:
             if decision.trade_mode == "scheduled":
+                # pyquotex.open_pending takes an *ISO 8601 string*, not
+                # a datetime. Passing the raw object trips an
+                # AttributeError inside pyquotex's normalisation
+                # (it calls ``.split()`` on the value). Format here.
+                open_time_iso = (
+                    signal.fire_at.isoformat()
+                    if signal.fire_at is not None
+                    else None
+                )
                 ok, info = await self._manager._client.open_pending(  # type: ignore[union-attr]
                     amount=decision.stake,
                     asset=signal.asset,
                     direction=signal.direction,
                     duration=signal.duration_seconds,
-                    open_time=signal.fire_at,
+                    open_time=open_time_iso,
                 )
             else:
                 ok, info = await self._manager._client.buy(  # type: ignore[union-attr]

@@ -277,6 +277,11 @@ def test_scheduled_signal_fires_open_pending(app_client: TestClient) -> None:
     assert call["direction"] == "call"
     assert call["duration"] == 60
     assert call["open_time"] is not None
+    # pyquotex expects an ISO 8601 string; passing a raw datetime
+    # tripped an AttributeError inside pyquotex normalisation. Pin
+    # the format here so a regression is caught.
+    assert isinstance(call["open_time"], str)
+    assert "T" in call["open_time"]
     assert FakeQuotex.buy_calls == []
 
     r = app_client.get("/pipeline/trades", headers=headers)
