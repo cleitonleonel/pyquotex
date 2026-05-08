@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import ManagerDep, SessionDep
+from autotrader.dependencies import ManagerDep, PipelineDep, SessionDep
 from autotrader.models.parser_config import (
     ParserConfig,
     create_config,
@@ -309,6 +309,7 @@ async def update_config_endpoint(
     config_id: int,
     body: ConfigPayload,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> ConfigResponse:
     _validate_compiles(body)
     row = await update_config(
@@ -321,6 +322,12 @@ async def update_config_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="parser config not found",
         )
+    # Drop the cached parser so stateful types (Aggregator,
+    # PrepTriggerParser) can't keep firing on stale buffers after the
+    # config shape changed. The pipeline's signature check would also
+    # catch most edits but explicit invalidation is cheap insurance
+    # and clears the cached row even when the signature didn't drift.
+    pipeline.invalidate(config_id)
     return _to_response(row)
 
 
@@ -328,8 +335,10 @@ async def update_config_endpoint(
 async def delete_config_endpoint(
     config_id: int,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> OkResponse:
     await delete_config(session, config_id)
+    pipeline.invalidate(config_id)
     return OkResponse()
 
 

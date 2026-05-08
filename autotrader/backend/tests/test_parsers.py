@@ -668,6 +668,40 @@ def test_prep_trigger_template_kind() -> None:
     assert out.asset == "GBPUSD"
 
 
+def test_prep_trigger_accepts_time_group_as_fire_at_alias() -> None:
+    """Regex preps using ``(?P<time>...)`` should produce a ``fire_at``.
+
+    The regex parser already accepts ``time`` as a synonym for
+    ``fire_at`` because that's the natural name in most signal
+    channels. Without the same alias here, prep_trigger silently
+    drops the schedule and treats every signal as live — exactly the
+    kind of inconsistency the parser layer is supposed to hide.
+    """
+    parser = _pt_parser(
+        prep=(
+            r"PAIR\s*:\s*(?P<asset>\S+)\s+"
+            r"TIME\s*:\s*(?P<duration>\d+)\s*Minute\s+"
+            r"AT\s+(?P<time>\d{2}:\d{2})"
+        ),
+    )
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+    parser.feed(
+        RawMessage(
+            "PAIR: EURUSD TIME: 1 Minute AT 14:30",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    out = parser.feed(
+        RawMessage("👍", chat_id=-1001, sender_id=200, received_at=base),
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.fire_at is not None
+    assert out.fire_at.hour == 14
+    assert out.fire_at.minute == 30
+
+
 def test_prep_trigger_validates_required_groups() -> None:
     with pytest.raises(ValueError, match="asset"):
         PrepTriggerParser(

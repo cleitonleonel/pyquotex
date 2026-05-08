@@ -215,10 +215,15 @@ class PrepTriggerParser(Parser):
                     detail={"raw": groups["stake"]},
                 )
 
+        # Accept ``time`` as a synonym for ``fire_at`` — that's the
+        # natural name in most signal channels, and the regex parser
+        # already does this. Forcing prep_trigger users to remember
+        # our internal jargon would be a footgun.
+        fire_at_raw = groups.get("fire_at") or groups.get("time")
         fire_at: datetime | None = None
-        if "fire_at" in groups:
+        if fire_at_raw is not None:
             fire_at = normalise_fire_at(
-                groups["fire_at"],
+                fire_at_raw,
                 now=now,
                 tz_offset_minutes=self._tz_offset,
             )

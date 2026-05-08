@@ -521,15 +521,47 @@ async def _insert_pending(
     return row.id or 0
 
 
-async def test_reconcile_expires_invalid_ticket(
+async def test_reconcile_expires_all_pending_rows(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """Stuck rows from the pre-fix bug have ``broker_order_id="True"``.
+    """Every pending row at startup gets expired with a clear note.
 
-    These can never settle (no real ticket to wait for) so the
-    reconciler must mark them ``expired`` — otherwise they pin the
-    concurrency cap forever and silently block every new signal.
+    Background: pyquotex resets ``_active_pending`` on each connect, so
+    even a real ticket from the previous process can't be tied back to
+    its close event. The honest behaviour is to expire every pending
+    row on restart so the concurrency cap doesn't silently lock the
+    pipeline.
     """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+
+    bad_id = await _insert_pending(broker_order_id="True")
+    past_id = await _insert_pending(
+        broker_order_id="real-ticket-1",
+        placed_at=datetime.now(UTC) - timedelta(hours=1),
+        trade_mode="live",
+    )
+    inflight_id = await _insert_pending(
+        broker_order_id="real-ticket-2",
+        fire_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    await app.state.executor.reconcile_pending()
+
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    by_id = {r["id"]: r for r in rows}
+    for attempt_id in (bad_id, past_id, inflight_id):
+        row = by_id[attempt_id]
+        assert row["status"] == "expired"
+        assert "watcher lost on restart" in (row["error"] or "").lower()
+
+
+async def test_reconcile_is_idempotent(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Calling reconcile twice does no harm — already-expired rows stay put."""
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
@@ -538,59 +570,33 @@ async def test_reconcile_expires_invalid_ticket(
     from autotrader.main import app  # noqa: PLC0415
 
     await app.state.executor.reconcile_pending()
-
-    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
-    expired = [r for r in rows if r["id"] == attempt_id]
-    assert len(expired) == 1
-    assert expired[0]["status"] == "expired"
-    assert "broker ticket missing" in (expired[0]["error"] or "").lower()
-
-
-async def test_reconcile_expires_settled_during_downtime(
-    async_client: httpx.AsyncClient,
-) -> None:
-    """A pending whose close time is already past the grace gets expired."""
-    headers = await _login(async_client)
-    await _connect_broker(async_client, headers)
-
-    attempt_id = await _insert_pending(
-        broker_order_id="real-ticket-1",
-        placed_at=datetime.now(UTC) - timedelta(hours=1),
-        trade_mode="live",
-    )
-
-    from autotrader.main import app  # noqa: PLC0415
-
     await app.state.executor.reconcile_pending()
 
     rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
     expired = [r for r in rows if r["id"] == attempt_id]
     assert len(expired) == 1
     assert expired[0]["status"] == "expired"
-    assert "settlement window" in (expired[0]["error"] or "").lower()
 
 
-async def test_reconcile_respawns_in_flight_watcher(
+async def test_watcher_marks_expired_when_broker_disconnected(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """A pending whose fire_at is still in the future re-attaches a watcher."""
+    """A watcher firing with a torn-down broker shouldn't leave a pending row."""
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
-    fire_at = datetime.now(UTC) + timedelta(minutes=10)
-    attempt_id = await _insert_pending(
-        broker_order_id="real-ticket-2",
-        fire_at=fire_at,
-    )
+    attempt_id = await _insert_pending(broker_order_id="real-ticket-3")
 
     from autotrader.main import app  # noqa: PLC0415
 
-    WatcherFakeQuotex.next_outcomes = [("win", 1.5)]
-    await app.state.executor.reconcile_pending()
-    await _settle_watchers(async_client)
+    # Tear down the broker connection so the watcher hits the
+    # ``client is None`` branch.
+    await app.state.quotex_manager.disconnect()
+    await app.state.executor._watch_result(  # type: ignore[attr-defined]
+        attempt_id, "real-ticket-3", duration=60,
+    )
 
     rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
-    settled = [r for r in rows if r["id"] == attempt_id]
-    assert len(settled) == 1
-    assert settled[0]["status"] == "won"
-    assert settled[0]["profit"] == 1.5
+    row = next(r for r in rows if r["id"] == attempt_id)
+    assert row["status"] == "expired"
+    assert "broker disconnected" in (row["error"] or "").lower()

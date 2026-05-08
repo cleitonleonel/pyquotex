@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import structlog
 
@@ -39,21 +39,6 @@ from autotrader.services.quotex_manager import (
 from autotrader.services.risk_gate import RiskDecision, evaluate
 
 log = structlog.get_logger(__name__)
-
-# Sentinel ``broker_order_id`` values that the pre-fix code stored when
-# pyquotex's ``open_pending`` returned its ``pending_successful`` bool.
-# A real ticket is a UUID or short token; these are placeholder strings
-# the reconciler can never recover.
-_BAD_TICKETS = frozenset({"", "True", "False", "None"})
-
-
-def _is_real_ticket(value: str | None) -> bool:
-    return value is not None and value not in _BAD_TICKETS
-
-
-def _as_utc(value: datetime) -> datetime:
-    """SQLite drops tzinfo on round-trip; treat naive timestamps as UTC."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class TradeExecutor:
@@ -125,79 +110,36 @@ class TradeExecutor:
     async def reconcile_pending(self) -> None:
         """Sweep ``pending`` rows after a restart.
 
-        In-memory watchers don't survive a restart. Without this, every
-        ``pending`` row from the previous process stays pending forever
-        — they count against the concurrency cap and silently block
-        every new signal.
+        In-memory watchers don't survive a restart, and pyquotex
+        doesn't persist its ``_active_pending`` map either — once the
+        WS reconnects, even a real ticket from the previous run no
+        longer triggers ``order_closed_{ticket}`` events. So
+        "respawning a watcher" looks like recovery on paper but in
+        practice always times out: the broker still settles the trade
+        but pyquotex can't link the close back to our id.
 
-        For each row we choose the safest action:
-
-        * **Invalid broker_order_id** (None / empty / ``"True"`` /
-          ``"False"``) — pre-fix scheduled trades that never captured
-          a real ticket. Unrecoverable: mark expired.
-        * **Past expected close time + grace** — broker has already
-          settled, we missed the event during the downtime window.
-          Mark expired.
-        * **Still in flight** — re-spawn a watcher with a timeout
-          covering the remaining wait so the trade settles cleanly.
+        Honest call: mark every pending row ``expired`` with a clear
+        note. The broker's own books are unaffected, but the user is
+        warned that any in-flight trades aren't tracked end-to-end and
+        the martingale ladder may need a manual reset if they want a
+        clean recovery sequence.
 
         Idempotent: calling twice on the same DB does no harm.
         """
-        now = datetime.now(UTC)
-        grace = timedelta(minutes=5)
-
         async with AsyncSessionLocal() as session:
             rows = await list_pending(session)
+        if not rows:
+            return
 
-        respawn = 0
-        expired_invalid = 0
-        expired_late = 0
+        note = (
+            "watcher lost on restart — pyquotex doesn't track tickets "
+            "across reconnects, so the outcome can't be tied back. "
+            "Check broker history if needed; reset the martingale "
+            "ladder if the recovery sequence got out of sync"
+        )
         for row in rows:
-            attempt_id = row.id or 0
-            if not _is_real_ticket(row.broker_order_id):
-                await self._mark_reconciled(
-                    attempt_id,
-                    "broker ticket missing; cannot reconcile after restart",
-                )
-                expired_invalid += 1
-                continue
-
-            placed = _as_utc(row.placed_at or row.created_at)
-            duration = timedelta(seconds=row.duration_seconds)
-            expected_close = (
-                _as_utc(row.fire_at) + duration if row.fire_at is not None
-                else placed + duration
-            )
-            if expected_close + grace < now:
-                await self._mark_reconciled(
-                    attempt_id,
-                    "watcher lost on restart; settlement window already passed",
-                )
-                expired_late += 1
-                continue
-
-            # Still in flight — give the watcher whatever time is left
-            # plus a generous slack so a slightly-late close still
-            # lands. ``broker_order_id`` is a ``str`` here, narrowed by
-            # the ``_is_real_ticket`` guard above.
-            assert row.broker_order_id is not None
-            remaining = (expected_close + grace - now).total_seconds()
-            self._spawn_watcher(
-                attempt_id=attempt_id,
-                order_id=row.broker_order_id,
-                duration=row.duration_seconds,
-                timeout=max(remaining, 30.0),
-            )
-            respawn += 1
-
-        if rows:
-            log.info(
-                "executor.reconcile",
-                total=len(rows),
-                respawned=respawn,
-                expired_invalid=expired_invalid,
-                expired_late=expired_late,
-            )
+            await self._mark_reconciled(row.id or 0, note)
+        log.info("executor.reconcile", expired=len(rows))
 
     def _spawn_watcher(
         self,
@@ -404,6 +346,13 @@ class TradeExecutor:
     ) -> None:
         """Wait for the broker's win/loss event and persist."""
         if self._manager._client is None:
+            # Broker disconnected between placement and watch start.
+            # Don't leave the row ``pending`` forever — the
+            # concurrency cap would silently block every new signal.
+            await self._mark_reconciled(
+                attempt_id,
+                "broker disconnected before watcher could attach",
+            )
             return
         try:
             status, profit = await self._manager._client.wait_for_order_close(

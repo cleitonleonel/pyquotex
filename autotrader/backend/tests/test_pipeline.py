@@ -447,3 +447,87 @@ def test_status_reports_counts(app_client: TestClient) -> None:
     assert body["broker_connected"] is True
     assert body["watched_chat_count"] == 1
     assert body["enabled_parser_count"] == 1
+
+
+# ===========================================================================
+# Pipeline parser-cache invalidation on config update / delete
+# ===========================================================================
+
+
+def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> None:
+    """Editing a parser config drops the cached parser instance.
+
+    Stateful parsers (PrepTriggerParser, the concat Aggregator) hold
+    per-chat buffers. Without invalidation, those buffers would keep
+    firing on the *new* config's shape — and the implicit
+    signature-drift refresh inside ``Pipeline._get_or_build`` won't
+    fire the moment the user only changed the priority or the name.
+    Wire it explicitly so an update is unambiguous.
+    """
+    headers = _login(app_client)
+    _connect_broker(app_client, headers)
+    _add_watch(app_client, headers, -1001)
+    config_id = _create_parser(
+        app_client,
+        headers,
+        chat_id=-1001,
+        parser_type="template",
+        parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+    )
+    _activate(app_client, headers)
+
+    # Warm the cache via a dispatch.
+    _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
+    pipeline = app_client.app.state.pipeline  # type: ignore[attr-defined]
+    assert config_id in pipeline._parsers
+
+    # Update without changing the parser shape — the signature would
+    # not drift on its own, so the cache must be flushed by the route.
+    r = app_client.put(
+        f"/parsers/configs/{config_id}",
+        headers=headers,
+        json={
+            "name": "renamed",
+            "priority": 50,
+            "parser_type": "template",
+            "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION}"},
+            "timezone": "UTC",
+            "timezone_offset_minutes": 0,
+            "asset_aliases": {},
+            "default_stake": 5.0,
+            "default_duration_seconds": 60,
+            "trade_mode": "auto",
+            "aggregate_window_seconds": 0,
+            "martingale": {
+                "enabled": False,
+                "multiplier": 2.0,
+                "max_streak": 5,
+                "reset_on_win": True,
+            },
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert config_id not in pipeline._parsers
+
+
+def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> None:
+    headers = _login(app_client)
+    _connect_broker(app_client, headers)
+    _add_watch(app_client, headers, -1001)
+    config_id = _create_parser(
+        app_client,
+        headers,
+        chat_id=-1001,
+        parser_type="template",
+        parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+    )
+    _activate(app_client, headers)
+
+    _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
+    pipeline = app_client.app.state.pipeline  # type: ignore[attr-defined]
+    assert config_id in pipeline._parsers
+
+    r = app_client.delete(f"/parsers/configs/{config_id}", headers=headers)
+    assert r.status_code == 200
+    assert config_id not in pipeline._parsers
