@@ -43,6 +43,15 @@ dependencies = [
     # never requires a rebuild.
     "sentry-sdk[fastapi]>=2.18.0",
 
+    # Browser-impersonating HTTP backend. Quotex's ``qxbroker.com``
+    # login page sits behind Cloudflare which 403s plain ``httpx``
+    # because the TLS / JA3 fingerprint isn't a real browser.
+    # ``curl_cffi`` ships ``impersonate="chrome120"`` which clears the
+    # gate. Pyquotex picks it up automatically when its
+    # ``ProxyConfig.use_browser_tls`` is set — we wire that on by
+    # default in ``QuotexManager``.
+    "curl_cffi>=0.7.0",
+
     # Sibling project — wraps the Quotex broker API
     "pyquotex",
 ]

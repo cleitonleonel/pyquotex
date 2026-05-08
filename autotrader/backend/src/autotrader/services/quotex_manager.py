@@ -31,6 +31,7 @@ from typing import Literal
 import structlog
 from pyquotex.stable_api import Quotex
 from pyquotex.utils.account_type import AccountType
+from pyquotex.utils.proxy_config import ProxyConfig
 
 from autotrader.config import settings
 from autotrader.models.base import utc_now
@@ -204,6 +205,16 @@ class QuotexManager:
                     root_path=self._root_path,
                     lang="en",
                     on_otp_callback=self._on_otp_callback,
+                    # Quotex's ``qxbroker.com`` login page is behind
+                    # Cloudflare and 403s plain ``httpx`` because the
+                    # TLS / JA3 fingerprint isn't a real browser.
+                    # ``curl_cffi`` ships ``impersonate="chrome120"``
+                    # which clears the gate; pyquotex switches to it
+                    # automatically when ``use_browser_tls=True``.
+                    proxy_config=ProxyConfig(
+                        use_browser_tls=True,
+                        impersonate="chrome120",
+                    ),
                 )
                 client.set_account_mode(self._account_mode)
                 ok, reason = await client.connect()

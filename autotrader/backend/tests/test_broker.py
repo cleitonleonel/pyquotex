@@ -44,12 +44,17 @@ class FakeQuotex:
         root_path: str = ".",
         lang: str = "en",
         on_otp_callback=None,
+        proxy_config=None,
     ) -> None:
         self.email = email
         self.password = password
         self.root_path = root_path
         self.lang = lang
         self.on_otp_callback = on_otp_callback
+        # Captured for test assertions — ``QuotexManager`` now passes
+        # a ``ProxyConfig(use_browser_tls=True)`` so pyquotex uses
+        # curl_cffi to clear Cloudflare on ``qxbroker.com``.
+        self.proxy_config = proxy_config
         # ``api`` is truthy → manager.connected reads True after
         # connect() succeeds.
         self.api = MagicMock()
@@ -273,6 +278,14 @@ def test_credentials_then_connect(
     assert FakeQuotex.last_instance is not None
     assert FakeQuotex.last_instance.email == "trader@example.com"
     assert FakeQuotex.last_instance.account_mode_set == "PRACTICE"
+    # Regression guard for the Cloudflare 403 fix. Without
+    # ``use_browser_tls=True`` plain ``httpx`` is rejected at
+    # ``qxbroker.com``'s sign-in modal — so the manager must always
+    # build the client with curl_cffi browser impersonation on.
+    pcfg = FakeQuotex.last_instance.proxy_config
+    assert pcfg is not None
+    assert getattr(pcfg, "use_browser_tls", False) is True
+    assert getattr(pcfg, "impersonate", "") == "chrome120"
 
 
 def test_balance_when_connected(client: TestClient) -> None:
