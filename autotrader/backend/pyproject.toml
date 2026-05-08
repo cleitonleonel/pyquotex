@@ -38,6 +38,11 @@ dependencies = [
     "pyrogram>=2.0.106",
     "tgcrypto>=1.2.5",
 
+    # Optional error reporting (Phase 7). Init fires only when
+    # ``SENTRY_DSN`` is set; the SDK lives in the tree so opting in
+    # never requires a rebuild.
+    "sentry-sdk[fastapi]>=2.18.0",
+
     # Sibling project — wraps the Quotex broker API
     "pyquotex",
 ]

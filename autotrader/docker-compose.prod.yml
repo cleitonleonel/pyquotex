@@ -1,0 +1,60 @@
+# Production overlay for autotrader.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this overlay adds on top of the base compose:
+#
+# * ``restart: always``   — survive a host reboot.
+# * ``logging``           — bound JSON log files so a chatty service
+#                           can't fill the disk.
+# * ``deploy.resources``  — soft memory cap to surface leaks before
+#                           the OOM killer does it for you.
+# * ``backup`` env vars   — hourly online SQLite snapshots, 24 retained.
+# * Read-only Sentry DSN  — pulled from the host env if set.
+#
+# Deliberately NOT in here: TLS termination. Run the dashboard behind
+# Caddy / Nginx / Traefik and front it with Let's Encrypt. The API
+# binds to localhost via the reverse proxy; the WebSocket feed needs
+# ``wss://`` so a proxy rewrite is mandatory in production.
+
+services:
+  api:
+    restart: always
+    environment:
+      AUTOTRADER_LOG_LEVEL: "${AUTOTRADER_LOG_LEVEL:-INFO}"
+      # Online backups: hourly, keep last 24 (one rolling day).
+      AUTOTRADER_BACKUP_INTERVAL_SECONDS: "${AUTOTRADER_BACKUP_INTERVAL_SECONDS:-3600}"
+      AUTOTRADER_BACKUP_RETAIN: "${AUTOTRADER_BACKUP_RETAIN:-24}"
+      AUTOTRADER_BACKUP_DIR: "/data/backups"
+      AUTOTRADER_SENTRY_DSN: "${AUTOTRADER_SENTRY_DSN:-}"
+      AUTOTRADER_SENTRY_ENVIRONMENT: "${AUTOTRADER_SENTRY_ENVIRONMENT:-production}"
+      AUTOTRADER_SENTRY_TRACES_SAMPLE_RATE: "${AUTOTRADER_SENTRY_TRACES_SAMPLE_RATE:-0.0}"
+    volumes:
+      # Same volume covers the SQLite file + the backup files.
+      - autotrader-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  web:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M

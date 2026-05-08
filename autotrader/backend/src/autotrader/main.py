@@ -29,6 +29,7 @@ from autotrader.models.telegram_session import (
 )
 from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, telegram
 from autotrader.routers import pipeline as pipeline_router
+from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
@@ -39,6 +40,36 @@ from autotrader.services.telegram_manager import TelegramManager
 # import (e.g. configuration validation errors) is captured.
 configure_logging(settings.log_level)
 log = structlog.get_logger(__name__)
+
+
+def _init_sentry() -> None:
+    """Wire up Sentry error reporting when ``SENTRY_DSN`` is set.
+
+    Imported lazily so the SDK only touches the runtime when the
+    operator has opted in. ``traces_sample_rate=0`` (the default) sends
+    only error events; bump via ``AUTOTRADER_SENTRY_TRACES_SAMPLE_RATE``
+    to enable performance traces.
+    """
+    if not settings.sentry_dsn:
+        return
+    import sentry_sdk  # noqa: PLC0415  (only imported when enabled)
+
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.sentry_environment,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+        release=__version__,
+        # Don't send PII — single-user app, but better safe.
+        send_default_pii=False,
+    )
+    log.info(
+        "sentry.enabled",
+        environment=settings.sentry_environment,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+    )
+
+
+_init_sentry()
 
 
 def _broker_root_path() -> str:
@@ -54,6 +85,20 @@ def _broker_root_path() -> str:
         if db_path:
             return str(Path(db_path).parent.resolve())
     return "."
+
+
+def _default_backup_dir() -> str:
+    """Land backups next to the SQLite file by default.
+
+    Operators can override with ``AUTOTRADER_BACKUP_DIR`` — handy when
+    the host mounts a separate volume for snapshots.
+    """
+    db_url = settings.db_url
+    if db_url.startswith("sqlite") and ":memory:" not in db_url:
+        db_path = db_url.split("///", 1)[-1]
+        if db_path:
+            return str((Path(db_path).parent / "backups").resolve())
+    return "./backups"
 
 
 @asynccontextmanager
@@ -169,15 +214,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     except Exception as exc:  # pragma: no cover - best-effort startup task
         log.warning("executor.reconcile.failed", error=str(exc))
 
+    # Optional online-backup scheduler. ``backup_interval_seconds=0``
+    # (the default) keeps the loop quiescent; operators opt in by
+    # setting the env var. We use ``<db_dir>/backups/`` unless the
+    # operator overrides the path.
+    backup_dir = settings.backup_dir or _default_backup_dir()
+    backup_scheduler = BackupScheduler(
+        db_url=settings.db_url,
+        target_dir=backup_dir,
+        interval_seconds=settings.backup_interval_seconds,
+        retain=settings.backup_retain,
+    )
+    backup_scheduler.start()
+    app.state.backup_scheduler = backup_scheduler
+
     log.info(
         "autotrader.startup",
         version=__version__,
         live_trading_enabled=settings.live_trading_enabled,
+        backups_enabled=backup_scheduler.enabled,
     )
     try:
         yield
     finally:
         log.info("autotrader.shutdown")
+        await backup_scheduler.stop()
         telegram_manager.set_message_callback(None)
         await executor.shutdown()
         await manager.disconnect()

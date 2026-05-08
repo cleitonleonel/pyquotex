@@ -49,6 +49,18 @@ class Settings(BaseSettings):
     # Comma-separated list, or "*" for any origin.
     cors_origins: str = "http://localhost:3000"
 
+    # SQLite online backups. ``0`` disables the scheduler — a stock
+    # install never writes to disk for backups until the operator
+    # opts in. Backups land in ``<db_dir>/backups/`` by default.
+    backup_interval_seconds: int = 0
+    backup_retain: int = 24
+    backup_dir: str = ""  # empty → derive from db_url
+
+    # Optional Sentry error reporting. Set ``SENTRY_DSN`` to enable.
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+    sentry_traces_sample_rate: float = 0.0
+
     @cached_property
     def cors_origins_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":
