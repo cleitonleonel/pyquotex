@@ -130,6 +130,19 @@ class Login(Browser):
         """Send post-request for Quotex API login http resource.
         :returns: The instance of: class:`httpx.Response`.
         """
+        # Cloudflare accepts the GET on the modal but bot-checks the
+        # POST separately. Without the browser-native headers a real
+        # Chrome form submit ships with — ``Origin``, ``Content-Type``,
+        # ``Cache-Control`` and a refreshed ``Sec-Fetch-*`` set — the
+        # POST is treated as a scripted submission and 403'd before
+        # the credentials ever reach Quotex's auth handler.
+        self.headers["Origin"] = self.https_base_url
+        self.headers["Content-Type"] = "application/x-www-form-urlencoded"
+        self.headers["Cache-Control"] = "max-age=0"
+        self.headers["Sec-Fetch-Site"] = "same-origin"
+        self.headers["Sec-Fetch-Mode"] = "navigate"
+        self.headers["Sec-Fetch-Dest"] = "document"
+        self.headers["Sec-Fetch-User"] = "?1"
         self.response = await self.send_request(
             method="POST",
             url=f"{self.full_url}/sign-in/",
