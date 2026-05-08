@@ -12,6 +12,7 @@ const NAV = [
   { href: "/dashboard/broker", label: "Broker" },
   { href: "/dashboard/telegram", label: "Telegram" },
   { href: "/dashboard/parsers", label: "Parsers" },
+  { href: "/dashboard/pipeline", label: "Pipeline" },
 ] as const;
 
 export default function DashboardLayout({

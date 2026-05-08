@@ -211,8 +211,10 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
         <p className="text-sm text-muted-foreground">
-          Phase 2 — broker + Telegram online. Parsers, pipeline, and
-          risk land in subsequent phases.
+          Phase 4 — execution pipeline live. Broker, Telegram, parsers,
+          and the live trade executor are all wired. Phase 5 will bolt
+          on full risk controls (daily loss limits, position sizing,
+          martingale runtime).
         </p>
       </section>
 
@@ -222,18 +224,18 @@ export default function DashboardPage() {
         <TelegramSummaryCard />
         <PhaseCard
           title="Parsers"
-          phase="Phase 3"
-          description="Templates, regex, multi-message aggregator."
+          phase="ready"
+          description="Templates, regex, prep+trigger, batch — configured per channel."
         />
         <PhaseCard
           title="Pipeline"
-          phase="Phase 4"
-          description="Signal → risk gate → live or scheduled trade."
+          phase="ready"
+          description="Master switch + recent trades on the Pipeline page."
         />
         <PhaseCard
           title="Risk"
           phase="Phase 5"
-          description="Limits, position sizing, kill switch."
+          description="Limits, position sizing, martingale runtime."
         />
       </div>
     </div>

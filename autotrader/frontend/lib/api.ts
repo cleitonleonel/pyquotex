@@ -380,3 +380,61 @@ export const parsers = {
       body: JSON.stringify({ config, messages }),
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Pipeline (Phase 4 — execution)
+// ---------------------------------------------------------------------------
+
+export interface PipelineStatus {
+  active: boolean;
+  kill_switch_engaged: boolean;
+  live_trading_enabled_env: boolean;
+  broker_connected: boolean;
+  telegram_logged_in: boolean;
+  watched_chat_count: number;
+  enabled_parser_count: number;
+  cached_parser_count: number;
+}
+
+export interface TradeAttempt {
+  id: number;
+  chat_id: number;
+  parser_config_id: number;
+  asset: string;
+  asset_raw: string;
+  direction: string;
+  duration_seconds: number;
+  stake: number;
+  trade_mode: string;
+  fire_at: string | null;
+  status: string;
+  broker_order_id: string | null;
+  profit: number | null;
+  error: string | null;
+  received_at: string;
+  placed_at: string | null;
+  settled_at: string | null;
+}
+
+export const pipeline = {
+  status: () => api<PipelineStatus>("/pipeline/status"),
+
+  activate: (active: boolean) =>
+    api<PipelineStatus>("/pipeline/activate", {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    }),
+
+  killSwitch: (active: boolean) =>
+    api<PipelineStatus>("/pipeline/kill-switch", {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    }),
+
+  trades: (limit = 50, chatId?: number) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (chatId !== undefined) params.set("chat_id", String(chatId));
+    return api<TradeAttempt[]>(`/pipeline/trades?${params}`);
+  },
+};

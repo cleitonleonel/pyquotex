@@ -29,5 +29,11 @@ class GlobalSettings(SQLModel, table=True):
     # Hard pause: when true, the execution pipeline drops every signal.
     kill_switch_engaged: bool = Field(default=False)
 
+    # Master switch for the live execution pipeline. Default is FALSE
+    # so a stock install never auto-trades — flip it from the dashboard
+    # only after parsers are dialled in. Independent of (and AND-ed
+    # with) the ``AUTOTRADER_LIVE_TRADING_ENABLED`` env gate.
+    pipeline_active: bool = Field(default=False)
+
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)

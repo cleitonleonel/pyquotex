@@ -28,6 +28,9 @@ from autotrader.models.telegram_session import (
     load_session as load_telegram_session,
 )
 from autotrader.routers import auth, broker, health, parsers, telegram
+from autotrader.routers import pipeline as pipeline_router
+from autotrader.services.executor import TradeExecutor
+from autotrader.services.pipeline import Pipeline
 from autotrader.services.quotex_manager import QuotexManager
 from autotrader.services.telegram_manager import TelegramManager
 
@@ -139,6 +142,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
             except Exception as exc:  # pragma: no cover  (best-effort)
                 log.warning("telegram.restore.failed", error=str(exc))
 
+    # Execution pipeline + executor. The pipeline is wired immediately
+    # but the master switch (GlobalSettings.pipeline_active) and the
+    # per-config ``enabled`` flag still gate every dispatch — flipping
+    # the env flag alone never auto-trades.
+    executor = TradeExecutor(
+        manager=manager,
+        live_trading_enabled_env=settings.live_trading_enabled,
+    )
+    pipeline = Pipeline(manager=manager, executor=executor)
+    app.state.pipeline = pipeline
+    app.state.executor = executor
+    telegram_manager.set_message_callback(pipeline.dispatch)
+
     log.info(
         "autotrader.startup",
         version=__version__,
@@ -148,6 +164,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
         yield
     finally:
         log.info("autotrader.shutdown")
+        telegram_manager.set_message_callback(None)
+        await executor.shutdown()
         await manager.disconnect()
         with contextlib.suppress(Exception):
             await telegram_manager._teardown_client()
@@ -174,6 +192,7 @@ app.include_router(auth.router)
 app.include_router(broker.router)
 app.include_router(telegram.router)
 app.include_router(parsers.router)
+app.include_router(pipeline_router.router)
 
 
 # Quiet uvicorn's per-request access logs in production; structlog handles

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +33,9 @@ class FakeQuotex:
     behavior: str = "ok"          # "ok" | "needs_otp" | "rejected"
     valid_otp: str = "654321"
     last_instance: FakeQuotex | None = None
+    # Pipeline / executor: capture every trade call here.
+    buy_calls: ClassVar[list[dict]] = []
+    pending_calls: ClassVar[list[dict]] = []
 
     def __init__(
         self,
@@ -84,7 +88,58 @@ class FakeQuotex:
             "EUR/USD (OTC)": "EURUSD_otc",
             "GBP/USD": "GBPUSD",
             "Gold": "XAUUSD",
+            "USDBDT (OTC)": "USDBDT_otc",
         }
+
+    # -- Trade-execution surface used by the pipeline tests ----------
+
+    async def buy(
+        self,
+        amount: float,
+        asset: str,
+        direction: str,
+        duration: int,
+        time_mode: str = "TIME",
+    ) -> tuple[bool, dict]:
+        FakeQuotex.buy_calls.append(
+            {
+                "amount": amount,
+                "asset": asset,
+                "direction": direction,
+                "duration": duration,
+            },
+        )
+        return True, {"id": f"order-{len(FakeQuotex.buy_calls)}"}
+
+    async def open_pending(
+        self,
+        amount: float,
+        asset: str,
+        direction: str,
+        duration: int,
+        open_time: object | None = None,
+        confirm_timeout: float = 30.0,
+    ) -> tuple[bool, str]:
+        FakeQuotex.pending_calls.append(
+            {
+                "amount": amount,
+                "asset": asset,
+                "direction": direction,
+                "duration": duration,
+                "open_time": open_time,
+            },
+        )
+        return True, f"pending-{len(FakeQuotex.pending_calls)}"
+
+    async def wait_for_order_close(
+        self,
+        order_id: str | int,
+        duration: int = 0,
+        timeout: float | None = None,  # noqa: ASYNC109
+    ) -> tuple[str, float]:
+        # Tests don't await this; they shut down before the watcher fires.
+        _ = (order_id, duration, timeout)
+        return "win", 0.85
 
 
 @pytest.fixture(autouse=True)
@@ -92,6 +147,8 @@ def _reset_fake_quotex() -> Iterator[None]:
     FakeQuotex.behavior = "ok"
     FakeQuotex.valid_otp = "654321"
     FakeQuotex.last_instance = None
+    FakeQuotex.buy_calls = []
+    FakeQuotex.pending_calls = []
     yield
 
 

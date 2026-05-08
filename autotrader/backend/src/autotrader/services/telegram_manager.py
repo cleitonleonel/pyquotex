@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import structlog
@@ -40,6 +41,11 @@ from pyrogram.errors import (
 )
 
 from autotrader.config import telegram_settings
+
+# A pipeline-style callback. The manager calls this for every incoming
+# text/sticker message in any chat — the consumer (typically the
+# Pipeline service) decides whether the chat is watched.
+MessageCallback = Callable[["IncomingMessage"], Awaitable[None]]
 
 log = structlog.get_logger(__name__)
 
@@ -83,6 +89,17 @@ class Dialog:
     is_verified: bool
 
 
+@dataclass(frozen=True, slots=True)
+class IncomingMessage:
+    """Trimmed projection passed to the live message callback."""
+
+    chat_id: int
+    sender_id: int
+    text: str
+    media_kind: str         # "text" | "caption" | "sticker"
+    received_at: datetime
+
+
 def _mask_phone(phone: str) -> str:
     digits = phone.lstrip("+")
     if len(digits) <= 4:
@@ -108,6 +125,11 @@ class TelegramManager:
         self._first_name: str | None = None
         self._last_error: str | None = None
         self._lock = asyncio.Lock()
+        # Live message callback — set by the lifespan after the
+        # pipeline is constructed. The manager calls this for every
+        # incoming text/sticker message; ``None`` means "no consumer".
+        self._on_message: MessageCallback | None = None
+        self._handler_attached: bool = False
 
     # ------------------------------------------------------------------
     # Status
@@ -185,6 +207,7 @@ class TelegramManager:
                 await self._capture_self()
                 self._state = "logged_in"
                 self._last_error = None
+                self._attach_handler_if_pending()
                 log.info(
                     "telegram.restore.ok",
                     user_id=self._user_id,
@@ -307,14 +330,15 @@ class TelegramManager:
         assert self._client is not None
         # Pyrogram's connect() already brought the socket up; we now
         # need start() so the update dispatcher is ready for live
-        # messages in Phase 3+. ``start()`` on an already-connected
-        # client just turns updates on.
+        # messages. ``start()`` on an already-connected client just
+        # turns updates on.
         with contextlib.suppress(ConnectionError):
             await self._client.initialize()  # type: ignore[attr-defined]
         await self._capture_self()
         self._state = "logged_in"
         self._last_error = None
         self._phone_code_hash = None
+        self._attach_handler_if_pending()
         log.info(
             "telegram.login.ok",
             user_id=self._user_id,
@@ -367,6 +391,7 @@ class TelegramManager:
         with contextlib.suppress(Exception):
             await self._client.stop()
         self._client = None
+        self._handler_attached = False
 
     # ------------------------------------------------------------------
     # Dialogs
@@ -417,6 +442,76 @@ class TelegramManager:
     async def _iter_dialogs(client: Client, *, limit: int) -> AsyncIterator[Any]:
         async for dialog in client.get_dialogs(limit=limit):
             yield dialog
+
+    # ------------------------------------------------------------------
+    # Live message handler (Phase 4 pipeline integration)
+    # ------------------------------------------------------------------
+
+    def set_message_callback(self, callback: MessageCallback | None) -> None:
+        """Register the consumer for live incoming messages.
+
+        Call once at lifespan boot with the Pipeline's dispatch entry
+        point. ``None`` detaches the handler (the underlying Pyrogram
+        Client keeps running so dialog/recent-messages calls still work).
+        """
+        self._on_message = callback
+        if callback is None:
+            self._handler_attached = False
+            return
+        self._attach_handler_if_pending()
+
+    def _attach_handler_if_pending(self) -> None:
+        """Attach the Pyrogram MessageHandler exactly once after login."""
+        if self._handler_attached or self._client is None or self._on_message is None:
+            return
+        # Lazy imports — keeps the test path that monkeypatches
+        # ``Client`` working even if pyrogram isn't fully importable.
+        from pyrogram import handlers  # noqa: PLC0415
+        from pyrogram.handlers import MessageHandler  # noqa: PLC0415
+
+        async def _on_pyrogram_message(_client: Client, msg: Any) -> None:
+            await self._handle_incoming(msg)
+
+        try:
+            self._client.add_handler(MessageHandler(_on_pyrogram_message))
+        except Exception as exc:  # pragma: no cover  (handler API drift)
+            log.warning("telegram.handler.attach_failed", error=str(exc))
+            return
+        self._handler_attached = True
+        log.info("telegram.handler.attached")
+        # Touch ``handlers`` to satisfy lint that the import is used.
+        _ = handlers
+
+    async def _handle_incoming(self, msg: Any) -> None:
+        """Convert a Pyrogram Message → IncomingMessage → callback."""
+        if self._on_message is None:
+            return
+        kind, text = _extract_message_text(msg)
+        if not text:
+            return
+        chat = getattr(msg, "chat", None)
+        chat_id = int(getattr(chat, "id", 0)) if chat is not None else 0
+        from_user = getattr(msg, "from_user", None)
+        sender_chat = getattr(msg, "sender_chat", None)
+        sender_id = int(
+            (getattr(from_user, "id", None) if from_user is not None else None)
+            or (getattr(sender_chat, "id", None) if sender_chat is not None else None)
+            or 0,
+        )
+        date = getattr(msg, "date", None) or datetime.now(UTC)
+
+        try:
+            await self._on_message(
+                IncomingMessage(
+                    chat_id=chat_id,
+                    sender_id=sender_id,
+                    text=text,
+                    media_kind=kind,
+                    received_at=date,
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - consumer-side failure
+            log.exception("telegram.handler.dispatch_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Recent messages (sample fodder for the parser builder)
