@@ -23,6 +23,7 @@ from autotrader.services.parsers import (
     Aggregator,
     ParsedSignal,
     ParseError,
+    PrepTriggerParser,
     RawMessage,
     RegexParser,
     TemplateParser,
@@ -370,6 +371,187 @@ def test_aggregator_invalid_window_rejected() -> None:
     parser = TemplateParser("{DIRECTION} {ASSET} {DURATION}")
     with pytest.raises(ValueError, match="window_seconds"):
         Aggregator(parser, window_seconds=0)
+
+
+# ===========================================================================
+# Prep + Trigger
+# ===========================================================================
+
+
+def _pt_parser(**overrides: object) -> PrepTriggerParser:
+    base: dict[str, object] = {
+        "prep": "PAIR\\s*:\\s*(?P<asset>[A-Z\\s/-]+?)\\s+TIME\\s*:\\s*(?P<duration>\\d+)\\s*Minute",
+        "trigger": "(?P<direction>👍|👎)",
+        "prep_kind": "regex",
+        "trigger_kind": "regex",
+        "gap_seconds": 120,
+    }
+    base.update(overrides)
+    return PrepTriggerParser(**base)  # type: ignore[arg-type]
+
+
+def test_prep_trigger_fires_on_trigger() -> None:
+    parser = _pt_parser()
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+
+    out = parser.feed(
+        RawMessage(
+            "PAIR: USD-NGN OTC TIME: 1 Minute",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    assert isinstance(out, ParseError)
+    assert "prep stored" in out.reason
+    assert parser.pending_size() == 1
+
+    out = parser.feed(
+        RawMessage(
+            "👍",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base + timedelta(seconds=5),
+        ),
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.direction == "call"
+    # No broker catalogue → fallback strips the literal text.
+    assert out.asset == "USDNGNOTC"
+    assert out.asset_via == "fallback"
+    assert out.duration_seconds == 60
+    assert parser.pending_size() == 0
+
+
+def test_prep_trigger_trigger_alone_no_emit() -> None:
+    parser = _pt_parser()
+    out = parser.feed(
+        RawMessage(
+            "👎",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=datetime(2025, 5, 7, 12, 0, tzinfo=UTC),
+        ),
+    )
+    assert isinstance(out, ParseError)
+    assert "no recent prep" in out.reason
+
+
+def test_prep_trigger_gap_timeout_drops_stale() -> None:
+    parser = _pt_parser(gap_seconds=10)
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+
+    parser.feed(
+        RawMessage(
+            "PAIR: GBP/USD TIME: 5 Minute",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    # Trigger arrives well past the gap.
+    out = parser.feed(
+        RawMessage(
+            "👍",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base + timedelta(seconds=30),
+        ),
+    )
+    assert isinstance(out, ParseError)
+    assert "no recent prep" in out.reason
+
+
+def test_prep_trigger_asset_auto_resolves() -> None:
+    """Catalogue-aware: stripped+upper hits an _otc-suffixed broker code."""
+    parser = _pt_parser(known_assets=("USDNGNOTC_otc",))
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+
+    parser.feed(
+        RawMessage(
+            "PAIR: USD-NGN OTC TIME: 1 Minute",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    out = parser.feed(
+        RawMessage("👍", chat_id=-1001, sender_id=200, received_at=base),
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.asset == "USDNGNOTC_otc"
+    assert out.asset_via == "otc"
+
+
+def test_prep_trigger_template_kind() -> None:
+    parser = _pt_parser(
+        prep="PAIR: {ASSET} TIME: {DURATION} Minute",
+        trigger="{DIRECTION}",
+        prep_kind="template",
+        trigger_kind="template",
+    )
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+    parser.feed(
+        RawMessage(
+            "PAIR: GBPUSD TIME: 1 Minute",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    out = parser.feed(RawMessage("👎", chat_id=-1001, sender_id=200, received_at=base))
+    assert isinstance(out, ParsedSignal)
+    assert out.direction == "put"
+    assert out.asset == "GBPUSD"
+
+
+def test_prep_trigger_validates_required_groups() -> None:
+    with pytest.raises(ValueError, match="asset"):
+        PrepTriggerParser(
+            prep=r"hello",  # no asset group
+            trigger=r"(?P<direction>👍)",
+            prep_kind="regex",
+            trigger_kind="regex",
+        )
+    with pytest.raises(ValueError, match="direction"):
+        PrepTriggerParser(
+            prep=r"(?P<asset>EUR)",
+            trigger=r"hello",  # no direction group
+            prep_kind="regex",
+            trigger_kind="regex",
+        )
+
+
+def test_prep_trigger_via_test_endpoint(client: TestClient) -> None:
+    """End-to-end: endpoint feeds messages sequentially through the parser."""
+    headers = _login(client)
+    r = client.post(
+        "/parsers/test",
+        headers=headers,
+        json={
+            "config": {
+                "parser_type": "prep_trigger",
+                "parser_config": {
+                    "prep": "PAIR: {ASSET} TIME: {DURATION} Minute",
+                    "prep_kind": "template",
+                    "trigger": "{DIRECTION}",
+                    "trigger_kind": "template",
+                },
+                "aggregate_window_seconds": 120,
+            },
+            "messages": [
+                # Hyphenated asset fits {ASSET}'s single-token shape.
+                {"text": "PAIR: USDNGN-OTC TIME: 1 Minute"},
+                {"text": "👍"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched"] is True
+    sig = body["signal"]
+    assert sig["direction"] == "call"
+    assert sig["duration_seconds"] == 60
 
 
 # ===========================================================================

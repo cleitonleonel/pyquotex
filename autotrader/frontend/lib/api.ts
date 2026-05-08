@@ -256,7 +256,7 @@ export interface TelegramMessage {
 // Parsers
 // ---------------------------------------------------------------------------
 
-export type ParserType = "template" | "regex";
+export type ParserType = "template" | "regex" | "prep_trigger";
 export type TradeMode = "live" | "scheduled" | "auto";
 
 export interface ParserTemplate {

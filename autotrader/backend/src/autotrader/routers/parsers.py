@@ -37,7 +37,7 @@ router = APIRouter(
     dependencies=[Depends(require_auth)],
 )
 
-ParserType = Literal["template", "regex"]
+ParserType = Literal["template", "regex", "prep_trigger"]
 TradeMode = Literal["live", "scheduled", "auto"]
 
 
@@ -193,6 +193,16 @@ def _payload_to_dict(p: ConfigPayload) -> dict[str, Any]:
     }
 
 
+def _gap_seconds(p: ConfigPayload) -> int:
+    """Resolve the prep-to-trigger gap.
+
+    For prep_trigger parsers we reuse ``aggregate_window_seconds`` as the
+    gap when the user explicitly set it; otherwise default to 120s
+    (matches the typical prep+sticker channel cadence).
+    """
+    return p.aggregate_window_seconds if p.aggregate_window_seconds > 0 else 120
+
+
 def _validate_compiles(p: ConfigPayload) -> None:
     """Fail fast with 400 if the parser config doesn't compile."""
     try:
@@ -202,6 +212,7 @@ def _validate_compiles(p: ConfigPayload) -> None:
             timezone_offset_minutes=p.timezone_offset_minutes,
             asset_aliases=p.asset_aliases,
             default_duration_seconds=p.default_duration_seconds,
+            gap_seconds=_gap_seconds(p),
         )
     except ParserBuildError as exc:
         raise HTTPException(
@@ -274,10 +285,15 @@ async def create_config_endpoint(
     session: SessionDep,
 ) -> ConfigResponse:
     _validate_compiles(body)
+    payload = _payload_to_dict(body)
+    # Drop the validated chat_id from the body — create_config takes
+    # it as a separate kwarg. Mirrors how update_config strips
+    # immutable fields.
+    payload.pop("chat_id", None)
     row = await create_config(
         session,
         chat_id=body.chat_id,
-        payload=_payload_to_dict(body),
+        payload=payload,
     )
     return _to_response(row)
 
@@ -335,6 +351,7 @@ async def test_endpoint(body: TestRequest, manager: ManagerDep) -> TestResponse:
             asset_aliases=cfg.asset_aliases,
             known_assets=manager.assets,
             default_duration_seconds=cfg.default_duration_seconds,
+            gap_seconds=_gap_seconds(cfg),
         )
     except ParserBuildError as exc:
         return TestResponse(matched=False, error=str(exc))
@@ -349,7 +366,11 @@ async def test_endpoint(body: TestRequest, manager: ManagerDep) -> TestResponse:
         for m in body.messages
     ]
 
-    if cfg.aggregate_window_seconds > 0:
+    if cfg.parser_type == "prep_trigger":
+        # PrepTriggerParser is stateful — feed messages in order and
+        # return the first emitted signal.
+        outcome = parser.parse(messages)
+    elif cfg.aggregate_window_seconds > 0:
         outcome = parse_via_aggregator(
             parser,
             messages,

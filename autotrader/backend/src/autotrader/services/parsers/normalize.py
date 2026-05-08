@@ -24,12 +24,15 @@ _CALL_TOKENS: Final[frozenset[str]] = frozenset(
     {
         "buy", "up", "call", "long", "bull", "bullish", "green",
         "🟢", "🟩", "📈", "⬆", "⬆️", "↑", "🔼", "🔝",
+        # Thumbs / heart emoji used by prep+sticker channels
+        "👍", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "✅", "💚",
     },
 )
 _PUT_TOKENS: Final[frozenset[str]] = frozenset(
     {
         "sell", "down", "put", "short", "bear", "bearish", "red",
         "🔴", "🟥", "📉", "⬇", "⬇️", "↓", "🔽",
+        "👎", "👎🏻", "👎🏼", "👎🏽", "👎🏾", "👎🏿", "❌", "❤",
     },
 )
 

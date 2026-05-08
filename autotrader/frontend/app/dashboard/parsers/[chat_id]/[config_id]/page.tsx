@@ -301,7 +301,7 @@ function ConfigEditor({
 
         <div className="space-y-2">
           <Label>Parser type</Label>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Pill
               active={cfg.parser_type === "template"}
               onClick={() => set("parser_type", "template")}
@@ -314,19 +314,76 @@ function ConfigEditor({
             >
               Regex
             </Pill>
+            <Pill
+              active={cfg.parser_type === "prep_trigger"}
+              onClick={() => {
+                set("parser_type", "prep_trigger");
+                // Seed defaults for the two-phase config so the editor
+                // has something to render.
+                setCfg((p) => ({
+                  ...p,
+                  parser_config: {
+                    prep_kind:
+                      typeof p.parser_config.prep_kind === "string"
+                        ? p.parser_config.prep_kind
+                        : "template",
+                    prep:
+                      typeof p.parser_config.prep === "string"
+                        ? p.parser_config.prep
+                        : "PAIR: {ASSET} TIME: {DURATION} Minute",
+                    trigger_kind:
+                      typeof p.parser_config.trigger_kind === "string"
+                        ? p.parser_config.trigger_kind
+                        : "template",
+                    trigger:
+                      typeof p.parser_config.trigger === "string"
+                        ? p.parser_config.trigger
+                        : "{DIRECTION}",
+                  },
+                }));
+              }}
+            >
+              Prep + Trigger
+            </Pill>
           </div>
+          {cfg.parser_type === "prep_trigger" && (
+            <p className="text-xs text-muted-foreground">
+              Two-phase: the <strong>prep</strong> message defines
+              asset / duration / stake; the <strong>trigger</strong>
+              message (often a 👍/👎 sticker) fires the trade
+              immediately. Stale prep is dropped after{" "}
+              {cfg.aggregate_window_seconds || 120}s.
+            </p>
+          )}
         </div>
 
-        {cfg.parser_type === "template" ? (
+        {cfg.parser_type === "template" && (
           <TemplateEditor
             value={String(cfg.parser_config.template ?? "")}
             onChange={(v) => setParserConfigField("template", v)}
             templates={templates.data ?? []}
           />
-        ) : (
+        )}
+        {cfg.parser_type === "regex" && (
           <RegexEditor
             value={String(cfg.parser_config.pattern ?? "")}
             onChange={(v) => setParserConfigField("pattern", v)}
+          />
+        )}
+        {cfg.parser_type === "prep_trigger" && (
+          <PrepTriggerEditor
+            prep={String(cfg.parser_config.prep ?? "")}
+            prepKind={
+              cfg.parser_config.prep_kind === "regex" ? "regex" : "template"
+            }
+            trigger={String(cfg.parser_config.trigger ?? "")}
+            triggerKind={
+              cfg.parser_config.trigger_kind === "regex"
+                ? "regex"
+                : "template"
+            }
+            onChange={(field, value) => setParserConfigField(field, value)}
+            templates={templates.data ?? []}
           />
         )}
 
@@ -356,12 +413,27 @@ function ConfigEditor({
             type="number"
             help="UTC offset (60 = UTC+1, -300 = UTC-5)"
           />
-          <MultiMessageToggle
-            seconds={cfg.aggregate_window_seconds}
-            onChange={(s) =>
-              set("aggregate_window_seconds", Math.max(0, s))
-            }
-          />
+          {cfg.parser_type === "prep_trigger" ? (
+            <Field
+              label="Prep-to-trigger gap (seconds)"
+              value={cfg.aggregate_window_seconds || 120}
+              onChange={(v) =>
+                set(
+                  "aggregate_window_seconds",
+                  Math.max(1, Math.min(600, Number(v) || 120)),
+                )
+              }
+              type="number"
+              help="Drop a stored prep when no trigger arrives in this many seconds."
+            />
+          ) : (
+            <MultiMessageToggle
+              seconds={cfg.aggregate_window_seconds}
+              onChange={(s) =>
+                set("aggregate_window_seconds", Math.max(0, s))
+              }
+            />
+          )}
         </div>
 
         <div className="space-y-2">
@@ -557,6 +629,168 @@ function RegexEditor({
         <code>stake</code>.
       </p>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Prep + Trigger editor
+// ---------------------------------------------------------------------------
+
+function PrepTriggerEditor({
+  prep,
+  prepKind,
+  trigger,
+  triggerKind,
+  onChange,
+  templates,
+}: {
+  prep: string;
+  prepKind: "template" | "regex";
+  trigger: string;
+  triggerKind: "template" | "regex";
+  onChange: (
+    field: "prep" | "trigger" | "prep_kind" | "trigger_kind",
+    value: string,
+  ) => void;
+  templates: ParserTemplate[];
+}) {
+  return (
+    <div className="space-y-5">
+      <PhaseEditor
+        title="Prep message (1st)"
+        description="Extracts the trade parameters. Required: ASSET. Optional: DURATION, TIME, STAKE."
+        kind={prepKind}
+        value={prep}
+        onKindChange={(k) => onChange("prep_kind", k)}
+        onValueChange={(v) => onChange("prep", v)}
+        kindField="prep_kind"
+        valueField="prep"
+        templatePlaceholder="PAIR: {ASSET} TIME: {DURATION} Minute"
+        regexPlaceholder="PAIR\s*:\s*(?P<asset>[A-Z\s/-]+?)\s+TIME\s*:\s*(?P<duration>\d+)\s*Minute"
+        templates={templates}
+        requiredGroups={["asset"]}
+      />
+      <PhaseEditor
+        title="Trigger message (2nd)"
+        description="Fires the trade the moment this matches. Required: DIRECTION."
+        kind={triggerKind}
+        value={trigger}
+        onKindChange={(k) => onChange("trigger_kind", k)}
+        onValueChange={(v) => onChange("trigger", v)}
+        kindField="trigger_kind"
+        valueField="trigger"
+        templatePlaceholder="{DIRECTION}"
+        regexPlaceholder="(?P<direction>👍|👎)"
+        templates={[]}
+        requiredGroups={["direction"]}
+      />
+    </div>
+  );
+}
+
+function PhaseEditor({
+  title,
+  description,
+  kind,
+  value,
+  onKindChange,
+  onValueChange,
+  templatePlaceholder,
+  regexPlaceholder,
+  templates,
+  requiredGroups,
+}: {
+  title: string;
+  description: string;
+  kind: "template" | "regex";
+  value: string;
+  onKindChange: (k: "template" | "regex") => void;
+  onValueChange: (v: string) => void;
+  kindField: "prep_kind" | "trigger_kind";
+  valueField: "prep" | "trigger";
+  templatePlaceholder: string;
+  regexPlaceholder: string;
+  templates: ParserTemplate[];
+  requiredGroups: string[];
+}) {
+  return (
+    <div className="space-y-2 rounded-md border border-amber-500/20 bg-amber-500/5 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="font-semibold">{title}</Label>
+        <div className="flex gap-1">
+          <SmallPill active={kind === "template"} onClick={() => onKindChange("template")}>
+            Template
+          </SmallPill>
+          <SmallPill active={kind === "regex"} onClick={() => onKindChange("regex")}>
+            Regex
+          </SmallPill>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+
+      {kind === "template" ? (
+        <Input
+          value={value}
+          onChange={(e) => onValueChange(e.target.value)}
+          placeholder={templatePlaceholder}
+          className="font-mono"
+        />
+      ) : (
+        <textarea
+          className="flex min-h-[5rem] w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          value={value}
+          onChange={(e) => onValueChange(e.target.value)}
+          placeholder={regexPlaceholder}
+        />
+      )}
+
+      <p className="text-[11px] text-muted-foreground">
+        Required: {requiredGroups.map((g) => <code key={g}>{g}</code>).reduce<React.ReactNode[]>(
+          (acc, el, i) => (i === 0 ? [el] : [...acc, ", ", el]),
+          [],
+        )}
+        {kind === "template" && templates.length > 0 && (
+          <span className="ml-2">
+            · presets:
+            {templates.slice(0, 3).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onValueChange(t.template)}
+                className="ml-1 rounded border border-input bg-background px-1.5 py-0.5 hover:bg-accent hover:text-foreground"
+              >
+                {t.label}
+              </button>
+            ))}
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+function SmallPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded-md border px-2 py-0.5 text-xs font-medium transition-colors " +
+        (active
+          ? "border-primary bg-primary/10"
+          : "border-input text-muted-foreground hover:text-foreground")
+      }
+    >
+      {children}
+    </button>
   );
 }
 

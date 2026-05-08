@@ -20,6 +20,10 @@ from autotrader.services.parsers.base import (
     RawMessage,
 )
 from autotrader.services.parsers.factory import ParserBuildError, build_parser
+from autotrader.services.parsers.prep_trigger import (
+    PrepTriggerParser,
+    parse_via_prep_trigger,
+)
 from autotrader.services.parsers.regex_parser import RegexParser
 from autotrader.services.parsers.template import (
     BUILTIN_TEMPLATES,
@@ -36,11 +40,13 @@ __all__ = [
     "ParsedSignal",
     "Parser",
     "ParserBuildError",
+    "PrepTriggerParser",
     "RawMessage",
     "RegexParser",
     "TemplateParser",
     "build_parser",
     "parse_via_aggregator",
+    "parse_via_prep_trigger",
     "resolve_asset",
     "template_to_regex",
 ]
