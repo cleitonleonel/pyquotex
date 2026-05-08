@@ -277,11 +277,20 @@ def test_scheduled_signal_fires_open_pending(app_client: TestClient) -> None:
     assert call["direction"] == "call"
     assert call["duration"] == 60
     assert call["open_time"] is not None
-    # pyquotex expects an ISO 8601 string; passing a raw datetime
-    # tripped an AttributeError inside pyquotex normalisation. Pin
-    # the format here so a regression is caught.
+    # The broker's wire format is the strict ISO-8601 UTC form
+    # ``YYYY-MM-DDTHH:MM:SS.000Z`` — verified against ws2.qxbroker.com.
+    # Python's ``isoformat`` ``+00:00`` representation looks
+    # equivalent but in the wild the broker silently treats it as
+    # broker-local time, drifting the schedule by the broker's
+    # default offset. Pin the wire format so a regression to
+    # ``isoformat()`` is caught.
     assert isinstance(call["open_time"], str)
-    assert "T" in call["open_time"]
+    import re  # noqa: PLC0415
+
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$",
+        call["open_time"],
+    ), f"unexpected wire format: {call['open_time']!r}"
     assert FakeQuotex.buy_calls == []
 
     r = app_client.get("/pipeline/trades", headers=headers)

@@ -42,6 +42,22 @@ from autotrader.services.risk_gate import RiskDecision, evaluate
 log = structlog.get_logger(__name__)
 
 
+def _wire_iso8601(value: datetime | None) -> str | None:
+    """Format ``value`` as the broker's documented wire timestamp.
+
+    Pyquotex's ``ws2.qxbroker.com`` capture pins the format to
+    ``YYYY-MM-DDTHH:MM:SS.000Z``. Python's ``datetime.isoformat``
+    yields the equivalent ``...+00:00`` representation, which the
+    broker's parser silently mistakes for "broker-local naive time"
+    in some accounts — the schedule then drifts by the broker's
+    default offset. Use the documented form to remove that ambiguity.
+    """
+    if value is None:
+        return None
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
     """Mirror of ``TradeAttemptResponse`` for the event bus payload.
 
@@ -251,15 +267,15 @@ class TradeExecutor:
         is_scheduled = decision.trade_mode == "scheduled"
         try:
             if is_scheduled:
-                # pyquotex.open_pending takes an *ISO 8601 string*, not
-                # a datetime. Passing the raw object trips an
-                # AttributeError inside pyquotex's normalisation
-                # (it calls ``.split()`` on the value). Format here.
-                open_time_iso = (
-                    signal.fire_at.isoformat()
-                    if signal.fire_at is not None
-                    else None
-                )
+                # Pyquotex's wire format is the strict ISO-8601 UTC
+                # form ``YYYY-MM-DDTHH:MM:SS.000Z`` — verified against
+                # ``ws2.qxbroker.com``. Python's ``datetime.isoformat``
+                # produces the equivalent ``...+00:00`` form, but the
+                # broker's parser doesn't always treat that as UTC; in
+                # the wild we've seen it fall back to "broker-local
+                # time", which silently shifts the schedule by the
+                # broker's default offset (commonly +2h).
+                open_time_iso = _wire_iso8601(signal.fire_at)
                 ok, info = await self._manager._client.open_pending(  # type: ignore[union-attr]
                     amount=decision.stake,
                     asset=signal.asset,
