@@ -71,6 +71,12 @@ async def list_recent(
     return list(result.all())
 
 
+async def list_pending(session: AsyncSession) -> list[TradeAttempt]:
+    """Every row still in ``pending`` state — used by the startup reconciler."""
+    stmt = select(TradeAttempt).where(TradeAttempt.status == "pending")
+    return list((await session.exec(stmt)).all())
+
+
 async def insert_attempt(
     session: AsyncSession,
     attempt: TradeAttempt,

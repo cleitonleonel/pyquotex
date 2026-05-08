@@ -155,6 +155,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     app.state.executor = executor
     telegram_manager.set_message_callback(pipeline.dispatch)
 
+    # Sweep ``pending`` trades from the previous process. In-memory
+    # watchers don't survive restart, so without this every old
+    # pending row stays pending forever — the concurrency cap then
+    # silently blocks all new signals.
+    try:
+        await executor.reconcile_pending()
+    except Exception as exc:  # pragma: no cover - best-effort startup task
+        log.warning("executor.reconcile.failed", error=str(exc))
+
     log.info(
         "autotrader.startup",
         version=__version__,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -28,6 +28,7 @@ from autotrader.models.settings import GlobalSettings
 from autotrader.models.trade_attempt import (
     TradeAttempt,
     insert_attempt,
+    list_pending,
     update_attempt,
 )
 from autotrader.services.parsers.base import ParsedSignal
@@ -38,6 +39,21 @@ from autotrader.services.quotex_manager import (
 from autotrader.services.risk_gate import RiskDecision, evaluate
 
 log = structlog.get_logger(__name__)
+
+# Sentinel ``broker_order_id`` values that the pre-fix code stored when
+# pyquotex's ``open_pending`` returned its ``pending_successful`` bool.
+# A real ticket is a UUID or short token; these are placeholder strings
+# the reconciler can never recover.
+_BAD_TICKETS = frozenset({"", "True", "False", "None"})
+
+
+def _is_real_ticket(value: str | None) -> bool:
+    return value is not None and value not in _BAD_TICKETS
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite drops tzinfo on round-trip; treat naive timestamps as UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class TradeExecutor:
@@ -105,6 +121,108 @@ class TradeExecutor:
         with contextlib.suppress(Exception):
             await asyncio.gather(*self._watchers, return_exceptions=True)
         self._watchers.clear()
+
+    async def reconcile_pending(self) -> None:
+        """Sweep ``pending`` rows after a restart.
+
+        In-memory watchers don't survive a restart. Without this, every
+        ``pending`` row from the previous process stays pending forever
+        — they count against the concurrency cap and silently block
+        every new signal.
+
+        For each row we choose the safest action:
+
+        * **Invalid broker_order_id** (None / empty / ``"True"`` /
+          ``"False"``) — pre-fix scheduled trades that never captured
+          a real ticket. Unrecoverable: mark expired.
+        * **Past expected close time + grace** — broker has already
+          settled, we missed the event during the downtime window.
+          Mark expired.
+        * **Still in flight** — re-spawn a watcher with a timeout
+          covering the remaining wait so the trade settles cleanly.
+
+        Idempotent: calling twice on the same DB does no harm.
+        """
+        now = datetime.now(UTC)
+        grace = timedelta(minutes=5)
+
+        async with AsyncSessionLocal() as session:
+            rows = await list_pending(session)
+
+        respawn = 0
+        expired_invalid = 0
+        expired_late = 0
+        for row in rows:
+            attempt_id = row.id or 0
+            if not _is_real_ticket(row.broker_order_id):
+                await self._mark_reconciled(
+                    attempt_id,
+                    "broker ticket missing; cannot reconcile after restart",
+                )
+                expired_invalid += 1
+                continue
+
+            placed = _as_utc(row.placed_at or row.created_at)
+            duration = timedelta(seconds=row.duration_seconds)
+            expected_close = (
+                _as_utc(row.fire_at) + duration if row.fire_at is not None
+                else placed + duration
+            )
+            if expected_close + grace < now:
+                await self._mark_reconciled(
+                    attempt_id,
+                    "watcher lost on restart; settlement window already passed",
+                )
+                expired_late += 1
+                continue
+
+            # Still in flight — give the watcher whatever time is left
+            # plus a generous slack so a slightly-late close still
+            # lands. ``broker_order_id`` is a ``str`` here, narrowed by
+            # the ``_is_real_ticket`` guard above.
+            assert row.broker_order_id is not None
+            remaining = (expected_close + grace - now).total_seconds()
+            self._spawn_watcher(
+                attempt_id=attempt_id,
+                order_id=row.broker_order_id,
+                duration=row.duration_seconds,
+                timeout=max(remaining, 30.0),
+            )
+            respawn += 1
+
+        if rows:
+            log.info(
+                "executor.reconcile",
+                total=len(rows),
+                respawned=respawn,
+                expired_invalid=expired_invalid,
+                expired_late=expired_late,
+            )
+
+    def _spawn_watcher(
+        self,
+        *,
+        attempt_id: int,
+        order_id: str,
+        duration: int,
+        timeout: float | None,
+    ) -> None:
+        """Schedule a result-watcher and track it for shutdown."""
+        task = asyncio.create_task(
+            self._watch_result(attempt_id, order_id, duration, timeout=timeout),
+        )
+        self._watchers.add(task)
+        task.add_done_callback(self._watchers.discard)
+
+    async def _mark_reconciled(self, attempt_id: int, message: str) -> None:
+        async with AsyncSessionLocal() as session:
+            await update_attempt(
+                session,
+                attempt_id,
+                status="expired",
+                error=message,
+                settled_at=utc_now(),
+            )
 
     # ------------------------------------------------------------------
     # Internals
@@ -198,16 +316,12 @@ class TradeExecutor:
             # watcher doesn't expire before the broker fires the
             # pending.
             timeout = self._watcher_timeout(signal, is_scheduled=is_scheduled)
-            task = asyncio.create_task(
-                self._watch_result(
-                    attempt.id or 0,
-                    order_id,
-                    signal.duration_seconds,
-                    timeout=timeout,
-                ),
+            self._spawn_watcher(
+                attempt_id=attempt.id or 0,
+                order_id=order_id,
+                duration=signal.duration_seconds,
+                timeout=timeout,
             )
-            self._watchers.add(task)
-            task.add_done_callback(self._watchers.discard)
 
         log.info(
             "executor.placed",

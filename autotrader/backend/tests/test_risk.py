@@ -482,3 +482,115 @@ async def test_scheduled_trade_persists_pending_ticket(
     # FakeQuotex.open_pending writes ``pending-1`` to api.pending_id.
     assert rows[0]["broker_order_id"] == "pending-1"
     assert rows[0]["broker_order_id"] != "True"
+
+
+# ===========================================================================
+# Startup reconciler — clears stuck ``pending`` rows from prior process
+# ===========================================================================
+
+
+async def _insert_pending(
+    *,
+    broker_order_id: str | None,
+    placed_at: datetime | None = None,
+    fire_at: datetime | None = None,
+    trade_mode: str = "scheduled",
+    duration_seconds: int = 60,
+) -> int:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+
+    row = TradeAttempt(
+        chat_id=-1001,
+        parser_config_id=1,
+        asset="EURUSD",
+        asset_raw="EUR/USD",
+        direction="call",
+        duration_seconds=duration_seconds,
+        stake=1.0,
+        trade_mode=trade_mode,
+        fire_at=fire_at,
+        status="pending",
+        broker_order_id=broker_order_id,
+        placed_at=placed_at or datetime.now(UTC),
+    )
+    async with AsyncSessionLocal() as s:
+        s.add(row)
+        await s.commit()
+        await s.refresh(row)
+    return row.id or 0
+
+
+async def test_reconcile_expires_invalid_ticket(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Stuck rows from the pre-fix bug have ``broker_order_id="True"``.
+
+    These can never settle (no real ticket to wait for) so the
+    reconciler must mark them ``expired`` — otherwise they pin the
+    concurrency cap forever and silently block every new signal.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+
+    attempt_id = await _insert_pending(broker_order_id="True")
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    await app.state.executor.reconcile_pending()
+
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    expired = [r for r in rows if r["id"] == attempt_id]
+    assert len(expired) == 1
+    assert expired[0]["status"] == "expired"
+    assert "broker ticket missing" in (expired[0]["error"] or "").lower()
+
+
+async def test_reconcile_expires_settled_during_downtime(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """A pending whose close time is already past the grace gets expired."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+
+    attempt_id = await _insert_pending(
+        broker_order_id="real-ticket-1",
+        placed_at=datetime.now(UTC) - timedelta(hours=1),
+        trade_mode="live",
+    )
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    await app.state.executor.reconcile_pending()
+
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    expired = [r for r in rows if r["id"] == attempt_id]
+    assert len(expired) == 1
+    assert expired[0]["status"] == "expired"
+    assert "settlement window" in (expired[0]["error"] or "").lower()
+
+
+async def test_reconcile_respawns_in_flight_watcher(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """A pending whose fire_at is still in the future re-attaches a watcher."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+
+    fire_at = datetime.now(UTC) + timedelta(minutes=10)
+    attempt_id = await _insert_pending(
+        broker_order_id="real-ticket-2",
+        fire_at=fire_at,
+    )
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    WatcherFakeQuotex.next_outcomes = [("win", 1.5)]
+    await app.state.executor.reconcile_pending()
+    await _settle_watchers(async_client)
+
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    settled = [r for r in rows if r["id"] == attempt_id]
+    assert len(settled) == 1
+    assert settled[0]["status"] == "won"
+    assert settled[0]["profit"] == 1.5
