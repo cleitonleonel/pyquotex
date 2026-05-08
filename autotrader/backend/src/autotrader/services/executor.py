@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime
 
 import structlog
 
@@ -137,8 +138,9 @@ class TradeExecutor:
         decision: RiskDecision,
     ) -> TradeAttempt:
         """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled)."""
+        is_scheduled = decision.trade_mode == "scheduled"
         try:
-            if decision.trade_mode == "scheduled":
+            if is_scheduled:
                 # pyquotex.open_pending takes an *ISO 8601 string*, not
                 # a datetime. Passing the raw object trips an
                 # AttributeError inside pyquotex's normalisation
@@ -167,7 +169,15 @@ class TradeExecutor:
         except Exception as exc:  # pragma: no cover - broker surfaces vary
             return await self._mark_error(attempt, f"{type(exc).__name__}: {exc}")
 
-        order_id = self._extract_order_id(info)
+        # ``open_pending`` returns ``(ok, pending_successful=True)`` —
+        # ``info`` is just a confirmation flag, not the ticket. The
+        # actual id ``wait_for_order_close`` keys on lives at
+        # ``client.api.pending_id``. ``buy`` returns a dict that
+        # ``_extract_order_id`` already understands.
+        order_id = (
+            self._extract_pending_id() if is_scheduled
+            else self._extract_order_id(info)
+        )
         async with AsyncSessionLocal() as session:
             updated = await update_attempt(
                 session,
@@ -181,11 +191,20 @@ class TradeExecutor:
             return attempt
         attempt = updated
 
-        if ok and order_id and decision.trade_mode == "live":
-            # Fire-and-forget result watcher. Scheduled orders settle
-            # later; a Phase 5 reconciler will sweep them up.
+        if ok and order_id:
+            # Fire-and-forget result watcher. Live trades use the
+            # default duration-based timeout; scheduled trades extend
+            # the deadline to ``fire_at + duration + slack`` so the
+            # watcher doesn't expire before the broker fires the
+            # pending.
+            timeout = self._watcher_timeout(signal, is_scheduled=is_scheduled)
             task = asyncio.create_task(
-                self._watch_result(attempt.id or 0, order_id, signal.duration_seconds),
+                self._watch_result(
+                    attempt.id or 0,
+                    order_id,
+                    signal.duration_seconds,
+                    timeout=timeout,
+                ),
             )
             self._watchers.add(task)
             task.add_done_callback(self._watchers.discard)
@@ -202,13 +221,50 @@ class TradeExecutor:
 
     @staticmethod
     def _extract_order_id(info: object) -> str | None:
-        """pyquotex returns either a dict (live buy) or a str/int (pending)."""
+        """pyquotex's ``buy`` returns a dict; pull out the trade UUID."""
         if isinstance(info, dict):
             value = info.get("id") or info.get("ticket") or info.get("orderId")
             return str(value) if value is not None else None
         if info is None:
             return None
         return str(info)
+
+    def _extract_pending_id(self) -> str | None:
+        """Read the most-recent pending ticket from the pyquotex client.
+
+        ``open_pending`` writes the ticket to ``client.api.pending_id``
+        right before returning successfully — that's what
+        ``wait_for_order_close`` keys on. The bool we get back from
+        ``open_pending`` is just a confirmation flag.
+        """
+        client = self._manager._client
+        if client is None:
+            return None
+        api = getattr(client, "api", None)
+        if api is None:
+            return None
+        pid = getattr(api, "pending_id", None)
+        if pid is None:
+            return None
+        return str(pid)
+
+    @staticmethod
+    def _watcher_timeout(signal: ParsedSignal, *, is_scheduled: bool) -> float | None:
+        """How long to wait for a settlement event.
+
+        ``None`` means "use pyquotex's default" (``duration + 30s``),
+        which is correct for live trades. Scheduled trades may fire
+        far in the future, so we extend the deadline to cover the
+        full ``(fire_at - now) + duration + slack`` window.
+        """
+        if not is_scheduled or signal.fire_at is None:
+            return None
+        now = datetime.now(UTC)
+        fire_at = signal.fire_at
+        if fire_at.tzinfo is None:
+            fire_at = fire_at.replace(tzinfo=UTC)
+        wait_secs = max(0.0, (fire_at - now).total_seconds())
+        return wait_secs + signal.duration_seconds + 60.0
 
     async def _mark_error(
         self,
@@ -230,13 +286,14 @@ class TradeExecutor:
         attempt_id: int,
         order_id: str,
         duration: int,
+        timeout: float | None = None,  # noqa: ASYNC109  (forwarded to pyquotex)
     ) -> None:
         """Wait for the broker's win/loss event and persist."""
         if self._manager._client is None:
             return
         try:
             status, profit = await self._manager._client.wait_for_order_close(
-                order_id, duration=duration,
+                order_id, duration=duration, timeout=timeout,
             )
         except Exception as exc:  # pragma: no cover - broker timing surfaces vary
             log.warning(

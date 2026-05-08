@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 import httpx
@@ -157,19 +157,21 @@ async def _create_parser(
     chat_id: int,
     martingale: dict | None = None,
     default_stake: float = 5.0,
+    trade_mode: str = "live",
+    template: str = "{DIRECTION} {ASSET} {DURATION}",
 ) -> int:
     body = {
         "chat_id": chat_id,
         "name": "test",
         "priority": 100,
         "parser_type": "template",
-        "parser_config": {"template": "{DIRECTION} {ASSET} {DURATION}"},
+        "parser_config": {"template": template},
         "timezone": "UTC",
         "timezone_offset_minutes": 0,
         "asset_aliases": {},
         "default_stake": default_stake,
         "default_duration_seconds": 60,
-        "trade_mode": "live",
+        "trade_mode": trade_mode,
         "aggregate_window_seconds": 0,
         "martingale": martingale
         or {
@@ -380,3 +382,103 @@ async def test_daily_max_stake_blocks_further_trades(
     assert len(WatcherFakeQuotex.buy_calls) == 1
     rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
     assert any("daily stake" in (r["error"] or "").lower() for r in rows)
+
+
+# ===========================================================================
+# Scheduled trades: martingale + pending-ticket capture
+# ===========================================================================
+
+
+async def test_scheduled_trade_advances_martingale(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """A scheduled trade's outcome should tick the streak too.
+
+    Pre-fix bug: ``_place`` only spawned a result watcher for
+    ``trade_mode == "live"`` so scheduled trades stayed ``pending``
+    forever — the streak never advanced and the next signal kept
+    using base stake.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    parser_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        trade_mode="auto",
+        template="{DIRECTION} {ASSET} {DURATION} at {TIME}",
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    # Loss → streak should tick to 1, last_stake=10.
+    fire_at = (datetime.now(UTC) + timedelta(minutes=2)).strftime("%H:%M")
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(
+        async_client, chat_id=-1001, text=f"BUY EURUSD 1m at {fire_at}",
+    )
+    await _settle_watchers(async_client)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        state = await s.get(MartingaleState, parser_id)
+    assert state is not None
+    assert state.current_streak == 1
+    assert state.last_outcome == "lost"
+    assert state.last_stake == 10.0
+
+    # Next scheduled signal should be sized at 10 * 2^1 = 20.
+    fire_at = (datetime.now(UTC) + timedelta(minutes=3)).strftime("%H:%M")
+    WatcherFakeQuotex.next_outcomes = [("win", 19.0)]
+    await _dispatch(
+        async_client, chat_id=-1001, text=f"BUY EURUSD 1m at {fire_at}",
+    )
+    await _settle_watchers(async_client)
+
+    assert WatcherFakeQuotex.pending_calls[-1]["amount"] == 20.0
+    assert WatcherFakeQuotex.buy_calls == []  # nothing fired live
+
+
+async def test_scheduled_trade_persists_pending_ticket(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """``broker_order_id`` for a scheduled trade should be the ticket.
+
+    Pre-fix bug: ``_extract_order_id`` ran on the bool returned by
+    ``open_pending`` and stored the literal string ``"True"`` as the
+    broker order id. The fix reads ``client.api.pending_id`` instead.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        trade_mode="auto",
+        template="{DIRECTION} {ASSET} {DURATION} at {TIME}",
+        default_stake=5.0,
+    )
+    await _activate()
+
+    fire_at = (datetime.now(UTC) + timedelta(minutes=2)).strftime("%H:%M")
+    await _dispatch(
+        async_client, chat_id=-1001, text=f"BUY EURUSD 1m at {fire_at}",
+    )
+    await _settle_watchers(async_client)
+
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    assert len(rows) == 1
+    assert rows[0]["trade_mode"] == "scheduled"
+    # FakeQuotex.open_pending writes ``pending-1`` to api.pending_id.
+    assert rows[0]["broker_order_id"] == "pending-1"
+    assert rows[0]["broker_order_id"] != "True"

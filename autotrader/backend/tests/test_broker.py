@@ -119,7 +119,15 @@ class FakeQuotex:
         duration: int,
         open_time: object | None = None,
         confirm_timeout: float = 30.0,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, bool]:
+        """Mirrors real pyquotex: ticket goes to ``api.pending_id``.
+
+        Real ``open_pending`` returns ``(True, pending_successful=True)``
+        — a confirmation flag, not the ticket. The ticket itself is
+        written to ``self.api.pending_id`` and that's what
+        ``wait_for_order_close`` keys on. Tests assert on
+        ``api.pending_id`` to verify the executor reads the right id.
+        """
         FakeQuotex.pending_calls.append(
             {
                 "amount": amount,
@@ -129,7 +137,10 @@ class FakeQuotex:
                 "open_time": open_time,
             },
         )
-        return True, f"pending-{len(FakeQuotex.pending_calls)}"
+        ticket = f"pending-{len(FakeQuotex.pending_calls)}"
+        self.api.pending_id = ticket
+        self.api.pending_successful = True
+        return True, True
 
     async def wait_for_order_close(
         self,
