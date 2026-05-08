@@ -37,6 +37,14 @@ class Login(Browser):
         )
         self.headers["Referer"] = f"{self.full_url}/sign-in"
         self.headers["Upgrade-Insecure-Requests"] = "1"
+        # Cloudflare cross-checks the Sec-Ch-Ua trio; sending only the
+        # ``-Mobile`` / ``-Platform`` suffixes without the parent
+        # ``Sec-Ch-Ua`` brands list is itself a bot tell, even with
+        # the Chrome JA3 fingerprint.
+        self.headers["Sec-Ch-Ua"] = (
+            '"Not_A Brand";v="8", "Chromium";v="120", '
+            '"Google Chrome";v="120"'
+        )
         self.headers["Sec-Ch-Ua-Mobile"] = "?0"
         self.headers["Sec-Ch-Ua-Platform"] = '"Linux"'
         self.headers["Sec-Fetch-Site"] = "same-origin"
