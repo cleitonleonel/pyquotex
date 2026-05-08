@@ -77,6 +77,15 @@ class FakeQuotex:
     async def get_balance(self, timeout: int = 10) -> float:  # noqa: ASYNC109
         return 10_000.0
 
+    async def get_all_assets(self) -> dict[str, str]:
+        # name -> code mapping mirrors pyquotex's real shape.
+        return {
+            "EUR/USD": "EURUSD",
+            "EUR/USD (OTC)": "EURUSD_otc",
+            "GBP/USD": "GBPUSD",
+            "Gold": "XAUUSD",
+        }
+
 
 @pytest.fixture(autouse=True)
 def _reset_fake_quotex() -> Iterator[None]:
@@ -233,6 +242,31 @@ def test_delete_credentials(client: TestClient) -> None:
     assert r.status_code == 200
     r = client.get("/broker/status", headers=headers)
     assert r.json()["configured"] is False
+
+
+# ---------------------------------------------------------------------------
+# Asset cache
+# ---------------------------------------------------------------------------
+
+
+def test_assets_endpoint_empty_when_disconnected(client: TestClient) -> None:
+    headers = _login(client)
+    r = client.get("/broker/assets", headers=headers)
+    assert r.status_code == 200
+    assert r.json() == {"assets": [], "count": 0}
+
+
+def test_assets_populated_after_connect(client: TestClient) -> None:
+    headers = _login(client)
+    _put_credentials(client, headers)
+    client.post("/broker/connect", headers=headers)
+
+    r = client.get("/broker/assets", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] >= 4
+    assert "EURUSD" in body["assets"]
+    assert "EURUSD_otc" in body["assets"]
 
 
 # ---------------------------------------------------------------------------

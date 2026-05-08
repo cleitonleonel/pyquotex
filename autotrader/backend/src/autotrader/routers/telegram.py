@@ -9,6 +9,7 @@ to know what to render next.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -82,6 +83,13 @@ class WatchRequest(BaseModel):
     chat_type: str = Field(..., min_length=1)
     username: str | None = None
     enabled: bool = True
+
+
+class MessageResponse(BaseModel):
+    id: int
+    text: str
+    sender_id: int
+    date: datetime | None = None
 
 
 class OkResponse(BaseModel):
@@ -277,6 +285,53 @@ async def unwatch_endpoint(
 ) -> OkResponse:
     await remove_watch(session, chat_id)
     return OkResponse()
+
+
+# ---------------------------------------------------------------------------
+# Recent messages (sample fodder for the parser builder)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/messages", response_model=list[MessageResponse])
+async def messages_endpoint(
+    chat_id: int,
+    manager: TelegramDep,
+    session: SessionDep,
+    limit: int = 20,
+) -> list[MessageResponse]:
+    """Recent messages from a watched chat — useful sample fodder when
+    designing a regex/template in the parser builder.
+
+    Restricted to chats the user has explicitly watched so the dashboard
+    doesn't accidentally expose private DMs.
+    """
+    if not manager.logged_in:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="not logged in to telegram",
+        )
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="limit must be between 1 and 100",
+        )
+
+    watched = {w.chat_id for w in await list_watched(session)}
+    if chat_id not in watched:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="chat is not in the watched list",
+        )
+
+    try:
+        msgs = await manager.recent_messages(chat_id, limit=limit)
+    except TelegramManagerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return [MessageResponse(**m) for m in msgs]
 
 
 # ---------------------------------------------------------------------------

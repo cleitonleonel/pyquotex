@@ -94,6 +94,12 @@ class QuotexManager:
         self._otp_future: asyncio.Future[str] | None = None
         self._otp_prompt: str | None = None
 
+        # Broker asset codes (e.g. "EURUSD", "EURUSD_otc"). Populated
+        # on each successful connect and refreshable via
+        # ``refresh_assets``. The parser layer reads this to auto-
+        # resolve channel-side asset names to broker codes.
+        self._assets: tuple[str, ...] = ()
+
         # Serialises the actual login round-trip. Two ``begin_connect``
         # calls are coalesced via the ``_state`` check before this lock
         # is reached.
@@ -225,6 +231,13 @@ class QuotexManager:
                     email_masked=_mask_email(self._email or ""),
                     account_mode=self._account_mode,
                 )
+                # Best-effort: fetch the asset universe so the parser
+                # layer can auto-resolve channel-side names to broker
+                # codes. Failure here doesn't fail the connect.
+                try:
+                    await self._refresh_assets_locked()
+                except Exception as exc:  # pragma: no cover - depends on broker
+                    log.warning("broker.assets.refresh_failed", error=str(exc))
             else:
                 self._state = "error"
                 self._last_error = reason
@@ -357,3 +370,34 @@ class QuotexManager:
     def account_type_int(self) -> int:
         """Underlying ``AccountType`` int (0=REAL, 1=DEMO)."""
         return AccountType.DEMO if self._account_mode == "PRACTICE" else AccountType.REAL
+
+    # ------------------------------------------------------------------
+    # Assets
+    # ------------------------------------------------------------------
+
+    @property
+    def assets(self) -> tuple[str, ...]:
+        """Snapshot of broker asset codes (empty until first connect)."""
+        return self._assets
+
+    async def refresh_assets(self) -> tuple[str, ...]:
+        """Force-refresh the asset cache. Returns the new snapshot."""
+        if self._client is None:
+            raise QuotexManagerError("not connected")
+        async with self._lock:
+            await self._refresh_assets_locked()
+        return self._assets
+
+    async def _refresh_assets_locked(self) -> None:
+        """Caller must hold ``self._lock``."""
+        if self._client is None:
+            return
+        try:
+            mapping = await self._client.get_all_assets()
+        except Exception:
+            raise
+        # ``get_all_assets`` returns ``{display_name: code}``; we want
+        # the code side.
+        codes = sorted({str(c).strip() for c in (mapping or {}).values() if c})
+        self._assets = tuple(codes)
+        log.info("broker.assets.refreshed", count=len(codes))

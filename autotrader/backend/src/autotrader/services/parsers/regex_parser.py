@@ -22,6 +22,7 @@ import re
 from datetime import datetime
 from typing import Final
 
+from autotrader.services.parsers.asset_resolver import resolve_asset
 from autotrader.services.parsers.base import (
     ParsedSignal,
     ParseError,
@@ -30,7 +31,6 @@ from autotrader.services.parsers.base import (
     RawMessage,
 )
 from autotrader.services.parsers.normalize import (
-    normalise_asset,
     normalise_direction,
     normalise_duration,
     normalise_fire_at,
@@ -50,6 +50,7 @@ class RegexParser(Parser):
         flags: int = re.IGNORECASE | re.MULTILINE,
         timezone_offset_minutes: int = 0,
         asset_aliases: dict[str, str] | None = None,
+        known_assets: tuple[str, ...] | None = None,
         default_duration_seconds: int = 60,
         default_duration_unit: str = "m",
         parser_id: str = "regex",
@@ -67,6 +68,7 @@ class RegexParser(Parser):
 
         self._tz_offset = timezone_offset_minutes
         self._aliases = asset_aliases or {}
+        self._known_assets = known_assets or ()
         self._default_duration = default_duration_seconds
         self._default_duration_unit = default_duration_unit
         self._id = parser_id
@@ -94,7 +96,13 @@ class RegexParser(Parser):
                 detail={"raw": groups.get("direction"), **{"groups": groups}},
             )
 
-        asset = normalise_asset(groups.get("asset", ""), self._aliases)
+        raw_asset = groups.get("asset", "")
+        resolution = resolve_asset(
+            raw_asset,
+            aliases=self._aliases,
+            known_assets=self._known_assets,
+        )
+        asset = resolution.code
         if not asset:
             return ParseError(reason="empty asset", detail={"groups": groups})
 
@@ -144,4 +152,6 @@ class RegexParser(Parser):
             raw_text=text,
             parser_id=self._id,
             matched_groups={k: v for k, v in groups.items() if k in _KNOWN_GROUPS},
+            asset_raw=resolution.raw,
+            asset_via=resolution.via,
         )

@@ -57,6 +57,21 @@ class _FakeDialog:
         self.chat = chat
 
 
+class _FakeMessage:
+    def __init__(
+        self,
+        msg_id: int,
+        text: str,
+        sender_id: int = 100,
+        date: object | None = None,
+    ) -> None:
+        self.id = msg_id
+        self.text = text
+        self.caption = None
+        self.from_user = type("U", (), {"id": sender_id})()
+        self.date = date
+
+
 class FakeTelegramClient:
     """Stand-in for ``pyrogram.Client``."""
 
@@ -64,6 +79,7 @@ class FakeTelegramClient:
     valid_code: ClassVar[str] = "11111"
     valid_password: ClassVar[str] = "p@ss"
     dialogs: ClassVar[list[_FakeChat]] = []
+    history: ClassVar[dict[int, list[_FakeMessage]]] = {}
     last_instance: ClassVar[FakeTelegramClient | None] = None
 
     def __init__(
@@ -143,6 +159,15 @@ class FakeTelegramClient:
         for chat in FakeTelegramClient.dialogs:
             yield _FakeDialog(chat)
 
+    async def get_chat_history(
+        self,
+        chat_id: int,
+        limit: int = 0,
+    ) -> AsyncIterator[_FakeMessage]:
+        msgs = FakeTelegramClient.history.get(chat_id, [])
+        for msg in msgs[: limit or len(msgs)]:
+            yield msg
+
 
 @pytest.fixture(autouse=True)
 def _reset_fake_telegram() -> Iterator[None]:
@@ -154,6 +179,12 @@ def _reset_fake_telegram() -> Iterator[None]:
         _FakeChat(-1002, "VIP Group", "supergroup", username=None, members=42),
         _FakeChat(7, "Mom", "private"),
     ]
+    FakeTelegramClient.history = {
+        -1001: [
+            _FakeMessage(101, "🟢 BUY EUR/USD 1m", sender_id=200),
+            _FakeMessage(100, "Good morning everyone!", sender_id=200),
+        ],
+    }
     FakeTelegramClient.last_instance = None
     yield
 
@@ -424,6 +455,56 @@ def test_watch_requires_auth(client: TestClient) -> None:
 
 # ---------------------------------------------------------------------------
 # Session persistence (DB row written after login)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Recent messages
+# ---------------------------------------------------------------------------
+
+
+def test_messages_requires_login(client: TestClient) -> None:
+    headers = _login(client)
+    r = client.get("/telegram/messages?chat_id=-1001", headers=headers)
+    assert r.status_code == 409
+
+
+def test_messages_blocked_for_unwatched(client: TestClient) -> None:
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    r = client.get("/telegram/messages?chat_id=-1001", headers=headers)
+    assert r.status_code == 403
+
+
+def test_messages_for_watched_chat(client: TestClient) -> None:
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1001,
+            "title": "Signals Pro",
+            "chat_type": "channel",
+            "username": "signalspro",
+            "enabled": True,
+        },
+    )
+
+    r = client.get("/telegram/messages?chat_id=-1001&limit=10", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    assert body[0]["text"] == "🟢 BUY EUR/USD 1m"
+    assert body[0]["sender_id"] == 200
+
+
+# ---------------------------------------------------------------------------
+# Session persistence
 # ---------------------------------------------------------------------------
 
 

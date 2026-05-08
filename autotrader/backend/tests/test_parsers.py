@@ -27,6 +27,7 @@ from autotrader.services.parsers import (
     RegexParser,
     TemplateParser,
     build_parser,
+    resolve_asset,
     template_to_regex,
 )
 from autotrader.services.parsers.factory import ParserBuildError
@@ -137,6 +138,51 @@ def test_normalise_fire_at_bare_strings() -> None:
 
 
 # ===========================================================================
+# Asset resolver
+# ===========================================================================
+
+
+def test_resolve_asset_alias_overrides_everything() -> None:
+    res = resolve_asset(
+        "EUR/USD",
+        aliases={"EUR/USD": "EURUSD_otc"},
+        known_assets=("EURUSD",),
+    )
+    assert res.code == "EURUSD_otc"
+    assert res.via == "alias"
+
+
+def test_resolve_asset_exact_match_against_known() -> None:
+    res = resolve_asset("EURUSD", known_assets=("EURUSD", "GBPUSD"))
+    assert res.code == "EURUSD"
+    assert res.via == "exact"
+
+
+def test_resolve_asset_strips_then_matches() -> None:
+    res = resolve_asset("EUR/USD", known_assets=("EURUSD",))
+    assert res.code == "EURUSD"
+    assert res.via == "exact"
+
+
+def test_resolve_asset_otc_suffix_probe() -> None:
+    res = resolve_asset("EUR/USD", known_assets=("EURUSD_otc",))
+    assert res.code == "EURUSD_otc"
+    assert res.via == "otc"
+
+
+def test_resolve_asset_fallback_when_unknown() -> None:
+    res = resolve_asset("EUR/USD", known_assets=("GBPUSD",))
+    assert res.code == "EURUSD"
+    assert res.via == "fallback"
+
+
+def test_resolve_asset_no_known_set_falls_back() -> None:
+    res = resolve_asset("EUR/USD", aliases=None, known_assets=None)
+    assert res.code == "EURUSD"
+    assert res.via == "fallback"
+
+
+# ===========================================================================
 # Template + Regex parsers
 # ===========================================================================
 
@@ -174,8 +220,22 @@ def test_template_parser_emoji_direction_with_aliases() -> None:
     out = p.parse([_msg("🟢 EUR/USD expiry 1m")])
     assert isinstance(out, ParsedSignal)
     assert out.asset == "EURUSD_otc"
+    assert out.asset_via == "alias"
     assert out.direction == "call"
     assert out.duration_seconds == 60
+
+
+def test_template_parser_auto_resolves_against_known_assets() -> None:
+    """No manual alias — broker known-set picks ``_otc`` automatically."""
+    p = TemplateParser(
+        "{DIRECTION} {ASSET} {DURATION}",
+        known_assets=("EURUSD_otc", "GBPUSD"),
+    )
+    out = p.parse([_msg("BUY EUR/USD 1m")])
+    assert isinstance(out, ParsedSignal)
+    assert out.asset == "EURUSD_otc"
+    assert out.asset_via == "otc"
+    assert out.asset_raw == "EUR/USD"
 
 
 def test_template_parser_unknown_placeholder() -> None:

@@ -113,6 +113,11 @@ export interface BrokerConnectResponse {
   otp_prompt: string | null;
 }
 
+export interface BrokerAssets {
+  assets: string[];
+  count: number;
+}
+
 export const broker = {
   status: () => api<BrokerStatus>("/broker/status"),
 
@@ -146,6 +151,9 @@ export const broker = {
     }),
 
   balance: () => api<BrokerBalance>("/broker/balance"),
+
+  assets: (refresh = false) =>
+    api<BrokerAssets>(`/broker/assets${refresh ? "?refresh=true" : ""}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -229,7 +237,19 @@ export const telegram = {
 
   unwatch: (chatId: number) =>
     api<{ ok: true }>(`/telegram/watch/${chatId}`, { method: "DELETE" }),
+
+  messages: (chatId: number, limit = 20) =>
+    api<TelegramMessage[]>(
+      `/telegram/messages?chat_id=${chatId}&limit=${limit}`,
+    ),
 };
+
+export interface TelegramMessage {
+  id: number;
+  text: string;
+  sender_id: number;
+  date: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Parsers
@@ -285,6 +305,8 @@ export interface ParsedSignal {
   parser_id: string;
   matched_groups: Record<string, string>;
   trade_mode: TradeMode;
+  asset_raw: string;
+  asset_via: string;
 }
 
 export interface ParserTestResponse {

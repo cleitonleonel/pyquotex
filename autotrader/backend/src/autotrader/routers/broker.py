@@ -95,6 +95,11 @@ class BalanceResponse(BaseModel):
     account_mode: AccountMode
 
 
+class AssetsResponse(BaseModel):
+    assets: list[str]
+    count: int
+
+
 class OkResponse(BaseModel):
     ok: Literal[True] = True
 
@@ -272,6 +277,29 @@ async def set_account_mode_endpoint(
         await session.commit()
 
     return _status_payload(manager)
+
+
+@router.get("/assets", response_model=AssetsResponse)
+async def assets_endpoint(
+    manager: ManagerDep,
+    refresh: bool = False,
+) -> AssetsResponse:
+    """Broker's asset universe.
+
+    Returns the cached snapshot the manager populated at connect time.
+    Pass ``?refresh=true`` to force-pull a fresh list (only meaningful
+    while connected).
+    """
+    if refresh and manager.connected:
+        try:
+            await manager.refresh_assets()
+        except QuotexManagerError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+    codes = list(manager.assets)
+    return AssetsResponse(assets=codes, count=len(codes))
 
 
 @router.get("/balance", response_model=BalanceResponse)

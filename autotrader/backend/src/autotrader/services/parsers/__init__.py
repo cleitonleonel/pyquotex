@@ -11,6 +11,7 @@ Public surface:
 """
 
 from autotrader.services.parsers.aggregator import Aggregator, parse_via_aggregator
+from autotrader.services.parsers.asset_resolver import AssetResolution, resolve_asset
 from autotrader.services.parsers.base import (
     ParsedSignal,
     ParseError,
@@ -29,6 +30,7 @@ from autotrader.services.parsers.template import (
 __all__ = [
     "BUILTIN_TEMPLATES",
     "Aggregator",
+    "AssetResolution",
     "ParseError",
     "ParseOutcome",
     "ParsedSignal",
@@ -39,5 +41,6 @@ __all__ = [
     "TemplateParser",
     "build_parser",
     "parse_via_aggregator",
+    "resolve_asset",
     "template_to_regex",
 ]

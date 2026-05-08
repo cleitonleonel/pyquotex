@@ -18,12 +18,14 @@ import { Label } from "@/components/ui/label";
 import {
   ApiError,
   DEFAULT_PARSER_CONFIG,
+  type BrokerAssets,
   type ParserConfigPayload,
   type ParserTemplate,
   type ParserTestResponse,
-  type ParserType,
   type TelegramDialog,
+  type TelegramMessage,
   type TradeMode,
+  broker,
   parsers,
   telegram,
 } from "@/lib/api";
@@ -53,6 +55,7 @@ export default function ParserEditor() {
   const [aliasesText, setAliasesText] = useState<string>("");
   const [aliasesError, setAliasesError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(isNew);
+  const [testerText, setTesterText] = useState<string>("BUY EURUSD 1m");
 
   useEffect(() => {
     if (!isNew && existing.data && !hydrated) {
@@ -152,6 +155,11 @@ export default function ParserEditor() {
         </div>
       </section>
 
+      <RecentMessagesPanel
+        chatId={chatId}
+        onUse={(t) => setTesterText(t)}
+      />
+
       <div className="grid gap-6 lg:grid-cols-2">
         <ConfigEditor
           cfg={cfg}
@@ -161,7 +169,11 @@ export default function ParserEditor() {
           applyAliases={applyAliases}
           aliasesError={aliasesError}
         />
-        <LiveTester cfg={cfg} />
+        <LiveTester
+          cfg={cfg}
+          text={testerText}
+          setText={setTesterText}
+        />
       </div>
 
       <Card>
@@ -341,14 +353,11 @@ function ConfigEditor({
             type="number"
             help="UTC offset (60 = UTC+1, -300 = UTC-5)"
           />
-          <Field
-            label="Aggregate window (seconds)"
-            value={cfg.aggregate_window_seconds}
-            onChange={(v) =>
-              set("aggregate_window_seconds", Math.max(0, Number(v) || 0))
+          <MultiMessageToggle
+            seconds={cfg.aggregate_window_seconds}
+            onChange={(s) =>
+              set("aggregate_window_seconds", Math.max(0, s))
             }
-            type="number"
-            help="0 = single-message; >0 buffers messages from same sender"
           />
         </div>
 
@@ -612,10 +621,23 @@ function Field({
 // Live tester
 // ---------------------------------------------------------------------------
 
-function LiveTester({ cfg }: { cfg: ParserConfigPayload }) {
-  const [text, setText] = useState("BUY EURUSD 1m");
+function LiveTester({
+  cfg,
+  text,
+  setText,
+}: {
+  cfg: ParserConfigPayload;
+  text: string;
+  setText: (v: string) => void;
+}) {
   const [result, setResult] = useState<ParserTestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const assets = useQuery<BrokerAssets>({
+    queryKey: ["broker", "assets"],
+    queryFn: () => broker.assets(),
+    staleTime: 60_000,
+  });
 
   const run = useMutation({
     mutationFn: () => {
@@ -645,7 +667,9 @@ function LiveTester({ cfg }: { cfg: ParserConfigPayload }) {
         <CardTitle>Live tester</CardTitle>
         <CardDescription>
           Paste sample messages — separate multiple messages with a blank
-          line. Hit <em>Test</em> to see the structured signal.
+          line. {assets.data
+            ? `${assets.data.count} broker assets cached for auto-resolution.`
+            : "Connect the broker to enable asset auto-resolution."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -691,15 +715,20 @@ function ResultPanel({ result }: { result: ParserTestResponse }) {
   }
 
   const s = result.signal!;
+  const assetResolved =
+    s.asset_raw && s.asset_raw !== s.asset
+      ? `${s.asset_raw} → ${s.asset}`
+      : s.asset;
   return (
     <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">
-      <div className="flex items-center gap-2 pb-2">
+      <div className="flex flex-wrap items-center gap-2 pb-2">
         <Badge variant="success">match</Badge>
         <Badge variant="outline">{s.trade_mode}</Badge>
+        {s.asset_via && <AssetViaBadge via={s.asset_via} />}
         <span className="text-xs text-muted-foreground">via {s.parser_id}</span>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-        <Row label="Asset" value={s.asset} />
+        <Row label="Asset" value={assetResolved} />
         <Row label="Direction" value={s.direction} />
         <Row label="Duration" value={`${s.duration_seconds}s`} />
         <Row label="Stake" value={s.stake !== null ? String(s.stake) : "(default)"} />
@@ -716,6 +745,153 @@ function ResultPanel({ result }: { result: ParserTestResponse }) {
         </details>
       )}
     </div>
+  );
+}
+
+function AssetViaBadge({ via }: { via: string }) {
+  const variants: Record<string, "default" | "secondary" | "outline" | "warning" | "success"> = {
+    alias: "default",
+    exact: "success",
+    otc: "warning",
+    fallback: "outline",
+  };
+  return <Badge variant={variants[via] ?? "outline"}>asset: {via}</Badge>;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-message toggle
+// ---------------------------------------------------------------------------
+
+function MultiMessageToggle({
+  seconds,
+  onChange,
+}: {
+  seconds: number;
+  onChange: (s: number) => void;
+}) {
+  const enabled = seconds > 0;
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-2">
+        Multi-message signal
+        {enabled && <Badge variant="outline">{seconds}s window</Badge>}
+      </Label>
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onChange(e.target.checked ? 10 : 0)}
+            className="h-4 w-4"
+          />
+          Enable
+        </label>
+        {enabled && (
+          <Input
+            type="number"
+            min={1}
+            max={300}
+            value={seconds}
+            onChange={(e) => onChange(Math.max(1, Number(e.target.value) || 1))}
+            className="w-24"
+          />
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        On: buffers messages from the same sender within this window so a
+        signal split across messages still parses as one.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Recent messages from this channel
+// ---------------------------------------------------------------------------
+
+function RecentMessagesPanel({
+  chatId,
+  onUse,
+}: {
+  chatId: number;
+  onUse: (text: string) => void;
+}) {
+  const messages = useQuery<TelegramMessage[]>({
+    queryKey: ["telegram", "messages", chatId],
+    queryFn: () => telegram.messages(chatId, 20),
+    retry: false,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle>Recent messages</CardTitle>
+            <CardDescription>
+              Last 20 from this chat. Click <strong>Use</strong> to drop one
+              into the live tester.
+            </CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => messages.refetch()}
+            disabled={messages.isFetching}
+          >
+            {messages.isFetching ? "Refreshing…" : "Refresh"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {messages.isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {messages.error && (
+          <p className="text-sm text-destructive">
+            {messages.error instanceof ApiError
+              ? messages.error.message
+              : String(messages.error)}
+            {" — "}
+            make sure you&rsquo;re logged into Telegram and this chat is in
+            your watch list.
+          </p>
+        )}
+        {messages.data && messages.data.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No recent text messages.
+          </p>
+        )}
+        {messages.data && messages.data.length > 0 && (
+          <ul className="divide-y rounded-md border">
+            {messages.data.map((m) => (
+              <li
+                key={m.id}
+                className="flex items-start justify-between gap-3 p-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                    {m.text}
+                  </pre>
+                  <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {m.date ? new Date(m.date).toLocaleString() : "(no date)"}
+                    {" · sender "}
+                    {m.sender_id}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onUse(m.text)}
+                >
+                  Use
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

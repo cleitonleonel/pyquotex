@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import SessionDep
+from autotrader.dependencies import ManagerDep, SessionDep
 from autotrader.models.parser_config import (
     ParserConfig,
     create_config,
@@ -114,6 +114,9 @@ class SignalResponse(BaseModel):
     parser_id: str
     matched_groups: dict[str, str]
     trade_mode: TradeMode
+    # Asset auto-resolution diagnostics
+    asset_raw: str = ""
+    asset_via: str = ""
 
 
 class TestResponse(BaseModel):
@@ -207,6 +210,22 @@ def _validate_compiles(p: ConfigPayload) -> None:
         ) from exc
 
 
+def _signal_to_response(signal: ParsedSignal, trade_mode: TradeMode) -> SignalResponse:
+    return SignalResponse(
+        asset=signal.asset,
+        direction=signal.direction,
+        duration_seconds=signal.duration_seconds,
+        stake=signal.stake,
+        fire_at=signal.fire_at,
+        raw_text=signal.raw_text,
+        parser_id=signal.parser_id,
+        matched_groups=signal.matched_groups,
+        trade_mode=trade_mode,
+        asset_raw=signal.asset_raw,
+        asset_via=signal.asset_via,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes — templates
 # ---------------------------------------------------------------------------
@@ -298,11 +317,13 @@ async def delete_config_endpoint(
 
 
 @router.post("/test", response_model=TestResponse)
-async def test_endpoint(body: TestRequest) -> TestResponse:
+async def test_endpoint(body: TestRequest, manager: ManagerDep) -> TestResponse:
     """Run a parser config against a sample message run.
 
     No DB writes; the request payload contains the entire config so
-    the user can iterate before saving.
+    the user can iterate before saving. The broker's asset cache is
+    threaded through so the tester reflects the auto-resolution that
+    Phase 4's executor will apply at trade time.
     """
     cfg = body.config
 
@@ -312,6 +333,7 @@ async def test_endpoint(body: TestRequest) -> TestResponse:
             parser_config=cfg.parser_config,
             timezone_offset_minutes=cfg.timezone_offset_minutes,
             asset_aliases=cfg.asset_aliases,
+            known_assets=manager.assets,
             default_duration_seconds=cfg.default_duration_seconds,
         )
     except ParserBuildError as exc:
@@ -365,21 +387,13 @@ async def test_endpoint(body: TestRequest) -> TestResponse:
                 raw_text=signal.raw_text,
                 parser_id=signal.parser_id,
                 matched_groups=signal.matched_groups,
+                asset_raw=signal.asset_raw,
+                asset_via=signal.asset_via,
             )
 
         return TestResponse(
             matched=True,
-            signal=SignalResponse(
-                asset=signal.asset,
-                direction=signal.direction,
-                duration_seconds=signal.duration_seconds,
-                stake=signal.stake,
-                fire_at=signal.fire_at,
-                raw_text=signal.raw_text,
-                parser_id=signal.parser_id,
-                matched_groups=signal.matched_groups,
-                trade_mode=cfg.trade_mode,
-            ),
+            signal=_signal_to_response(signal, cfg.trade_mode),
         )
     return TestResponse(
         matched=False,

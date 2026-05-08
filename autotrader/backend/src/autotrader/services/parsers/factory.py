@@ -19,6 +19,7 @@ def build_parser(
     parser_config: dict[str, str | int | float | bool],
     timezone_offset_minutes: int = 0,
     asset_aliases: dict[str, str] | None = None,
+    known_assets: tuple[str, ...] | None = None,
     default_duration_seconds: int = 60,
     parser_id: str | None = None,
 ) -> Parser:
@@ -29,6 +30,10 @@ def build_parser(
     * ``"template"``  → ``{"template": "{DIRECTION} {ASSET} {DURATION}"}``
     * ``"regex"``     → ``{"pattern": "..."}`` (Python regex with named groups)
 
+    ``known_assets`` is the broker's asset catalogue — the parser will
+    auto-resolve channel-side names against it (with ``_otc`` suffix
+    probing) before falling back to the stripped form.
+
     Both types also accept ``default_duration_unit`` (``"s"`` / ``"m"`` /
     ``"h"``) — useful when channels post bare numbers like ``"60"``.
     """
@@ -37,6 +42,7 @@ def build_parser(
     common: dict[str, object] = {
         "timezone_offset_minutes": timezone_offset_minutes,
         "asset_aliases": asset_aliases,
+        "known_assets": known_assets,
         "default_duration_seconds": default_duration_seconds,
         "default_duration_unit": default_unit,
     }

@@ -43,6 +43,12 @@ class ParsedSignal:
     raw_text: str = ""
     parser_id: str = ""               # which parser produced this (for logs)
     matched_groups: dict[str, str] = field(default_factory=dict)
+    # Asset-resolution diagnostics: raw form the parser saw, and the
+    # path that produced ``asset`` ("alias" | "exact" | "otc" | "fallback").
+    # Useful for the live-tester UI; ``""`` for the raw means
+    # "no resolution metadata" (older parsers).
+    asset_raw: str = ""
+    asset_via: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -418,6 +418,45 @@ class TelegramManager:
         async for dialog in client.get_dialogs(limit=limit):
             yield dialog
 
+    # ------------------------------------------------------------------
+    # Recent messages (sample fodder for the parser builder)
+    # ------------------------------------------------------------------
+
+    async def recent_messages(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch the last ``limit`` messages from ``chat_id``.
+
+        Returns a list of dicts with ``id``, ``text``, ``sender_id``,
+        and ``date`` (ISO string). Pyrogram returns text+caption-only
+        Messages; we drop messages without text (stickers, voice, …)
+        because they're not parser fodder.
+        """
+        if not self.logged_in:
+            raise TelegramManagerError("not logged in")
+        assert self._client is not None
+
+        out: list[dict[str, Any]] = []
+        async for msg in self._client.get_chat_history(chat_id, limit=limit):
+            text = getattr(msg, "text", None) or getattr(msg, "caption", None)
+            if not text:
+                continue
+            from_user = getattr(msg, "from_user", None)
+            sender_id = getattr(from_user, "id", 0) if from_user else 0
+            date = getattr(msg, "date", None)
+            out.append(
+                {
+                    "id": getattr(msg, "id", 0),
+                    "text": str(text),
+                    "sender_id": sender_id,
+                    "date": date.isoformat() if date else None,
+                },
+            )
+        return out
+
 
 def _join_name(chat: Any) -> str:
     parts = [getattr(chat, "first_name", None), getattr(chat, "last_name", None)]
