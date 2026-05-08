@@ -113,12 +113,26 @@ class Browser:
             for name, value in self._client.cookies.items()
         )
 
+    @staticmethod
+    def _reason_phrase(response: Any) -> str:
+        """Return the HTTP reason phrase across backends.
+
+        ``httpx.Response`` exposes it as ``reason_phrase``; curl_cffi's
+        ``Response`` uses ``reason``. Some proxies / non-standard
+        responses also leave it blank, so fall back to an empty string.
+        """
+        return (
+            getattr(response, "reason_phrase", None)
+            or getattr(response, "reason", None)
+            or ""
+        )
+
     def get_soup(self) -> BeautifulSoup:
         """Parse the last response content with BeautifulSoup."""
         if self.response and self.response.status_code >= 400:
             raise RuntimeError(
                 f"HTTP {self.response.status_code}: "
-                f"{self.response.reason_phrase}"
+                f"{self._reason_phrase(self.response)}"
             )
         return BeautifulSoup(
             self.response.content if self.response else b"",
@@ -130,7 +144,7 @@ class Browser:
         if self.response and self.response.status_code >= 400:
             raise RuntimeError(
                 f"HTTP {self.response.status_code}: "
-                f"{self.response.reason_phrase}"
+                f"{self._reason_phrase(self.response)}"
             )
         try:
             return self.response.json() if self.response else None
