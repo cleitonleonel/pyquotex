@@ -8,7 +8,9 @@ The user provides a Python regex with named groups. Required groups:
 Optional groups:
 
     duration    -> normalised to seconds (default unit minutes)
-    fire_at     -> HH:MM (channel timezone) for scheduled trades
+    fire_at     -> HH:MM (channel timezone) for scheduled trades.
+                   ``time`` is accepted as a synonym since that's the
+                   natural name in most signal channels.
     stake       -> numeric override for the per-channel default stake
 
 Anything outside those groups is ignored, which lets users include
@@ -37,7 +39,7 @@ from autotrader.services.parsers.normalize import (
 )
 
 _REQUIRED_GROUPS: Final = ("direction", "asset")
-_KNOWN_GROUPS: Final = (*_REQUIRED_GROUPS, "duration", "fire_at", "stake")
+_KNOWN_GROUPS: Final = (*_REQUIRED_GROUPS, "duration", "fire_at", "time", "stake")
 
 
 class RegexParser(Parser):
@@ -128,19 +130,23 @@ class RegexParser(Parser):
                     detail={"raw": groups["stake"], "groups": groups},
                 )
 
+        # Accept ``time`` as an alias for ``fire_at`` — that's how
+        # most signal channels name the entry-time field, and forcing
+        # users to remember our internal jargon is a footgun.
+        fire_at_raw = groups.get("fire_at") or groups.get("time")
         fire_at: datetime | None = None
-        if "fire_at" in groups:
+        if fire_at_raw is not None:
             fire_at = normalise_fire_at(
-                groups["fire_at"],
+                fire_at_raw,
                 now=messages[-1].received_at,
                 tz_offset_minutes=self._tz_offset,
             )
-            if fire_at is None and groups["fire_at"].strip().lower() not in {
+            if fire_at is None and fire_at_raw.strip().lower() not in {
                 "", "now", "live", "asap",
             }:
                 return ParseError(
                     reason="unparseable fire_at",
-                    detail={"raw": groups["fire_at"], "groups": groups},
+                    detail={"raw": fire_at_raw, "groups": groups},
                 )
 
         return ParsedSignal(

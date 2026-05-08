@@ -53,12 +53,19 @@ from autotrader.services.parsers.normalize import (
         ("UP", "call"),
         ("CALL", "call"),
         ("LONG", "call"),
+        # Price-direction aliases used by many channels.
+        ("HIGH", "call"),
+        ("HIGHER", "call"),
+        ("RISE", "call"),
         ("🟢", "call"),
         ("🟢 BUY", "call"),
         ("📈 LONG", "call"),
         ("SELL", "put"),
         ("DOWN", "put"),
         ("PUT", "put"),
+        ("LOW", "put"),
+        ("LOWER", "put"),
+        ("FALL", "put"),
         ("🔴", "put"),
         ("🔴 SELL", "put"),
         ("📉 SHORT", "put"),
@@ -324,6 +331,34 @@ def test_regex_parser_with_stake_and_scheduled_time() -> None:
     assert out.duration_seconds == 300
     assert out.stake == 25.5
     assert out.fire_at == datetime(2025, 5, 7, 14, 30, tzinfo=UTC)
+
+
+def test_regex_parser_accepts_time_group_as_fire_at_alias() -> None:
+    """User's natural name (?P<time>...) works the same as (?P<fire_at>...)."""
+    parser = RegexParser(
+        r"(?P<asset>[A-Z]{3}/[A-Z]{3}(?:\s*\(OTC\))?)\s+"
+        r"(?P<time>\d{1,2}:\d{2})\s+"
+        r"(?P<direction>LOW|HIGH|CALL|PUT|UP|DOWN)",
+        timezone_offset_minutes=-180,  # UTC-3
+    )
+    # Channel posts at 22:00 UTC-3 (= 01:00 UTC the next day).
+    now = datetime(2025, 5, 7, 22, 0, tzinfo=UTC) - timedelta(hours=3)
+    out = parser.parse(
+        [
+            RawMessage(
+                "GBP/AUD (OTC) 22:20 LOW",
+                chat_id=-1,
+                sender_id=1,
+                received_at=now,
+            ),
+        ],
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.direction == "put"            # LOW → put
+    assert out.asset == "GBPAUD_otc"
+    # 22:20 channel-local (UTC-3) → 01:20 UTC the next day.
+    assert out.fire_at is not None
+    assert out.fire_at.hour == 1 and out.fire_at.minute == 20
 
 
 def test_regex_parser_invalid_direction_token() -> None:
