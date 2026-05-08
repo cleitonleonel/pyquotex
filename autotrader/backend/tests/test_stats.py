@@ -55,11 +55,12 @@ async def async_client(
 async def _wipe_db(session_factory) -> None:
     from sqlmodel import delete  # noqa: PLC0415
 
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
     from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
     from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
 
     async with session_factory() as s:
-        for model in (TradeAttempt, WatchedChannel):
+        for model in (TradeAttempt, ParserConfig, WatchedChannel):
             await s.exec(delete(model))  # type: ignore[call-overload]
         await s.commit()
 
@@ -109,7 +110,12 @@ async def _add_attempt(
     return row.id or 0
 
 
-async def _add_watch_row(*, chat_id: int, title: str) -> None:
+async def _add_watch_row(
+    *,
+    chat_id: int,
+    title: str,
+    enabled: bool = True,
+) -> None:
     from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
     from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
 
@@ -120,7 +126,28 @@ async def _add_watch_row(*, chat_id: int, title: str) -> None:
                 title=title,
                 chat_type="channel",
                 username=None,
-                enabled=True,
+                enabled=enabled,
+            ),
+        )
+        await s.commit()
+
+
+async def _add_parser_config(
+    *,
+    chat_id: int,
+    name: str = "p",
+    enabled: bool = True,
+) -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        s.add(
+            ParserConfig(
+                chat_id=chat_id,
+                name=name,
+                parser_type="template",
+                enabled=enabled,
             ),
         )
         await s.commit()
@@ -177,6 +204,43 @@ async def test_stats_channel_aggregates_today(
     assert other["broker_error"] == 1
     assert other["expired"] == 1
     assert other["win_rate"] is None  # no settled trades
+
+
+async def test_stats_includes_armed_channels_with_no_trades(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Watched channel + enabled parser shows up even with 0 trades today.
+
+    Without this, an idle parser looks un-configured on the dashboard
+    and the user can't tell it's actually wired up.
+    """
+    headers = await _login(async_client)
+    await _add_watch_row(chat_id=-2001, title="IdleChannel")
+    await _add_parser_config(chat_id=-2001, name="idle-parser")
+
+    # A second channel that is watched but has no parser → must be hidden.
+    await _add_watch_row(chat_id=-2002, title="Unconfigured")
+
+    # A third channel where the parser is disabled → must be hidden.
+    await _add_watch_row(chat_id=-2003, title="DisabledParser")
+    await _add_parser_config(chat_id=-2003, name="off", enabled=False)
+
+    r = await async_client.get("/stats/overview", headers=headers)
+    assert r.status_code == 200, r.text
+    by_id = {c["chat_id"]: c for c in r.json()["channels"]}
+
+    assert -2001 in by_id
+    idle = by_id[-2001]
+    assert idle["title"] == "IdleChannel"
+    assert idle["total"] == 0
+    assert idle["won"] == 0
+    assert idle["lost"] == 0
+    assert idle["win_rate"] is None
+    assert idle["realised_pnl"] == 0
+    assert idle["committed_stake"] == 0
+
+    assert -2002 not in by_id
+    assert -2003 not in by_id
 
 
 async def test_stats_latency_percentiles(

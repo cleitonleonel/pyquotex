@@ -19,6 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from autotrader.auth import require_auth
 from autotrader.dependencies import SessionDep
+from autotrader.models.parser_config import ParserConfig
 from autotrader.models.trade_attempt import TradeAttempt
 from autotrader.models.watched_channel import WatchedChannel
 
@@ -95,10 +96,19 @@ async def _channel_stats(
     *,
     since: datetime,
 ) -> list[ChannelStats]:
-    titles = {
-        row.chat_id: row.title
-        for row in (await session.exec(select(WatchedChannel))).all()
-    }
+    watched_rows = (await session.exec(select(WatchedChannel))).all()
+    titles = {row.chat_id: row.title for row in watched_rows}
+    enabled_watched = {row.chat_id for row in watched_rows if row.enabled}
+
+    # Channels with at least one enabled parser deserve a row even when
+    # nothing has fired today — otherwise an idle channel looks
+    # un-configured on the dashboard.
+    parser_chat_ids = (
+        await session.exec(
+            select(ParserConfig.chat_id).where(ParserConfig.enabled.is_(True)),  # type: ignore[attr-defined]
+        )
+    ).all()
+    armed_chats = enabled_watched & set(parser_chat_ids)
 
     # Group all of today's attempts by chat_id and bucket the counts in
     # one pass. SQLAlchemy ``case`` is overkill here — the row volume
@@ -110,7 +120,7 @@ async def _channel_stats(
         )
     ).all()
 
-    by_chat: dict[int, list[TradeAttempt]] = {}
+    by_chat: dict[int, list[TradeAttempt]] = {chat_id: [] for chat_id in armed_chats}
     for row in rows:
         by_chat.setdefault(row.chat_id, []).append(row)
 
