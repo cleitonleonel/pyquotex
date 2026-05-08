@@ -175,18 +175,24 @@ def build_backend(
     """
     if use_browser_tls:
         try:
-            return CurlCffiBackend(
+            backend = CurlCffiBackend(
                 verify=verify,
                 timeout=timeout,
                 follow_redirects=follow_redirects,
                 proxy=proxy,
                 impersonate=impersonate,
             )
+            logger.info(
+                "pyquotex.transport: curl_cffi backend (impersonate=%s)",
+                impersonate,
+            )
+            return backend
         except ImportError as e:
             logger.warning(
                 "use_browser_tls requested but %s; falling back to httpx.",
                 e,
             )
+    logger.info("pyquotex.transport: httpx backend")
     return HttpxBackend(
         verify=verify,
         timeout=timeout,

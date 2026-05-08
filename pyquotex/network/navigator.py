@@ -90,13 +90,29 @@ class Browser:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    # Real Chrome 120 / Firefox 119 UA strings. The default is Firefox,
+    # but ``use_browser_tls`` flips to Chrome so the UA matches the JA3
+    # / HTTP-2 fingerprint curl_cffi presents — Cloudflare cross-checks
+    # the two and 403s on a mismatch. Sec-Ch-Ua hints in
+    # ``Login.get_token`` are Chrome-only, so the Chrome UA is also
+    # what makes those headers internally consistent.
+    _UA_FIREFOX = (
+        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
+        "Gecko/20100101 Firefox/119.0"
+    )
+    _UA_CHROME = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
     def get_headers(self) -> dict[str, str]:
-        self.default_headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
-                "Gecko/20100101 Firefox/119.0"
-            )
-        }
+        impersonating_chrome = bool(
+            self.proxy_config
+            and self.proxy_config.use_browser_tls
+            and (self.proxy_config.impersonate or "").startswith("chrome")
+        )
+        ua = self._UA_CHROME if impersonating_chrome else self._UA_FIREFOX
+        self.default_headers = {"User-Agent": ua}
         return dict(self.default_headers)
 
     def set_headers(self, headers: dict[str, str] | None = None) -> None:
