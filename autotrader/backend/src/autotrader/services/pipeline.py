@@ -134,10 +134,9 @@ class Pipeline:
             outcomes = self._dispatch_to_cached(cached, message)
             signals = [o for o in outcomes if isinstance(o, ParsedSignal)]
             if not signals:
-                # First-match-wins applies *between* configs at this
-                # chat, but the same parser can yield no signal for one
-                # message and then fire on the next (e.g. prep+trigger).
-                # So we just continue down the priority list.
+                # Stateful parsers (Aggregator, PrepTriggerParser) can
+                # yield no signal on this message and still fire on the
+                # next, so just skip ahead to the next config.
                 continue
 
             log.info(
@@ -156,9 +155,9 @@ class Pipeline:
                     parser_config=cached.config_row,
                     settings=fresh,
                 )
-            # First matching config wins; lower-priority configs don't
-            # also fire on the same message.
-            return
+            # Priority orders the walk, but every matching enabled
+            # parser fires its own trade — they're independent
+            # subscribers, not alternatives.
 
     # ------------------------------------------------------------------
     # Helpers

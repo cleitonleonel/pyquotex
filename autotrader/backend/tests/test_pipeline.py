@@ -251,6 +251,51 @@ def test_live_signal_fires_buy(app_client: TestClient) -> None:
 
 
 # ===========================================================================
+# Sibling parsers on the same chat each fire independently
+# ===========================================================================
+
+
+def test_sibling_parsers_each_fire_on_match(app_client: TestClient) -> None:
+    """Two enabled parsers on one chat must both place trades on a
+    matching message. Priority orders the walk; it doesn't gate which
+    parsers run.
+    """
+    headers = _login(app_client)
+    _connect_broker(app_client, headers)
+    _add_watch(app_client, headers, -1001)
+    _create_parser(
+        app_client,
+        headers,
+        chat_id=-1001,
+        parser_type="template",
+        parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+        name="primary",
+        priority=10,
+        default_stake=5.0,
+    )
+    _create_parser(
+        app_client,
+        headers,
+        chat_id=-1001,
+        parser_type="template",
+        parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+        name="secondary",
+        priority=20,
+        default_stake=7.0,
+    )
+    _activate(app_client, headers)
+
+    _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
+
+    assert len(FakeQuotex.buy_calls) == 2
+    stakes = sorted(call["amount"] for call in FakeQuotex.buy_calls)
+    assert stakes == [5.0, 7.0]
+
+    r = app_client.get("/pipeline/trades", headers=headers)
+    assert len(r.json()) == 2
+
+
+# ===========================================================================
 # Scheduled signal → open_pending() fired
 # ===========================================================================
 

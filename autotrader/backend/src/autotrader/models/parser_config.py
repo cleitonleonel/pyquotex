@@ -1,8 +1,10 @@
 """Parser configurations — multiple per channel.
 
 Each watched chat can host many named parser configs ranked by
-``priority`` (lower runs first). Phase 4's executor tries them in
-order and stops at the first match.
+``priority`` (lower runs first). Phase 4's executor walks them in
+priority order, and every enabled parser that emits a signal fires
+its own trade — sibling parsers on a chat are independent
+subscribers, not alternatives.
 
 In addition to the parsing config itself we persist the trade-shaping
 knobs the user picks per parser:
