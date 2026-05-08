@@ -42,9 +42,36 @@ export default function PipelinePage() {
         </p>
       </section>
 
+      {status.isLoading && (
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Loading pipeline status…</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {status.error && (
+        <Card className="border-destructive/40">
+          <CardContent className="pt-6">
+            <p className="text-sm text-destructive">
+              Couldn&rsquo;t load pipeline status:{" "}
+              {status.error instanceof ApiError
+                ? status.error.message
+                : String(status.error)}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              If you just signed in this can be a stale auth token —
+              try a hard refresh.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {status.data && <StatusCard status={status.data} />}
 
-      {status.data && <TradesTable trades={trades.data ?? []} loading={trades.isLoading} />}
+      {status.data && (
+        <TradesTable trades={trades.data ?? []} loading={trades.isLoading} />
+      )}
     </div>
   );
 }
