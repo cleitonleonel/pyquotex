@@ -247,6 +247,7 @@ export const telegram = {
 export interface TelegramMessage {
   id: number;
   text: string;
+  media_kind: "text" | "caption" | "sticker";
   sender_id: number;
   date: string | null;
 }

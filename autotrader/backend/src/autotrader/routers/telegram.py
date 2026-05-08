@@ -88,6 +88,7 @@ class WatchRequest(BaseModel):
 class MessageResponse(BaseModel):
     id: int
     text: str
+    media_kind: str = "text"   # "text" | "caption" | "sticker"
     sender_id: int
     date: datetime | None = None
 

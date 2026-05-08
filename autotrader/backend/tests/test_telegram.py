@@ -57,18 +57,27 @@ class _FakeDialog:
         self.chat = chat
 
 
+class _FakeSticker:
+    def __init__(self, emoji: str) -> None:
+        self.emoji = emoji
+
+
 class _FakeMessage:
     def __init__(
         self,
         msg_id: int,
-        text: str,
+        text: str | None = None,
         sender_id: int = 100,
         date: object | None = None,
+        sticker: _FakeSticker | None = None,
+        caption: str | None = None,
     ) -> None:
         self.id = msg_id
         self.text = text
-        self.caption = None
+        self.caption = caption
+        self.sticker = sticker
         self.from_user = type("U", (), {"id": sender_id})()
+        self.sender_chat = None
         self.date = date
 
 
@@ -181,8 +190,17 @@ def _reset_fake_telegram() -> Iterator[None]:
     ]
     FakeTelegramClient.history = {
         -1001: [
+            # Newest first (Pyrogram's get_chat_history default order).
+            _FakeMessage(103, sticker=_FakeSticker("👍"), sender_id=200),
+            _FakeMessage(
+                102,
+                text="🌐 PAIR: USD NGN OTC\n⏱️ TIME: 01 Minute",
+                sender_id=200,
+            ),
             _FakeMessage(101, "🟢 BUY EUR/USD 1m", sender_id=200),
             _FakeMessage(100, "Good morning everyone!", sender_id=200),
+            # Pure media with no caption / sticker — should be skipped.
+            _FakeMessage(99, sender_id=200),
         ],
     }
     FakeTelegramClient.last_instance = None
@@ -498,9 +516,40 @@ def test_messages_for_watched_chat(client: TestClient) -> None:
     r = client.get("/telegram/messages?chat_id=-1001&limit=10", headers=headers)
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 2
-    assert body[0]["text"] == "🟢 BUY EUR/USD 1m"
-    assert body[0]["sender_id"] == 200
+
+    # Stickers must surface as their emoji; pure media is dropped.
+    kinds = [m["media_kind"] for m in body]
+    texts = [m["text"] for m in body]
+    assert "sticker" in kinds
+    assert "👍" in texts
+    # Prep + plain text both come through.
+    assert any("PAIR:" in t for t in texts)
+    assert any(t == "🟢 BUY EUR/USD 1m" for t in texts)
+    # Media-only message (id=99) was skipped.
+    assert all(m["id"] != 99 for m in body)
+
+
+def test_messages_sticker_emoji_alone(client: TestClient) -> None:
+    """A solo sticker is the direction signal in prep+sticker channels."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+    client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1001,
+            "title": "Signals Pro",
+            "chat_type": "channel",
+            "username": "signalspro",
+            "enabled": True,
+        },
+    )
+
+    r = client.get("/telegram/messages?chat_id=-1001&limit=10", headers=headers)
+    body = r.json()
+    sticker_msg = next(m for m in body if m["media_kind"] == "sticker")
+    assert sticker_msg["text"] == "👍"
 
 
 # ---------------------------------------------------------------------------

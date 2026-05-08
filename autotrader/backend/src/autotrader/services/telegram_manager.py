@@ -430,10 +430,16 @@ class TelegramManager:
     ) -> list[dict[str, Any]]:
         """Fetch the last ``limit`` messages from ``chat_id``.
 
-        Returns a list of dicts with ``id``, ``text``, ``sender_id``,
-        and ``date`` (ISO string). Pyrogram returns text+caption-only
-        Messages; we drop messages without text (stickers, voice, …)
-        because they're not parser fodder.
+        Returns a list of dicts with ``id``, ``text``, ``media_kind``
+        (``"text"`` / ``"caption"`` / ``"sticker"``), ``sender_id``, and
+        ``date`` (ISO string).
+
+        Sticker messages carry no ``text`` / ``caption`` but the
+        sticker's emoji is what many channels use as the *direction*
+        signal (👍 = call, 👎 = put), so we surface ``sticker.emoji``
+        as the message text and tag it with ``media_kind="sticker"``.
+        Other media (voice, video without caption, …) are skipped —
+        the parser layer can't do anything with them.
         """
         if not self.logged_in:
             raise TelegramManagerError("not logged in")
@@ -441,16 +447,22 @@ class TelegramManager:
 
         out: list[dict[str, Any]] = []
         async for msg in self._client.get_chat_history(chat_id, limit=limit):
-            text = getattr(msg, "text", None) or getattr(msg, "caption", None)
+            kind, text = _extract_message_text(msg)
             if not text:
                 continue
             from_user = getattr(msg, "from_user", None)
-            sender_id = getattr(from_user, "id", 0) if from_user else 0
+            sender_chat = getattr(msg, "sender_chat", None)
+            sender_id = (
+                (from_user.id if from_user is not None else None)
+                or (sender_chat.id if sender_chat is not None else None)
+                or 0
+            )
             date = getattr(msg, "date", None)
             out.append(
                 {
                     "id": getattr(msg, "id", 0),
-                    "text": str(text),
+                    "text": text,
+                    "media_kind": kind,
                     "sender_id": sender_id,
                     "date": date.isoformat() if date else None,
                 },
@@ -461,6 +473,38 @@ class TelegramManager:
 def _join_name(chat: Any) -> str:
     parts = [getattr(chat, "first_name", None), getattr(chat, "last_name", None)]
     return " ".join(p for p in parts if p)
+
+
+def _extract_message_text(msg: Any) -> tuple[str, str]:
+    """Return ``(media_kind, text)`` for a Pyrogram ``Message``.
+
+    ``text`` is empty when the message is media we can't parse (voice,
+    video without caption, …); the caller should skip those rows.
+
+    ``media_kind`` distinguishes:
+
+    * ``"text"``    — plain text message (``msg.text``).
+    * ``"caption"`` — photo / video / document with a caption.
+    * ``"sticker"`` — sticker; ``text`` is the sticker's emoji
+                      (``msg.sticker.emoji``). This is the direction
+                      signal in prep+sticker channels.
+    * ``"other"``   — none of the above. ``text`` is empty.
+    """
+    text = getattr(msg, "text", None)
+    if text:
+        return "text", str(text)
+
+    caption = getattr(msg, "caption", None)
+    if caption:
+        return "caption", str(caption)
+
+    sticker = getattr(msg, "sticker", None)
+    if sticker is not None:
+        emoji = getattr(sticker, "emoji", None)
+        if emoji:
+            return "sticker", str(emoji)
+
+    return "other", ""
 
 
 def _chat_type_str(chat_type: Any) -> str:

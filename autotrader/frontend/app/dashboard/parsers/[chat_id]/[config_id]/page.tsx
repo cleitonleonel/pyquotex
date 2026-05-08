@@ -157,7 +157,10 @@ export default function ParserEditor() {
 
       <RecentMessagesPanel
         chatId={chatId}
-        onUse={(t) => setTesterText(t)}
+        onAppend={(chunk) =>
+          setTesterText((prev) => (prev.trim() ? `${prev.trim()}\n\n${chunk}` : chunk))
+        }
+        onReplace={(chunk) => setTesterText(chunk)}
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -811,10 +814,12 @@ function MultiMessageToggle({
 
 function RecentMessagesPanel({
   chatId,
-  onUse,
+  onAppend,
+  onReplace,
 }: {
   chatId: number;
-  onUse: (text: string) => void;
+  onAppend: (text: string) => void;
+  onReplace: (text: string) => void;
 }) {
   const messages = useQuery<TelegramMessage[]>({
     queryKey: ["telegram", "messages", chatId],
@@ -829,8 +834,10 @@ function RecentMessagesPanel({
           <div>
             <CardTitle>Recent messages</CardTitle>
             <CardDescription>
-              Last 20 from this chat. Click <strong>Use</strong> to drop one
-              into the live tester.
+              Last 20 text messages and stickers from this chat.{" "}
+              <strong>Add</strong> appends to the tester (blank-line
+              separated — pair a prep + sticker for multi-message
+              parsing). <strong>Replace</strong> overwrites.
             </CardDescription>
           </div>
           <Button
@@ -859,7 +866,7 @@ function RecentMessagesPanel({
         )}
         {messages.data && messages.data.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No recent text messages.
+            No recent text messages or stickers.
           </p>
         )}
         {messages.data && messages.data.length > 0 && (
@@ -870,6 +877,9 @@ function RecentMessagesPanel({
                 className="flex items-start justify-between gap-3 p-3"
               >
                 <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                    <MediaKindBadge kind={m.media_kind} />
+                  </div>
                   <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {m.text}
                   </pre>
@@ -879,13 +889,23 @@ function RecentMessagesPanel({
                     {m.sender_id}
                   </p>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onUse(m.text)}
-                >
-                  Use
-                </Button>
+                <div className="flex shrink-0 flex-col gap-1.5">
+                  <Button
+                    size="sm"
+                    onClick={() => onAppend(m.text)}
+                    title="Append to tester (blank-line separated)"
+                  >
+                    Add
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onReplace(m.text)}
+                    title="Replace tester contents"
+                  >
+                    Replace
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
@@ -893,6 +913,12 @@ function RecentMessagesPanel({
       </CardContent>
     </Card>
   );
+}
+
+function MediaKindBadge({ kind }: { kind: TelegramMessage["media_kind"] }) {
+  if (kind === "sticker") return <Badge variant="warning">sticker</Badge>;
+  if (kind === "caption") return <Badge variant="outline">caption</Badge>;
+  return <Badge variant="secondary">text</Badge>;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
