@@ -21,7 +21,8 @@ import structlog
 
 from autotrader.db import AsyncSessionLocal
 from autotrader.models.base import utc_now
-from autotrader.models.parser_config import ParserConfig
+from autotrader.models.martingale_state import record_outcome
+from autotrader.models.parser_config import ParserConfig, get_config
 from autotrader.models.settings import GlobalSettings
 from autotrader.models.trade_attempt import (
     TradeAttempt,
@@ -69,14 +70,16 @@ class TradeExecutor:
         ``status="rejected"`` so the operator can see why nothing
         fired. Result tracking is fired off in a background task.
         """
-        decision = evaluate(
-            signal=signal,
-            parser_config=parser_config,
-            settings=settings,
-            account_mode=self._manager.status().account_mode,
-            live_trading_enabled_env=self._live_env,
-            broker_connected=self._manager.connected,
-        )
+        async with AsyncSessionLocal() as session:
+            decision = await evaluate(
+                session=session,
+                signal=signal,
+                parser_config=parser_config,
+                settings=settings,
+                account_mode=self._manager.status().account_mode,
+                live_trading_enabled_env=self._live_env,
+                broker_connected=self._manager.connected,
+            )
 
         attempt = self._build_attempt(signal, parser_config, decision)
         async with AsyncSessionLocal() as session:
@@ -244,13 +247,29 @@ class TradeExecutor:
             return
 
         async with AsyncSessionLocal() as session:
-            await update_attempt(
+            updated = await update_attempt(
                 session,
                 attempt_id,
                 status="won" if status == "win" else "lost",
                 profit=float(profit),
                 settled_at=utc_now(),
             )
+
+            # Tick the martingale ladder so the next trade for this
+            # parser uses the right step. We re-fetch the parser
+            # config because Phase 4 stored ``parser_config_id`` only —
+            # the live ParserConfig may have been edited since.
+            if updated is not None:
+                cfg = await get_config(session, updated.parser_config_id)
+                if cfg is not None and cfg.martingale_enabled:
+                    await record_outcome(
+                        session,
+                        cfg.id or 0,
+                        won=(status == "win"),
+                        last_stake=updated.stake,
+                        max_streak=cfg.martingale_max_streak,
+                        reset_on_win=cfg.martingale_reset_on_win,
+                    )
         log.info(
             "executor.settled",
             attempt_id=attempt_id,

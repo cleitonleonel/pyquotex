@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,11 +11,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   ApiError,
   type PipelineStatus,
+  type RiskCaps,
+  type RiskOverview,
   type TradeAttempt,
   pipeline,
+  risk,
 } from "@/lib/api";
 
 export default function PipelinePage() {
@@ -69,10 +75,281 @@ export default function PipelinePage() {
 
       {status.data && <StatusCard status={status.data} />}
 
+      {status.data && <RiskOverviewCard />}
+
       {status.data && (
         <TradesTable trades={trades.data ?? []} loading={trades.isLoading} />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Risk caps + budget + streaks
+// ---------------------------------------------------------------------------
+
+function RiskOverviewCard() {
+  const overview = useQuery<RiskOverview>({
+    queryKey: ["risk", "overview"],
+    queryFn: risk.overview,
+    refetchInterval: 5_000,
+  });
+
+  if (overview.isLoading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-sm text-muted-foreground">Loading risk overview…</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!overview.data) return null;
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <BudgetCard data={overview.data} />
+      <RiskCapsForm data={overview.data} />
+      <StreaksCard data={overview.data} />
+    </div>
+  );
+}
+
+function BudgetCard({ data }: { data: RiskOverview }) {
+  const realised = data.budget.realised_pnl;
+  const committed = data.budget.committed_stake;
+  const open = data.budget.open_attempts;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Today&rsquo;s budget (UTC)</CardTitle>
+        <CardDescription>Resets at 00:00 UTC.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <dl className="space-y-2 text-sm">
+          <Row
+            label="Realised P&L"
+            value={
+              <span
+                className={
+                  realised < 0 ? "font-mono text-destructive" : "font-mono text-emerald-400"
+                }
+              >
+                {realised >= 0 ? "+" : ""}
+                {realised.toFixed(2)}
+              </span>
+            }
+          />
+          <Row
+            label="Committed stake"
+            value={<span className="font-mono">{committed.toFixed(2)}</span>}
+          />
+          <Row
+            label="Open attempts"
+            value={<span className="font-mono">{open}</span>}
+          />
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RiskCapsForm({ data }: { data: RiskOverview }) {
+  const qc = useQueryClient();
+  const [caps, setCaps] = useState<RiskCaps>(data.caps);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-sync when overview refetches.
+  useEffect(() => {
+    setCaps(data.caps);
+  }, [data.caps]);
+
+  const save = useMutation({
+    mutationFn: () => risk.updateCaps(caps),
+    onSuccess: () => {
+      setError(null);
+      qc.invalidateQueries({ queryKey: ["risk"] });
+    },
+    onError: (err) =>
+      setError(err instanceof ApiError ? err.message : String(err)),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Daily caps</CardTitle>
+        <CardDescription>
+          Set to <code>0</code> to disable a cap. Caps reset at 00:00 UTC.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+          className="space-y-4"
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <Label htmlFor="daily_max_loss">Max daily loss</Label>
+              <Input
+                id="daily_max_loss"
+                type="number"
+                step="0.01"
+                min="0"
+                value={caps.daily_max_loss}
+                onChange={(e) =>
+                  setCaps({
+                    ...caps,
+                    daily_max_loss: Math.max(0, Number(e.target.value) || 0),
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="daily_max_stake">Max daily stake</Label>
+              <Input
+                id="daily_max_stake"
+                type="number"
+                step="0.01"
+                min="0"
+                value={caps.daily_max_stake}
+                onChange={(e) =>
+                  setCaps({
+                    ...caps,
+                    daily_max_stake: Math.max(0, Number(e.target.value) || 0),
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="max_concurrent_trades">Max concurrent</Label>
+              <Input
+                id="max_concurrent_trades"
+                type="number"
+                step="1"
+                min="0"
+                value={caps.max_concurrent_trades}
+                onChange={(e) =>
+                  setCaps({
+                    ...caps,
+                    max_concurrent_trades: Math.max(
+                      0,
+                      Number(e.target.value) || 0,
+                    ),
+                  })
+                }
+              />
+            </div>
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={save.isPending}>
+            {save.isPending ? "Saving…" : "Save caps"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StreaksCard({ data }: { data: RiskOverview }) {
+  const qc = useQueryClient();
+  const reset = useMutation({
+    mutationFn: (parserConfigId: number) => risk.resetStreak(parserConfigId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["risk"] }),
+  });
+  const martingaleRows = data.streaks.filter((s) => s.martingale_enabled);
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <CardTitle>Martingale streaks</CardTitle>
+        <CardDescription>
+          One row per parser with martingale enabled. The next stake at
+          step <em>n</em> is{" "}
+          <code>base × multiplier^n</code>; a win resets to step 0
+          (when reset-on-win is on).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {martingaleRows.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No parsers have martingale enabled. Toggle it on a parser&rsquo;s
+            edit page to start tracking a recovery ladder.
+          </p>
+        )}
+        {martingaleRows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="px-2 py-1.5 font-medium">Parser</th>
+                  <th className="px-2 py-1.5 font-medium">Mult</th>
+                  <th className="px-2 py-1.5 font-medium">Max</th>
+                  <th className="px-2 py-1.5 font-medium">Step</th>
+                  <th className="px-2 py-1.5 font-medium">Last</th>
+                  <th className="px-2 py-1.5 font-medium">Last stake</th>
+                  <th className="px-2 py-1.5 font-medium">Updated</th>
+                  <th className="px-2 py-1.5 font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                {martingaleRows.map((s) => (
+                  <tr key={s.parser_config_id} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 font-mono">
+                      {s.parser_name}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono">
+                      ×{s.multiplier}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono">
+                      {s.max_streak === 0 ? "∞" : s.max_streak}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {s.current_streak === 0 ? (
+                        <Badge variant="outline">base</Badge>
+                      ) : (
+                        <Badge variant="warning">step {s.current_streak}</Badge>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {s.last_outcome === "won" && (
+                        <Badge variant="success">won</Badge>
+                      )}
+                      {s.last_outcome === "lost" && (
+                        <Badge variant="destructive">lost</Badge>
+                      )}
+                      {s.last_outcome === "" && (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono">
+                      {s.last_stake > 0 ? s.last_stake.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {s.updated_at
+                        ? new Date(s.updated_at).toLocaleTimeString()
+                        : "—"}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => reset.mutate(s.parser_config_id)}
+                        disabled={reset.isPending || s.current_streak === 0}
+                      >
+                        Reset
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -438,3 +438,53 @@ export const pipeline = {
     return api<TradeAttempt[]>(`/pipeline/trades?${params}`);
   },
 };
+
+// ---------------------------------------------------------------------------
+// Risk module (Phase 5)
+// ---------------------------------------------------------------------------
+
+export interface RiskCaps {
+  daily_max_loss: number;
+  daily_max_stake: number;
+  max_concurrent_trades: number;
+}
+
+export interface BudgetSnapshot {
+  realised_pnl: number;
+  committed_stake: number;
+  open_attempts: number;
+}
+
+export interface StreakRow {
+  parser_config_id: number;
+  parser_name: string;
+  chat_id: number;
+  martingale_enabled: boolean;
+  multiplier: number;
+  max_streak: number;
+  current_streak: number;
+  last_outcome: string;
+  last_stake: number;
+  updated_at: string | null;
+}
+
+export interface RiskOverview {
+  caps: RiskCaps;
+  budget: BudgetSnapshot;
+  streaks: StreakRow[];
+}
+
+export const risk = {
+  overview: () => api<RiskOverview>("/risk/overview"),
+
+  updateCaps: (caps: RiskCaps) =>
+    api<RiskCaps>("/risk/caps", {
+      method: "PUT",
+      body: JSON.stringify(caps),
+    }),
+
+  resetStreak: (parserConfigId: number) =>
+    api<{ ok: true }>(`/risk/streaks/${parserConfigId}/reset`, {
+      method: "POST",
+    }),
+};

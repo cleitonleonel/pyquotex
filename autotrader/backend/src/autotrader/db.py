@@ -79,15 +79,36 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
     if cols and "id" not in cols:
         await conn.execute(text("DROP TABLE parser_configs"))
 
-    # global_settings gained ``pipeline_active`` in Phase 4. SQLite's
-    # ALTER TABLE ADD COLUMN is safe for nullable / defaulted columns
-    # and we only fire it when the column is genuinely missing.
+    # global_settings gained columns over time. SQLite's ALTER TABLE
+    # ADD COLUMN is safe for nullable / defaulted columns and we only
+    # fire it when the column is genuinely missing.
     cols = await conn.run_sync(_columns, "global_settings")
     if cols and "pipeline_active" not in cols:
         await conn.execute(
             text(
                 "ALTER TABLE global_settings ADD COLUMN "
                 "pipeline_active BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "daily_max_loss" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "daily_max_loss REAL NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "daily_max_stake" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "daily_max_stake REAL NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "max_concurrent_trades" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "max_concurrent_trades INTEGER NOT NULL DEFAULT 0",
             ),
         )
 

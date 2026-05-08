@@ -35,5 +35,11 @@ class GlobalSettings(SQLModel, table=True):
     # with) the ``AUTOTRADER_LIVE_TRADING_ENABLED`` env gate.
     pipeline_active: bool = Field(default=False)
 
+    # Risk module (Phase 5).
+    # ``0`` for any of these means "no cap".
+    daily_max_loss: float = Field(default=0.0, nullable=False)
+    daily_max_stake: float = Field(default=0.0, nullable=False)
+    max_concurrent_trades: int = Field(default=0, nullable=False)
+
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)
