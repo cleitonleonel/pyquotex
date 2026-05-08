@@ -31,8 +31,26 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import structlog
-from pyrogram import Client
-from pyrogram.errors import (
+
+# isort: off
+# ---------------------------------------------------------------------------
+# Pyrogram 2.0.106 hard-codes a too-small MIN_CHANNEL_ID, so any modern
+# 64-bit Telegram channel (anything past about ``-1_002_147_483_647``)
+# raises ``ValueError: Peer id invalid`` deep inside ``handle_updates``,
+# killing update dispatch *before* our MessageHandler runs. Maintained
+# forks (hydrogram, pyrofork) widened the constants years ago — until
+# we migrate, patch them here at import time so dispatch works for all
+# in-the-wild channel IDs.
+# ---------------------------------------------------------------------------
+import pyrogram.utils as _pyro_utils
+
+# 2**41 covers all currently-issued Telegram channel IDs with comfortable
+# headroom; ``get_peer_type`` checks ``MIN_CHANNEL_ID <= peer_id < MAX_CHANNEL_ID``
+# so we widen the lower bound only.
+_pyro_utils.MIN_CHANNEL_ID = -(1 << 41) - 1_000_000_000_000  # ~ -3.2 * 10^12
+
+from pyrogram import Client  # noqa: E402
+from pyrogram.errors import (  # noqa: E402
     PasswordHashInvalid,
     PhoneCodeExpired,
     PhoneCodeInvalid,
@@ -40,7 +58,9 @@ from pyrogram.errors import (
     SessionPasswordNeeded,
 )
 
-from autotrader.config import telegram_settings
+from autotrader.config import telegram_settings  # noqa: E402
+
+# isort: on
 
 # A pipeline-style callback. The manager calls this for every incoming
 # text/sticker message in any chat — the consumer (typically the

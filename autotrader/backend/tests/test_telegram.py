@@ -575,3 +575,26 @@ def test_session_persisted_after_login(client: TestClient) -> None:
     assert row.user_id == 42
     # Session string is encrypted at rest; decrypt and check.
     assert row.session_string() == "FAKE_SESSION_STRING_v1"
+
+
+# ---------------------------------------------------------------------------
+# Pyrogram peer-id range patch
+# ---------------------------------------------------------------------------
+
+
+def test_pyrogram_min_channel_id_patched_for_64bit_channels() -> None:
+    """Pyrogram 2.0.106 rejects modern 64-bit Telegram channel IDs.
+
+    The TelegramManager module monkey-patches ``MIN_CHANNEL_ID`` to a
+    big-enough lower bound. If that patch is reverted (or pyrogram is
+    re-imported in a way that doesn't pick it up) live update dispatch
+    silently breaks for any channel past ``-1_002_147_483_647``, which
+    is most channels created in the last few years.
+    """
+    import pyrogram.utils  # noqa: PLC0415
+
+    # Real-world channel IDs that crashed the live handler before the
+    # patch — both are within the patched range.
+    for channel_id in (-1002218147270, -1002475564994):
+        # Should not raise.
+        assert pyrogram.utils.get_peer_type(channel_id) == "channel"
