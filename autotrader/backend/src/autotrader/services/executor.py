@@ -31,6 +31,7 @@ from autotrader.models.trade_attempt import (
     list_pending,
     update_attempt,
 )
+from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.parsers.base import ParsedSignal
 from autotrader.services.quotex_manager import (
     QuotexManager,
@@ -41,6 +42,35 @@ from autotrader.services.risk_gate import RiskDecision, evaluate
 log = structlog.get_logger(__name__)
 
 
+def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
+    """Mirror of ``TradeAttemptResponse`` for the event bus payload.
+
+    The dashboard consumes ``trade.upserted`` events as drop-in
+    replacements for rows fetched via ``GET /pipeline/trades``, so the
+    field set must match exactly. Datetimes go out as ISO 8601
+    strings so the payload is JSON-ready without a custom encoder.
+    """
+    return {
+        "id": attempt.id or 0,
+        "chat_id": attempt.chat_id,
+        "parser_config_id": attempt.parser_config_id,
+        "asset": attempt.asset,
+        "asset_raw": attempt.asset_raw,
+        "direction": attempt.direction,
+        "duration_seconds": attempt.duration_seconds,
+        "stake": attempt.stake,
+        "trade_mode": attempt.trade_mode,
+        "fire_at": attempt.fire_at.isoformat() if attempt.fire_at else None,
+        "status": attempt.status,
+        "broker_order_id": attempt.broker_order_id,
+        "profit": attempt.profit,
+        "error": attempt.error,
+        "received_at": attempt.received_at.isoformat(),
+        "placed_at": attempt.placed_at.isoformat() if attempt.placed_at else None,
+        "settled_at": attempt.settled_at.isoformat() if attempt.settled_at else None,
+    }
+
+
 class TradeExecutor:
     """Drives the broker on a parser-emitted signal."""
 
@@ -49,11 +79,15 @@ class TradeExecutor:
         *,
         manager: QuotexManager,
         live_trading_enabled_env: bool,
+        event_bus: TradeEventBus | None = None,
     ) -> None:
         self._manager = manager
         self._live_env = live_trading_enabled_env
         # Track in-flight result-watchers so we can await them on shutdown.
         self._watchers: set[asyncio.Task[None]] = set()
+        # Live dashboard fan-out. Optional so unit tests that don't
+        # care about the feed can leave it ``None``.
+        self._event_bus = event_bus
 
     # ------------------------------------------------------------------
     # Public API
@@ -86,6 +120,8 @@ class TradeExecutor:
         attempt = self._build_attempt(signal, parser_config, decision)
         async with AsyncSessionLocal() as session:
             attempt = await insert_attempt(session, attempt)
+
+        self._publish(attempt)
 
         if not decision.allowed:
             log.info(
@@ -158,13 +194,27 @@ class TradeExecutor:
 
     async def _mark_reconciled(self, attempt_id: int, message: str) -> None:
         async with AsyncSessionLocal() as session:
-            await update_attempt(
+            updated = await update_attempt(
                 session,
                 attempt_id,
                 status="expired",
                 error=message,
                 settled_at=utc_now(),
             )
+        if updated is not None:
+            self._publish(updated)
+
+    def _publish(self, attempt: TradeAttempt) -> None:
+        """Fire-and-forget broadcast of a trade row to dashboard subscribers.
+
+        The payload mirrors ``TradeAttemptResponse`` so the frontend can
+        merge it into the existing list by ``id`` without re-fetching.
+        Datetimes are ISO-8601 strings (the wire format the REST
+        endpoint already uses).
+        """
+        if self._event_bus is None:
+            return
+        self._event_bus.publish("trade.upserted", _attempt_to_payload(attempt))
 
     # ------------------------------------------------------------------
     # Internals
@@ -250,6 +300,7 @@ class TradeExecutor:
         if updated is None:  # pragma: no cover - row was just inserted
             return attempt
         attempt = updated
+        self._publish(attempt)
 
         if ok and order_id:
             # Fire-and-forget result watcher. Live trades use the
@@ -335,6 +386,8 @@ class TradeExecutor:
                 error=message,
             )
         log.warning("executor.broker_error", attempt_id=attempt.id, error=message)
+        if updated is not None:
+            self._publish(updated)
         return updated or attempt
 
     async def _watch_result(
@@ -366,13 +419,15 @@ class TradeExecutor:
                 error=str(exc),
             )
             async with AsyncSessionLocal() as session:
-                await update_attempt(
+                expired = await update_attempt(
                     session,
                     attempt_id,
                     status="expired",
                     error=f"watch: {exc}",
                     settled_at=utc_now(),
                 )
+            if expired is not None:
+                self._publish(expired)
             return
 
         async with AsyncSessionLocal() as session:
@@ -399,6 +454,8 @@ class TradeExecutor:
                         max_streak=cfg.martingale_max_streak,
                         reset_on_win=cfg.martingale_reset_on_win,
                     )
+        if updated is not None:
+            self._publish(updated)
         log.info(
             "executor.settled",
             attempt_id=attempt_id,

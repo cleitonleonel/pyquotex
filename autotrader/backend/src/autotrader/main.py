@@ -27,8 +27,9 @@ from autotrader.models.telegram_session import (
 from autotrader.models.telegram_session import (
     load_session as load_telegram_session,
 )
-from autotrader.routers import auth, broker, health, parsers, risk, telegram
+from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, telegram
 from autotrader.routers import pipeline as pipeline_router
+from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
 from autotrader.services.quotex_manager import QuotexManager
@@ -146,9 +147,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     # but the master switch (GlobalSettings.pipeline_active) and the
     # per-config ``enabled`` flag still gate every dispatch — flipping
     # the env flag alone never auto-trades.
+    event_bus = TradeEventBus()
+    app.state.event_bus = event_bus
+
     executor = TradeExecutor(
         manager=manager,
         live_trading_enabled_env=settings.live_trading_enabled,
+        event_bus=event_bus,
     )
     pipeline = Pipeline(manager=manager, executor=executor)
     app.state.pipeline = pipeline
@@ -203,6 +208,8 @@ app.include_router(telegram.router)
 app.include_router(parsers.router)
 app.include_router(pipeline_router.router)
 app.include_router(risk.router)
+app.include_router(stats.router)
+app.include_router(feed.router)
 
 
 # Quiet uvicorn's per-request access logs in production; structlog handles

@@ -488,3 +488,58 @@ export const risk = {
       method: "POST",
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Stats + live trade feed (Phase 6)
+// ---------------------------------------------------------------------------
+
+export interface ChannelStats {
+  chat_id: number;
+  title: string;
+  total: number;
+  won: number;
+  lost: number;
+  rejected: number;
+  broker_error: number;
+  expired: number;
+  pending: number;
+  win_rate: number | null;
+  realised_pnl: number;
+  committed_stake: number;
+}
+
+export interface LatencyTile {
+  count: number;
+  p50_ms: number | null;
+  p99_ms: number | null;
+}
+
+export interface LatencyStats {
+  signal_to_place: LatencyTile;
+  place_to_settle: LatencyTile;
+}
+
+export interface StatsOverview {
+  channels: ChannelStats[];
+  latency: LatencyStats;
+  window: "today_utc";
+}
+
+export const stats = {
+  overview: () => api<StatsOverview>("/stats/overview"),
+};
+
+/**
+ * WebSocket URL for the live trade feed. Uses ``ws://`` for local dev
+ * (``http://``) and ``wss://`` for prod (``https://``). The bearer
+ * token rides on the query string because browsers can't attach
+ * custom headers to a ``new WebSocket(...)`` call.
+ */
+export function feedUrl(token: string): string {
+  const base = API_BASE.replace(/^http/, "ws");
+  return `${base}/feed/ws?token=${encodeURIComponent(token)}`;
+}
+
+export type FeedFrame =
+  | { type: "feed.ready"; payload: Record<string, never> }
+  | { type: "trade.upserted"; payload: TradeAttempt };
