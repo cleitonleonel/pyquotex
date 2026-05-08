@@ -130,6 +130,7 @@ class TelegramManager:
         # incoming text/sticker message; ``None`` means "no consumer".
         self._on_message: MessageCallback | None = None
         self._handler_attached: bool = False
+        self._prime_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
     # Status
@@ -208,6 +209,10 @@ class TelegramManager:
                 self._state = "logged_in"
                 self._last_error = None
                 self._attach_handler_if_pending()
+                # Prime Pyrogram's peer cache so update dispatch can
+                # resolve channel IDs without ``Peer id invalid``
+                # errors when a message lands in an unseen chat.
+                self._prime_task = asyncio.create_task(self._prime_peer_cache())
                 log.info(
                     "telegram.restore.ok",
                     user_id=self._user_id,
@@ -339,6 +344,9 @@ class TelegramManager:
         self._last_error = None
         self._phone_code_hash = None
         self._attach_handler_if_pending()
+        # Prime Pyrogram's peer cache so update dispatch can resolve
+        # channel IDs without ``Peer id invalid`` errors.
+        self._prime_task = asyncio.create_task(self._prime_peer_cache())
         log.info(
             "telegram.login.ok",
             user_id=self._user_id,
@@ -383,6 +391,11 @@ class TelegramManager:
             log.info("telegram.logout.ok")
 
     async def _teardown_client(self) -> None:
+        if self._prime_task is not None and not self._prime_task.done():
+            self._prime_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._prime_task
+        self._prime_task = None
         if self._client is None:
             return
         with contextlib.suppress(Exception):
@@ -481,6 +494,26 @@ class TelegramManager:
         log.info("telegram.handler.attached")
         # Touch ``handlers`` to satisfy lint that the import is used.
         _ = handlers
+
+    async def _prime_peer_cache(self, *, limit: int = 500) -> None:
+        """Walk dialogs once so Pyrogram's session storage knows every
+        channel/group the user is a member of.
+
+        Without this, update dispatch crashes with
+        ``ValueError: Peer id invalid: -100…`` the moment a message
+        arrives in a chat the in-memory session has never resolved.
+        Cheap one-shot — the payload comes back over the same socket
+        Pyrogram is already keeping warm.
+        """
+        if self._client is None:
+            return
+        try:
+            count = 0
+            async for _ in self._client.get_dialogs(limit=limit):
+                count += 1
+            log.info("telegram.peer_cache.primed", dialogs=count)
+        except Exception as exc:  # pragma: no cover - best-effort
+            log.warning("telegram.peer_cache.failed", error=str(exc))
 
     async def _handle_incoming(self, msg: Any) -> None:
         """Convert a Pyrogram Message → IncomingMessage → callback."""
