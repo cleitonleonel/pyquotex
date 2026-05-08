@@ -19,6 +19,7 @@ from autotrader.services.parsers.base import (
     Parser,
     RawMessage,
 )
+from autotrader.services.parsers.batch import BatchParser
 from autotrader.services.parsers.factory import ParserBuildError, build_parser
 from autotrader.services.parsers.prep_trigger import (
     PrepTriggerParser,
@@ -35,6 +36,7 @@ __all__ = [
     "BUILTIN_TEMPLATES",
     "Aggregator",
     "AssetResolution",
+    "BatchParser",
     "ParseError",
     "ParseOutcome",
     "ParsedSignal",

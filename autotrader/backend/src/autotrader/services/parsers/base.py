@@ -73,6 +73,8 @@ class Parser(ABC):
 
     For multi-message (aggregating) sources, wrap a stateless parser in
     :class:`autotrader.services.parsers.aggregator.Aggregator`.
+    For *one message → many signals* sources (scheduled-batch
+    channels), use :class:`autotrader.services.parsers.batch.BatchParser`.
     """
 
     @property
@@ -89,3 +91,12 @@ class Parser(ABC):
         broken parsers (bad regex compile, etc.) and bubble up to the
         caller.
         """
+
+    def parse_all(self, messages: list[RawMessage]) -> list[ParseOutcome]:
+        """Return *every* signal extractable from the messages.
+
+        Default behaviour wraps :meth:`parse` so single-shot parsers
+        produce ``[result]``. Batch parsers (one message → many
+        signals) override this to return one entry per row.
+        """
+        return [self.parse(messages)]

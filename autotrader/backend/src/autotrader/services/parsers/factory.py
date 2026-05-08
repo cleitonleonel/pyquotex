@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from autotrader.services.parsers.base import Parser
+from autotrader.services.parsers.batch import BatchParser
 from autotrader.services.parsers.prep_trigger import PrepTriggerParser
 from autotrader.services.parsers.regex_parser import RegexParser
 from autotrader.services.parsers.template import TemplateParser
 
-ParserType = str  # "template" | "regex" | "prep_trigger"
+ParserType = str  # "template" | "regex" | "prep_trigger" | "batch"
 
 
 class ParserBuildError(ValueError):
     """Raised when a config can't be turned into a parser (bad regex, etc.)."""
 
 
-def build_parser(
+def build_parser(  # noqa: PLR0912, PLR0915  (linear dispatch, one branch per parser type)
     *,
     parser_type: ParserType,
     parser_config: dict[str, str | int | float | bool],
@@ -76,6 +77,37 @@ def build_parser(
                 raise ParserBuildError(msg)
             return RegexParser(pattern=pattern, **common)  # type: ignore[arg-type]
 
+        if parser_type == "batch":
+            row = parser_config.get("row")
+            if not isinstance(row, str) or not row.strip():
+                msg = "batch parser requires a non-empty 'row' string"
+                raise ParserBuildError(msg)
+            row_kind = str(parser_config.get("row_kind", "regex"))
+            if row_kind not in ("template", "regex"):
+                msg = f"row_kind must be 'template' or 'regex', got {row_kind!r}"
+                raise ParserBuildError(msg)
+
+            header = parser_config.get("header")
+            header_kind = str(parser_config.get("header_kind", "regex"))
+            if header is not None and not isinstance(header, str):
+                msg = "batch parser 'header' must be a string"
+                raise ParserBuildError(msg)
+            if header and header_kind not in ("template", "regex"):
+                msg = f"header_kind must be 'template' or 'regex', got {header_kind!r}"
+                raise ParserBuildError(msg)
+
+            kwargs: dict[str, object] = {
+                k: v for k, v in common.items() if k != "default_duration_unit"
+            }
+            kwargs["default_duration_unit"] = default_unit
+            return BatchParser(
+                row_pattern=row,
+                header_pattern=str(header) if header else None,
+                row_kind=row_kind,
+                header_kind=header_kind,
+                **kwargs,  # type: ignore[arg-type]
+            )
+
         if parser_type == "prep_trigger":
             prep = parser_config.get("prep")
             trigger = parser_config.get("trigger")
@@ -113,6 +145,6 @@ def build_parser(
 
     msg = (
         f"unknown parser_type {parser_type!r}; "
-        "expected 'template', 'regex', or 'prep_trigger'"
+        "expected 'template', 'regex', 'prep_trigger', or 'batch'"
     )
     raise ParserBuildError(msg)

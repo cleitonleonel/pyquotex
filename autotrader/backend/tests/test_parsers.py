@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from autotrader.services.parsers import (
     BUILTIN_TEMPLATES,
     Aggregator,
+    BatchParser,
     ParsedSignal,
     ParseError,
     PrepTriggerParser,
@@ -679,6 +680,188 @@ def test_prep_trigger_via_test_endpoint(client: TestClient) -> None:
     sig = body["signal"]
     assert sig["direction"] == "call"
     assert sig["duration_seconds"] == 60
+
+
+# ===========================================================================
+# Batch (one message → many signals)
+# ===========================================================================
+
+
+_BATCH_MESSAGE = """\
+DATE: 07.05.2026
+TIMEZONE : UTC/GMT (+06:00)
+FUTURE SIGNALS 🕯
+📏📏📏📏📏📏📏📏📏📏
+
+01:51 USDBDT-OTC PUT
+01:53 USDBDT-OTC PUT
+01:55 USDBDT-OTC PUT
+01:58 USDBDT-OTC CALL
+
+
+📏📏📏📏📏📏📏📏📏📏
+
+➗➗➗➗➗➗➗
+CALL MEAN UP🔼
+PUT MEAN DOWN🔽
+"""
+
+
+def _batch_parser(**overrides: object) -> BatchParser:
+    base: dict[str, object] = {
+        "row_pattern": (
+            r"^(?P<time>\d{1,2}:\d{2})\s+"
+            r"(?P<asset>\S+)\s+"
+            r"(?P<direction>CALL|PUT)\s*$"
+        ),
+        "header_pattern": (
+            r"DATE\s*:\s*(?P<date>\d{1,2}[./-]\d{1,2}[./-]\d{2,4}).*?"
+            r"TIMEZONE\s*:\s*UTC/GMT\s*\((?P<tz_offset>[+-]\d{1,2}(?::?\d{2})?)\)"
+        ),
+        "row_kind": "regex",
+        "header_kind": "regex",
+    }
+    base.update(overrides)
+    return BatchParser(**base)  # type: ignore[arg-type]
+
+
+def test_batch_parses_all_rows_with_header() -> None:
+    """The exact format from the user's USDBDT scheduled-batch channel."""
+    parser = _batch_parser()
+    msgs = [RawMessage(_BATCH_MESSAGE, chat_id=-1, sender_id=1)]
+
+    outs = parser.parse_all(msgs)
+    assert len(outs) == 4
+
+    sigs = [o for o in outs if isinstance(o, ParsedSignal)]
+    assert len(sigs) == 4
+
+    # All rows resolve to the same asset (no broker catalogue → fallback
+    # form is "USDBDT_otc" because resolver detects trailing OTC).
+    assert all(s.asset == "USDBDT_otc" for s in sigs)
+    # Direction in row order: PUT, PUT, PUT, CALL.
+    assert [s.direction for s in sigs] == ["put", "put", "put", "call"]
+
+    # fire_at: 01:51 channel-local in UTC+6 → 19:51 UTC the previous day.
+    expected_first = datetime(2026, 5, 6, 19, 51, tzinfo=UTC)
+    assert sigs[0].fire_at == expected_first
+    expected_last = datetime(2026, 5, 6, 19, 58, tzinfo=UTC)
+    assert sigs[3].fire_at == expected_last
+
+
+def test_batch_no_header_uses_today_in_channel_tz() -> None:
+    """Without a header, schedule each row for today in the channel TZ."""
+    parser = _batch_parser(
+        header_pattern=None,
+        timezone_offset_minutes=0,
+    )
+    received = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    msg = RawMessage(
+        "01:55 EURUSD CALL\n01:57 EURUSD PUT",
+        chat_id=-1,
+        sender_id=1,
+        received_at=received,
+    )
+    outs = parser.parse_all([msg])
+    sigs = [o for o in outs if isinstance(o, ParsedSignal)]
+    assert len(sigs) == 2
+    assert sigs[0].fire_at == datetime(2026, 5, 7, 1, 55, tzinfo=UTC)
+    assert sigs[1].fire_at == datetime(2026, 5, 7, 1, 57, tzinfo=UTC)
+
+
+def test_batch_finditer_skips_non_matching_rows() -> None:
+    """Rows the regex doesn't match (e.g. unknown direction) are dropped."""
+    parser = _batch_parser(header_pattern=None, timezone_offset_minutes=0)
+    msg = RawMessage(
+        "01:55 EURUSD CALL\n01:57 EURUSD WAT\n01:59 EURUSD PUT",
+        chat_id=-1,
+        sender_id=1,
+        received_at=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+    )
+    outs = parser.parse_all([msg])
+    # CALL|PUT alternation excludes "WAT" → only the two valid rows
+    # survive finditer.
+    sigs = [o for o in outs if isinstance(o, ParsedSignal)]
+    assert len(sigs) == 2
+    assert [s.direction for s in sigs] == ["call", "put"]
+
+
+def test_batch_per_row_error_on_invalid_time() -> None:
+    """A row that finditer captures but is internally bad → ParseError row."""
+    parser = BatchParser(
+        # Permissive row regex — time isn't validated by the row regex
+        # itself, so a bad time reaches the per-row builder.
+        row_pattern=(
+            r"^(?P<time>\d{1,2}:\d{2})\s+"
+            r"(?P<asset>\S+)\s+"
+            r"(?P<direction>CALL|PUT)\s*$"
+        ),
+        row_kind="regex",
+    )
+    msg = RawMessage(
+        "25:99 EURUSD CALL",
+        chat_id=-1,
+        sender_id=1,
+        received_at=datetime(2026, 5, 7, 12, 0, tzinfo=UTC),
+    )
+    outs = parser.parse_all([msg])
+    err_count = sum(1 for o in outs if isinstance(o, ParseError))
+    assert err_count >= 1
+
+
+def test_batch_asset_auto_resolution() -> None:
+    """Catalogue-aware resolution applies per row."""
+    parser = _batch_parser(known_assets=("USDBDT_otc", "EURUSD"))
+    msgs = [RawMessage(_BATCH_MESSAGE, chat_id=-1, sender_id=1)]
+    sigs = [o for o in parser.parse_all(msgs) if isinstance(o, ParsedSignal)]
+    assert all(s.asset == "USDBDT_otc" for s in sigs)
+    # Channel said OTC, catalogue has the OTC form → "otc" via.
+    assert all(s.asset_via == "otc" for s in sigs)
+
+
+def test_batch_required_row_groups() -> None:
+    with pytest.raises(ValueError, match="time"):
+        BatchParser(
+            row_pattern=r"(?P<asset>\S+)\s+(?P<direction>CALL)",
+            row_kind="regex",
+        )
+
+
+def test_batch_via_test_endpoint(client: TestClient) -> None:
+    """End-to-end: /parsers/test returns ``signals`` list with 4 entries."""
+    headers = _login(client)
+    r = client.post(
+        "/parsers/test",
+        headers=headers,
+        json={
+            "config": {
+                "parser_type": "batch",
+                "parser_config": {
+                    "row": (
+                        r"^(?P<time>\d{1,2}:\d{2})\s+"
+                        r"(?P<asset>\S+)\s+"
+                        r"(?P<direction>CALL|PUT)\s*$"
+                    ),
+                    "row_kind": "regex",
+                    "header": (
+                        r"DATE\s*:\s*(?P<date>\d{1,2}[./-]\d{1,2}[./-]\d{2,4}).*?"
+                        r"TIMEZONE\s*:\s*UTC/GMT\s*\((?P<tz_offset>[+-]\d{1,2}(?::?\d{2})?)\)"
+                    ),
+                    "header_kind": "regex",
+                },
+                "trade_mode": "scheduled",
+            },
+            "messages": [{"text": _BATCH_MESSAGE}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched"] is True
+    assert len(body["signals"]) == 4
+    first = body["signal"]
+    assert first["direction"] == "put"
+    assert first["asset"] == "USDBDT_otc"
+    assert first["fire_at"] is not None
 
 
 # ===========================================================================

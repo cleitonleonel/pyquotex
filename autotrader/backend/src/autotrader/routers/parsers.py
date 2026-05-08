@@ -27,7 +27,12 @@ from autotrader.models.parser_config import (
     update_config,
 )
 from autotrader.services.parsers.aggregator import parse_via_aggregator
-from autotrader.services.parsers.base import ParsedSignal, ParseError, RawMessage
+from autotrader.services.parsers.base import (
+    ParsedSignal,
+    ParseError,
+    ParseOutcome,
+    RawMessage,
+)
 from autotrader.services.parsers.factory import ParserBuildError, build_parser
 from autotrader.services.parsers.template import BUILTIN_TEMPLATES
 
@@ -37,7 +42,7 @@ router = APIRouter(
     dependencies=[Depends(require_auth)],
 )
 
-ParserType = Literal["template", "regex", "prep_trigger"]
+ParserType = Literal["template", "regex", "prep_trigger", "batch"]
 TradeMode = Literal["live", "scheduled", "auto"]
 
 
@@ -121,7 +126,8 @@ class SignalResponse(BaseModel):
 
 class TestResponse(BaseModel):
     matched: bool
-    signal: SignalResponse | None = None
+    signal: SignalResponse | None = None      # first match (back-compat)
+    signals: list[SignalResponse] = Field(default_factory=list)  # all matches
     error: str | None = None
     error_detail: dict[str, Any] | None = None
 
@@ -366,16 +372,22 @@ async def test_endpoint(body: TestRequest, manager: ManagerDep) -> TestResponse:
         for m in body.messages
     ]
 
-    if cfg.parser_type == "prep_trigger":
+    outcomes: list[ParseOutcome]
+    if cfg.parser_type == "batch":
+        # Batch parser emits N rows from one message.
+        outcomes = parser.parse_all(messages)
+    elif cfg.parser_type == "prep_trigger":
         # PrepTriggerParser is stateful — feed messages in order and
         # return the first emitted signal.
-        outcome = parser.parse(messages)
+        outcomes = [parser.parse(messages)]
     elif cfg.aggregate_window_seconds > 0:
-        outcome = parse_via_aggregator(
-            parser,
-            messages,
-            window_seconds=cfg.aggregate_window_seconds,
-        )
+        outcomes = [
+            parse_via_aggregator(
+                parser,
+                messages,
+                window_seconds=cfg.aggregate_window_seconds,
+            ),
+        ]
     else:
         # Non-aggregator: parse each message independently and return
         # the first signal (or the last error if none matched).
@@ -386,38 +398,50 @@ async def test_endpoint(body: TestRequest, manager: ManagerDep) -> TestResponse:
                 if isinstance(alt, ParsedSignal):
                     outcome = alt
                     break
+        outcomes = [outcome]
 
-    if isinstance(outcome, ParsedSignal):
-        # Apply the trade-mode pin so the live tester reflects the
-        # routing the executor would do. ``scheduled`` rejects signals
-        # without a fire_at; ``live`` strips any fire_at; ``auto``
-        # keeps whatever the parser produced.
-        signal = outcome
-        if cfg.trade_mode == "scheduled" and signal.fire_at is None:
+    signals = [o for o in outcomes if isinstance(o, ParsedSignal)]
+    if signals:
+        # Trade-mode pin: scheduled rejects live-only signals; live
+        # strips any extracted fire_at; auto leaves them alone. Apply
+        # uniformly across all rows in the batch case.
+        if cfg.trade_mode == "scheduled" and any(s.fire_at is None for s in signals):
             return TestResponse(
                 matched=False,
-                error="trade_mode=scheduled but signal has no fire_at",
+                error="trade_mode=scheduled but at least one signal has no fire_at",
             )
-        if cfg.trade_mode == "live" and signal.fire_at is not None:
-            signal = ParsedSignal(
-                asset=signal.asset,
-                direction=signal.direction,
-                duration_seconds=signal.duration_seconds,
-                stake=signal.stake,
-                fire_at=None,
-                raw_text=signal.raw_text,
-                parser_id=signal.parser_id,
-                matched_groups=signal.matched_groups,
-                asset_raw=signal.asset_raw,
-                asset_via=signal.asset_via,
-            )
+        if cfg.trade_mode == "live":
+            signals = [
+                ParsedSignal(
+                    asset=s.asset,
+                    direction=s.direction,
+                    duration_seconds=s.duration_seconds,
+                    stake=s.stake,
+                    fire_at=None,
+                    raw_text=s.raw_text,
+                    parser_id=s.parser_id,
+                    matched_groups=s.matched_groups,
+                    asset_raw=s.asset_raw,
+                    asset_via=s.asset_via,
+                )
+                for s in signals
+            ]
 
+        first = signals[0]
         return TestResponse(
             matched=True,
-            signal=_signal_to_response(signal, cfg.trade_mode),
+            signal=_signal_to_response(first, cfg.trade_mode),
+            signals=[_signal_to_response(s, cfg.trade_mode) for s in signals],
         )
+
+    # No signal — return the last (most-informative) error.
+    error = next(
+        (o for o in reversed(outcomes) if isinstance(o, ParseError)),
+        outcomes[-1] if outcomes else ParseError(reason="no outcomes"),
+    )
+    assert isinstance(error, ParseError)
     return TestResponse(
         matched=False,
-        error=outcome.reason,
-        error_detail=outcome.detail or None,
+        error=error.reason,
+        error_detail=error.detail or None,
     )

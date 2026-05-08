@@ -256,7 +256,7 @@ export interface TelegramMessage {
 // Parsers
 // ---------------------------------------------------------------------------
 
-export type ParserType = "template" | "regex" | "prep_trigger";
+export type ParserType = "template" | "regex" | "prep_trigger" | "batch";
 export type TradeMode = "live" | "scheduled" | "auto";
 
 export interface ParserTemplate {
@@ -313,6 +313,7 @@ export interface ParsedSignal {
 export interface ParserTestResponse {
   matched: boolean;
   signal: ParsedSignal | null;
+  signals: ParsedSignal[];
   error: string | null;
   error_detail: Record<string, unknown> | null;
 }

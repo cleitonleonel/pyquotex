@@ -19,6 +19,7 @@ import {
   ApiError,
   DEFAULT_PARSER_CONFIG,
   type BrokerAssets,
+  type ParsedSignal,
   type ParserConfigPayload,
   type ParserTemplate,
   type ParserTestResponse,
@@ -354,6 +355,42 @@ function ConfigEditor({
             >
               Prep + Trigger
             </Pill>
+            <Pill
+              active={cfg.parser_type === "batch"}
+              onClick={() => {
+                set("parser_type", "batch");
+                setCfg((p) => ({
+                  ...p,
+                  parser_config: {
+                    row_kind:
+                      typeof p.parser_config.row_kind === "string"
+                        ? p.parser_config.row_kind
+                        : "regex",
+                    row:
+                      typeof p.parser_config.row === "string"
+                        ? p.parser_config.row
+                        : (
+                            "^(?P<time>\\d{1,2}:\\d{2})\\s+" +
+                            "(?P<asset>\\S+)\\s+" +
+                            "(?P<direction>CALL|PUT)\\s*$"
+                          ),
+                    header_kind:
+                      typeof p.parser_config.header_kind === "string"
+                        ? p.parser_config.header_kind
+                        : "regex",
+                    header:
+                      typeof p.parser_config.header === "string"
+                        ? p.parser_config.header
+                        : (
+                            "DATE\\s*:\\s*(?P<date>\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}).*?" +
+                            "TIMEZONE\\s*:\\s*UTC/GMT\\s*\\((?P<tz_offset>[+-]\\d{1,2}(?::?\\d{2})?)\\)"
+                          ),
+                  },
+                }));
+              }}
+            >
+              Batch
+            </Pill>
           </div>
           {cfg.parser_type === "prep_trigger" && (
             <p className="text-xs text-muted-foreground">
@@ -362,6 +399,15 @@ function ConfigEditor({
               message (often a 👍/👎 sticker) fires the trade
               immediately. Stale prep is dropped after{" "}
               {cfg.aggregate_window_seconds || 120}s.
+            </p>
+          )}
+          {cfg.parser_type === "batch" && (
+            <p className="text-xs text-muted-foreground">
+              One message → many scheduled signals. The <strong>header</strong>{" "}
+              regex captures DATE + timezone offset (applies to every row);
+              the <strong>row</strong> regex matches each TIME / ASSET /
+              DIRECTION line and is run with <code>finditer</code>. Each row
+              becomes a pending order at the resolved UTC time.
             </p>
           )}
         </div>
@@ -393,6 +439,21 @@ function ConfigEditor({
             }
             onChange={(field, value) => setParserConfigField(field, value)}
             templates={templates.data ?? []}
+          />
+        )}
+        {cfg.parser_type === "batch" && (
+          <BatchEditor
+            row={String(cfg.parser_config.row ?? "")}
+            rowKind={
+              cfg.parser_config.row_kind === "template" ? "template" : "regex"
+            }
+            header={String(cfg.parser_config.header ?? "")}
+            headerKind={
+              cfg.parser_config.header_kind === "template"
+                ? "template"
+                : "regex"
+            }
+            onChange={(field, value) => setParserConfigField(field, value)}
           />
         )}
 
@@ -672,8 +733,6 @@ function PrepTriggerEditor({
         value={prep}
         onKindChange={(k) => onChange("prep_kind", k)}
         onValueChange={(v) => onChange("prep", v)}
-        kindField="prep_kind"
-        valueField="prep"
         templatePlaceholder="PAIR: {ASSET} TIME: {DURATION} Minute"
         regexPlaceholder="PAIR\s*:\s*(?P<asset>[A-Z\s/-]+?)\s+TIME\s*:\s*(?P<duration>\d+)\s*Minute"
         templates={templates}
@@ -686,8 +745,6 @@ function PrepTriggerEditor({
         value={trigger}
         onKindChange={(k) => onChange("trigger_kind", k)}
         onValueChange={(v) => onChange("trigger", v)}
-        kindField="trigger_kind"
-        valueField="trigger"
         templatePlaceholder="{DIRECTION}"
         regexPlaceholder="(?P<direction>👍|👎)"
         templates={[]}
@@ -715,8 +772,6 @@ function PhaseEditor({
   value: string;
   onKindChange: (k: "template" | "regex") => void;
   onValueChange: (v: string) => void;
-  kindField: "prep_kind" | "trigger_kind";
-  valueField: "prep" | "trigger";
   templatePlaceholder: string;
   regexPlaceholder: string;
   templates: ParserTemplate[];
@@ -774,6 +829,63 @@ function PhaseEditor({
           </span>
         )}
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Batch editor
+// ---------------------------------------------------------------------------
+
+function BatchEditor({
+  row,
+  rowKind,
+  header,
+  headerKind,
+  onChange,
+}: {
+  row: string;
+  rowKind: "template" | "regex";
+  header: string;
+  headerKind: "template" | "regex";
+  onChange: (
+    field: "row" | "header" | "row_kind" | "header_kind",
+    value: string,
+  ) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <PhaseEditor
+        title="Header (optional)"
+        description="Captures DATE and tz_offset. Both groups are optional individually; without a header the parser uses today's date in the channel timezone."
+        kind={headerKind}
+        value={header}
+        onKindChange={(k) => onChange("header_kind", k)}
+        onValueChange={(v) => onChange("header", v)}
+        templatePlaceholder=""
+        regexPlaceholder={
+          "DATE\\s*:\\s*(?P<date>\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}).*?" +
+          "TIMEZONE\\s*:\\s*UTC/GMT\\s*\\((?P<tz_offset>[+-]\\d{1,2}(?::?\\d{2})?)\\)"
+        }
+        templates={[]}
+        requiredGroups={["date", "tz_offset"]}
+      />
+      <PhaseEditor
+        title="Row (per signal)"
+        description="One match per scheduled signal. Run with finditer — each match becomes a pending order at the resolved UTC time."
+        kind={rowKind}
+        value={row}
+        onKindChange={(k) => onChange("row_kind", k)}
+        onValueChange={(v) => onChange("row", v)}
+        templatePlaceholder="{TIME} {ASSET} {DIRECTION}"
+        regexPlaceholder={
+          "^(?P<time>\\d{1,2}:\\d{2})\\s+" +
+          "(?P<asset>\\S+)\\s+" +
+          "(?P<direction>CALL|PUT)\\s*$"
+        }
+        templates={[]}
+        requiredGroups={["time", "asset", "direction"]}
+      />
     </div>
   );
 }
@@ -1036,24 +1148,41 @@ function ResultPanel({ result }: { result: ParserTestResponse }) {
     );
   }
 
-  const s = result.signal!;
+  const signals = result.signals.length > 0 ? result.signals : [result.signal!];
+  const isBatch = signals.length > 1;
+
+  return (
+    <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2 pb-2">
+        <Badge variant="success">
+          match{isBatch ? ` × ${signals.length}` : ""}
+        </Badge>
+        <Badge variant="outline">{signals[0].trade_mode}</Badge>
+        {signals[0].asset_via && <AssetViaBadge via={signals[0].asset_via} />}
+        <span className="text-xs text-muted-foreground">
+          via {signals[0].parser_id}
+        </span>
+      </div>
+      {isBatch ? <SignalsTable signals={signals} /> : <SignalDetails s={signals[0]} />}
+    </div>
+  );
+}
+
+function SignalDetails({ s }: { s: ParsedSignal }) {
   const assetResolved =
     s.asset_raw && s.asset_raw !== s.asset
       ? `${s.asset_raw} → ${s.asset}`
       : s.asset;
   return (
-    <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2 pb-2">
-        <Badge variant="success">match</Badge>
-        <Badge variant="outline">{s.trade_mode}</Badge>
-        {s.asset_via && <AssetViaBadge via={s.asset_via} />}
-        <span className="text-xs text-muted-foreground">via {s.parser_id}</span>
-      </div>
+    <>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
         <Row label="Asset" value={assetResolved} />
         <Row label="Direction" value={s.direction} />
         <Row label="Duration" value={`${s.duration_seconds}s`} />
-        <Row label="Stake" value={s.stake !== null ? String(s.stake) : "(default)"} />
+        <Row
+          label="Stake"
+          value={s.stake !== null ? String(s.stake) : "(default)"}
+        />
         <Row label="Fire at" value={s.fire_at ?? "(live)"} />
       </dl>
       {Object.keys(s.matched_groups).length > 0 && (
@@ -1066,6 +1195,54 @@ function ResultPanel({ result }: { result: ParserTestResponse }) {
           </pre>
         </details>
       )}
+    </>
+  );
+}
+
+function SignalsTable({ signals }: { signals: ParsedSignal[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-emerald-500/20 text-left text-muted-foreground">
+            <th className="px-2 py-1 font-medium">#</th>
+            <th className="px-2 py-1 font-medium">Asset</th>
+            <th className="px-2 py-1 font-medium">Dir</th>
+            <th className="px-2 py-1 font-medium">Duration</th>
+            <th className="px-2 py-1 font-medium">Fire at (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {signals.map((s, i) => {
+            const asset =
+              s.asset_raw && s.asset_raw !== s.asset
+                ? `${s.asset_raw} → ${s.asset}`
+                : s.asset;
+            return (
+              <tr
+                key={`${s.parser_id}-${i}`}
+                className="border-b border-emerald-500/10 last:border-0"
+              >
+                <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
+                <td className="px-2 py-1 font-mono">{asset}</td>
+                <td className="px-2 py-1">
+                  <Badge
+                    variant={s.direction === "call" ? "success" : "destructive"}
+                  >
+                    {s.direction}
+                  </Badge>
+                </td>
+                <td className="px-2 py-1 font-mono">{s.duration_seconds}s</td>
+                <td className="px-2 py-1 font-mono">
+                  {s.fire_at
+                    ? new Date(s.fire_at).toISOString().replace("T", " ").slice(0, 19)
+                    : "(live)"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
