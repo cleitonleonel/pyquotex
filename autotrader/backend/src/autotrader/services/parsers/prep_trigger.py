@@ -40,6 +40,7 @@ from autotrader.services.parsers.base import (
     RawMessage,
 )
 from autotrader.services.parsers.normalize import (
+    find_duration_in_text,
     normalise_direction,
     normalise_duration,
     normalise_fire_at,
@@ -204,6 +205,17 @@ class PrepTriggerParser(Parser):
                     detail={"raw": groups["duration"]},
                 )
             duration = parsed
+        else:
+            # Fallback: some prep formats spell out the expiration
+            # period in body text the named-group capture doesn't
+            # cover (e.g. "5 minute(s) until expiration"). Scan the
+            # full message so the live executor doesn't fall back to
+            # the per-parser default.
+            scanned = find_duration_in_text(
+                message.text, default_unit=self._default_duration_unit,
+            )
+            if scanned is not None:
+                duration = scanned
 
         stake: float | None = None
         if "stake" in groups:

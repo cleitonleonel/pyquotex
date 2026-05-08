@@ -34,6 +34,7 @@ from autotrader.services.parsers import (
 )
 from autotrader.services.parsers.factory import ParserBuildError
 from autotrader.services.parsers.normalize import (
+    find_duration_in_text,
     normalise_asset,
     normalise_direction,
     normalise_duration,
@@ -101,6 +102,35 @@ def test_normalise_duration(raw: str, expected: int | None) -> None:
 
 def test_normalise_duration_default_unit_seconds() -> None:
     assert normalise_duration("60", default_unit="s") == 60
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Real-world header from a signal channel.
+        ("5 minute(s) until expiration\nAUD/NZD 06:05 UP", 300),
+        # Compact spelling.
+        ("5min", 300),
+        # Pluralised, with surrounding text.
+        ("Trade duration: 10 minutes\nEUR/USD CALL", 600),
+        ("expiration in 30 seconds", 30),
+        ("1 hour", 3600),
+        # First match wins when multiple candidates appear.
+        ("5 minutes ... 60 seconds later", 300),
+        # False-positive guards: bare numbers don't trigger.
+        ("AUD/NZD 06:05 UP", None),
+        # Numeric prefix without unit doesn't trigger.
+        ("Lot size 5", None),
+        # MetaTrader-style ``M5`` is intentionally NOT picked up here
+        # — too easy to collide with asset codes / symbols. Channels
+        # using ``M5`` should put it in a named group on the regex.
+        ("Strategy M5 confirmed", None),
+        # Empty input.
+        ("", None),
+    ],
+)
+def test_find_duration_in_text(text: str, expected: int | None) -> None:
+    assert find_duration_in_text(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -375,6 +405,70 @@ def test_regex_parser_invalid_duration() -> None:
     out = parser.parse([_msg("BUY EUR foo")])
     assert isinstance(out, ParseError)
     assert "duration" in out.reason
+
+
+def test_regex_parser_falls_back_to_duration_in_header() -> None:
+    """Real-world DreamSignalVIP-style format.
+
+    The row regex matches a single signal line; the expiration period
+    lives in a header line above. Without the fallback, the executor
+    used the per-config default and placed the trade with the wrong
+    period (M1 instead of M5).
+    """
+    parser = RegexParser(
+        r"(?P<asset>[A-Z]{3}/[A-Z]{3}(?:\s*\(OTC\))?)"
+        r"\s+(?P<time>\d{1,2}:\d{2})"
+        r"\s+(?P<direction>LOW|HIGH|CALL|PUT|UP|DOWN)",
+        timezone_offset_minutes=-180,
+    )
+    text = (
+        "🕐 Time zone: UTC -3\n"
+        "💰 5 minute(s) until expiration\n"
+        "\n"
+        "AUD/NZD (OTC) 06:05 UP 🟢"
+    )
+    out = parser.parse([_msg(text)])
+    assert isinstance(out, ParsedSignal)
+    assert out.duration_seconds == 300
+
+
+def test_regex_parser_explicit_duration_group_beats_fallback() -> None:
+    """The named group always wins when present; fallback never overrides."""
+    parser = RegexParser(
+        r"(?P<duration>\d+m)\s+(?P<direction>BUY)\s+(?P<asset>EUR)",
+    )
+    # The body says "5 minutes" but the explicit group captured 1m.
+    out = parser.parse([_msg("1m BUY EUR — actually 5 minutes long")])
+    assert isinstance(out, ParsedSignal)
+    assert out.duration_seconds == 60
+
+
+def test_prep_trigger_falls_back_to_duration_in_prep_text() -> None:
+    """Same header-period convention for the prep+sticker style.
+
+    A prep that doesn't capture ``duration`` in its named groups must
+    still pick up the period from the body so the live trade fires
+    with the right expiration window.
+    """
+    parser = PrepTriggerParser(
+        prep=r"(?P<asset>[A-Z]{3}/[A-Z]{3})",
+        trigger=r"(?P<direction>👍|👎)",
+        prep_kind="regex",
+        trigger_kind="regex",
+        gap_seconds=120,
+    )
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+    parser.feed(
+        RawMessage(
+            "10 minute(s) until expiration\nEUR/USD",
+            chat_id=-1001, sender_id=200, received_at=base,
+        ),
+    )
+    out = parser.feed(
+        RawMessage("👍", chat_id=-1001, sender_id=200, received_at=base),
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.duration_seconds == 600
 
 
 def test_builtin_templates_all_compile() -> None:

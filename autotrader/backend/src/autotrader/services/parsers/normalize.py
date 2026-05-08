@@ -113,6 +113,55 @@ def normalise_duration(raw: str, *, default_unit: str = "m") -> int | None:  # n
 
 
 # ---------------------------------------------------------------------------
+# Duration scan — used by parsers as a fallback when the main regex
+# didn't capture ``duration`` itself. Many channel formats put the
+# expiration period in a header line (``5 minute(s) until expiration``)
+# that the row regex doesn't reach.
+# ---------------------------------------------------------------------------
+
+# Conservative: requires both a number and an explicit time-word so we
+# don't pick up arbitrary numbers from the message body. ``min``,
+# ``mins``, ``minute``, ``minutes`` cover ~all real-world phrasings;
+# hours / seconds are rarer in binary-options channels but harmless to
+# include.
+_FALLBACK_DURATION_RE: Final = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?P<value>\d+(?:\.\d+)?)"
+    r"\s*"
+    r"(?P<unit>"
+    r"sec(?:onds?)?|secs"
+    r"|min(?:utes?)?|mins"
+    r"|hours?|hrs?"
+    r")"
+    r"(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
+def find_duration_in_text(text: str, *, default_unit: str = "m") -> int | None:
+    """Scan ``text`` for the first duration phrase and return seconds.
+
+    Used as a fallback by parsers whose primary regex matches a single
+    line but whose channel posts the expiration period elsewhere
+    (typically a header). Conservative on purpose — only matches
+    ``<number><unit>`` where ``unit`` is an explicit time word
+    (``min``, ``minute``, ``hour``, …); bare numbers and tokens like
+    ``M1`` / ``5x`` won't trigger a false positive.
+
+    Returns ``None`` when nothing matches.
+    """
+    if not text:
+        return None
+    match = _FALLBACK_DURATION_RE.search(text)
+    if match is None:
+        return None
+    return normalise_duration(
+        f"{match.group('value')}{match.group('unit')}",
+        default_unit=default_unit,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Asset
 # ---------------------------------------------------------------------------
 

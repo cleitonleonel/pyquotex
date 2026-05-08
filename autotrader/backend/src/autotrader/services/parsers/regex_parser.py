@@ -33,6 +33,7 @@ from autotrader.services.parsers.base import (
     RawMessage,
 )
 from autotrader.services.parsers.normalize import (
+    find_duration_in_text,
     normalise_direction,
     normalise_duration,
     normalise_fire_at,
@@ -119,6 +120,17 @@ class RegexParser(Parser):
                     detail={"raw": groups["duration"], "groups": groups},
                 )
             duration = parsed_dur
+        else:
+            # Many channels put the expiration period in a header line
+            # the row regex doesn't span (e.g. "5 minute(s) until
+            # expiration" above an ``ASSET TIME DIRECTION`` row). Scan
+            # the full message as a fallback so the trade fires with
+            # the right period rather than the per-config default.
+            scanned = find_duration_in_text(
+                text, default_unit=self._default_duration_unit,
+            )
+            if scanned is not None:
+                duration = scanned
 
         stake: float | None = None
         if "stake" in groups:
