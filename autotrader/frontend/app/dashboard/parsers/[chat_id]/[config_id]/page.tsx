@@ -55,7 +55,12 @@ export default function ParserEditor() {
   const [aliasesText, setAliasesText] = useState<string>("");
   const [aliasesError, setAliasesError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(isNew);
-  const [testerText, setTesterText] = useState<string>("BUY EURUSD 1m");
+  // Live-tester state: each entry is one Telegram message. We deliberately
+  // do *not* split on blank lines anymore — a real Telegram message can
+  // contain blank lines, and only a *new message arriving* is a boundary.
+  const [testerMessages, setTesterMessages] = useState<string[]>([
+    "BUY EURUSD 1m",
+  ]);
 
   useEffect(() => {
     if (!isNew && existing.data && !hydrated) {
@@ -157,10 +162,14 @@ export default function ParserEditor() {
 
       <RecentMessagesPanel
         chatId={chatId}
-        onAppend={(chunk) =>
-          setTesterText((prev) => (prev.trim() ? `${prev.trim()}\n\n${chunk}` : chunk))
+        onAddMessage={(chunk) =>
+          setTesterMessages((prev) => {
+            // If the only entry is empty (fresh state), replace it;
+            // otherwise push as a new message.
+            if (prev.length === 1 && !prev[0].trim()) return [chunk];
+            return [...prev, chunk];
+          })
         }
-        onReplace={(chunk) => setTesterText(chunk)}
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -174,8 +183,8 @@ export default function ParserEditor() {
         />
         <LiveTester
           cfg={cfg}
-          text={testerText}
-          setText={setTesterText}
+          messages={testerMessages}
+          setMessages={setTesterMessages}
         />
       </div>
 
@@ -860,12 +869,12 @@ function Field({
 
 function LiveTester({
   cfg,
-  text,
-  setText,
+  messages,
+  setMessages,
 }: {
   cfg: ParserConfigPayload;
-  text: string;
-  setText: (v: string) => void;
+  messages: string[];
+  setMessages: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
   const [result, setResult] = useState<ParserTestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -878,15 +887,14 @@ function LiveTester({
 
   const run = useMutation({
     mutationFn: () => {
-      const messages = text
-        .split(/\n\s*\n/)
-        .map((chunk) => chunk.trim())
-        .filter(Boolean)
-        .map((chunk) => ({ text: chunk }));
-      if (messages.length === 0) {
+      const payload = messages
+        .map((text, i) => ({ text, i }))
+        .filter((m) => m.text.trim())
+        .map((m) => ({ text: m.text }));
+      if (payload.length === 0) {
         throw new ApiError("nothing to parse", 0);
       }
-      return parsers.test(cfg, messages);
+      return parsers.test(cfg, payload);
     },
     onSuccess: (r) => {
       setResult(r);
@@ -898,37 +906,114 @@ function LiveTester({
     },
   });
 
+  function setAt(index: number, value: string) {
+    setMessages((prev) => prev.map((m, i) => (i === index ? value : m)));
+  }
+  function removeAt(index: number) {
+    setMessages((prev) =>
+      prev.length === 1 ? [""] : prev.filter((_, i) => i !== index),
+    );
+  }
+  function add() {
+    setMessages((prev) => [...prev, ""]);
+  }
+  function clearAll() {
+    setMessages([""]);
+    setResult(null);
+    setError(null);
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Live tester</CardTitle>
         <CardDescription>
-          Paste sample messages — separate multiple messages with a blank
-          line. {assets.data
+          One textarea per Telegram message. Blank lines inside a message
+          are kept (real prep messages have them).{" "}
+          {assets.data
             ? `${assets.data.count} broker assets cached for auto-resolution.`
             : "Connect the broker to enable asset auto-resolution."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <textarea
-          className="flex min-h-[10rem] w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="🟢 BUY EUR/USD 1m"
-        />
+        {messages.map((text, i) => (
+          <MessageBlock
+            key={i}
+            index={i}
+            count={messages.length}
+            value={text}
+            onChange={(v) => setAt(i, v)}
+            onRemove={() => removeAt(i)}
+          />
+        ))}
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => run.mutate()} disabled={run.isPending}>
             {run.isPending ? "Testing…" : "Test"}
           </Button>
+          <Button type="button" variant="outline" onClick={add}>
+            + Add message
+          </Button>
+          {messages.length > 1 || messages[0]?.trim() ? (
+            <Button type="button" variant="outline" onClick={clearAll}>
+              Clear
+            </Button>
+          ) : null}
           {error && (
-            <span className="text-sm text-destructive">{error}</span>
+            <span className="self-center text-sm text-destructive">
+              {error}
+            </span>
           )}
         </div>
 
         {result && <ResultPanel result={result} />}
       </CardContent>
     </Card>
+  );
+}
+
+function MessageBlock({
+  index,
+  count,
+  value,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  count: number;
+  value: string;
+  onChange: (v: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-input">
+      <div className="flex items-center justify-between border-b border-input bg-muted/30 px-3 py-1.5 text-xs">
+        <span className="font-medium text-muted-foreground">
+          Message {index + 1}
+          {index === 0 && count > 1 && " (prep)"}
+          {index === 1 && count > 1 && " (trigger)"}
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-muted-foreground hover:text-destructive"
+          aria-label="Remove message"
+          title="Remove message"
+        >
+          ✕
+        </button>
+      </div>
+      <textarea
+        className="flex min-h-[5rem] w-full bg-transparent px-3 py-2 font-mono text-xs focus-visible:outline-none"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={
+          index === 0
+            ? "🌐 PAIR: USD NGN OTC\n\n⏱️ TIME: 01 Minute"
+            : "👍"
+        }
+      />
+    </div>
   );
 }
 
@@ -1048,12 +1133,10 @@ function MultiMessageToggle({
 
 function RecentMessagesPanel({
   chatId,
-  onAppend,
-  onReplace,
+  onAddMessage,
 }: {
   chatId: number;
-  onAppend: (text: string) => void;
-  onReplace: (text: string) => void;
+  onAddMessage: (text: string) => void;
 }) {
   const messages = useQuery<TelegramMessage[]>({
     queryKey: ["telegram", "messages", chatId],
@@ -1068,10 +1151,11 @@ function RecentMessagesPanel({
           <div>
             <CardTitle>Recent messages</CardTitle>
             <CardDescription>
-              Last 20 text messages and stickers from this chat.{" "}
-              <strong>Add</strong> appends to the tester (blank-line
-              separated — pair a prep + sticker for multi-message
-              parsing). <strong>Replace</strong> overwrites.
+              Last 20 text messages and stickers from this chat. Click{" "}
+              <strong>Add to tester</strong> to push a message into the
+              live-tester pane below — each click adds a separate
+              message block (so a prep + sticker pair stays as two
+              messages, not one merged blob).
             </CardDescription>
           </div>
           <Button
@@ -1123,23 +1207,13 @@ function RecentMessagesPanel({
                     {m.sender_id}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-col gap-1.5">
-                  <Button
-                    size="sm"
-                    onClick={() => onAppend(m.text)}
-                    title="Append to tester (blank-line separated)"
-                  >
-                    Add
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onReplace(m.text)}
-                    title="Replace tester contents"
-                  >
-                    Replace
-                  </Button>
-                </div>
+                <Button
+                  size="sm"
+                  onClick={() => onAddMessage(m.text)}
+                  title="Add as a new message block in the live tester"
+                >
+                  Add to tester
+                </Button>
               </li>
             ))}
           </ul>
