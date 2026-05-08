@@ -33,9 +33,21 @@ _DURATION_PATTERN = (
     r"[Mm]?\d+\s*(?:s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hr?s?|hour?s?)?"
 )
 
+# Asset matches one or more whitespace-/separator-joined alphanumeric
+# tokens. The trailing repetition is *lazy* so a template like
+# ``{ASSET} {DURATION}`` still anchors at the right boundary —
+# ``USD NGN OTC 1m`` parses asset=``USD NGN OTC``, duration=``1m`` and
+# ``BUY EURUSD 1m`` still parses asset=``EURUSD``. Newlines are not
+# treated as separators (we only allow space / tab / -, /, _) so
+# multi-line layouts can't accidentally merge fields.
+_ASSET_PATTERN = (
+    r"[A-Za-z][A-Za-z0-9]*"
+    r"(?:[ \t/_-]+[A-Za-z0-9]+)*?"
+)
+
 _PLACEHOLDERS: Final[dict[str, tuple[str, str]]] = {
     # token -> (regex group name, pattern)
-    "{ASSET}":     ("asset",     r"[A-Za-z][A-Za-z0-9]*(?:[/_-][A-Za-z0-9]+)?"),
+    "{ASSET}":     ("asset",     _ASSET_PATTERN),
     "{DIRECTION}": ("direction", r"[A-Za-z]+|[\U0001F300-\U0001FAFF]"),
     "{DURATION}":  ("duration",  _DURATION_PATTERN),
     "{TIME}":      ("fire_at",   r"\d{1,2}:\d{2}(?::\d{2})?"),

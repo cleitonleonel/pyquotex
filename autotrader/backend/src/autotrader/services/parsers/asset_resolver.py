@@ -2,23 +2,26 @@
 
 Many signal channels write asset names in their own dialect — ``EUR/USD``,
 ``EURUSD``, ``EUR-USD``, sometimes with the ``_otc`` off-hours suffix, sometimes
-without. The broker has a fixed catalogue of accepted codes (cached on the
-``QuotexManager``).
+without, and very often with ``OTC`` written as a *separate word* on the
+end (``USD NGN OTC``, ``GOLD OTC``).  The broker has a fixed catalogue of
+accepted codes (cached on the ``QuotexManager``).
 
 Resolution strategy, in order:
 
     1. Manual alias map (case-insensitive) — explicit user override.
-    2. Exact match against the broker's known-codes set.
-    3. Stripped-and-uppercased candidate against the known set.
-    4. ``_otc`` suffix probe — try adding / removing the suffix.
-    5. Fall back to the stripped-and-uppercased form (broker may
-       still accept it; if not the executor's pre-flight check
-       catches that).
+    2. Trailing ``OTC`` detection — if the raw asset has ``OTC`` as
+       its last word/token, the rest is the *base* and the canonical
+       form is ``<base>_otc``.
+    3. Exact match against the broker's known-codes set.
+    4. ``_otc`` suffix probe — try the OTC and non-OTC variants of
+       the base.
+    5. Fall back to the canonical form derived in step 2 (or the
+       stripped-and-uppercased base when there's no OTC marker).
 
-Every step is tried; the first non-``None`` candidate that exists in the
-known set wins. When the known set is empty (broker not connected yet, or
-running in tests) only steps 1 and 5 apply — i.e. behaviour matches the
-old simple normaliser.
+When the known set is empty (broker not connected yet, or running in
+tests) only steps 1, 2, and 5 fire — the resolver still does the
+right thing for OTC-marked names because step 2 doesn't need the
+catalogue.
 """
 
 from __future__ import annotations
@@ -28,7 +31,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Final
 
-_NOISE_RE: Final = re.compile(r"[^A-Za-z0-9_]")
+# A "token" is a run of letters / digits — i.e. one word in the asset
+# name. Slashes, hyphens, underscores, and spaces all separate tokens.
+_TOKEN_RE: Final = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 _OTC_SUFFIX: Final = "_otc"
 
 
@@ -43,10 +48,6 @@ class AssetResolution:
     via: str  # "alias" | "exact" | "otc" | "fallback"
 
 
-def _strip_upper(s: str) -> str:
-    return _NOISE_RE.sub("", s).upper()
-
-
 def _alias_lookup(raw: str, aliases: dict[str, str]) -> str | None:
     if not aliases:
         return None
@@ -54,7 +55,24 @@ def _alias_lookup(raw: str, aliases: dict[str, str]) -> str | None:
     return lookup.get(raw.strip().casefold())
 
 
-def resolve_asset(
+def _split_otc(raw: str) -> tuple[str, bool]:
+    """Tokenise ``raw`` and return ``(base_without_otc, is_otc)``.
+
+    ``is_otc`` is True when the trailing token is ``"OTC"``
+    (case-insensitive). The base is the remaining tokens joined into
+    one uppercased string — e.g. ``"USD NGN OTC"`` → ``("USDNGN", True)``,
+    ``"GOLD OTC"`` → ``("GOLD", True)``, ``"USD EUR"`` →
+    ``("USDEUR", False)``.
+    """
+    tokens = [t.upper() for t in _TOKEN_RE.findall(raw)]
+    if not tokens:
+        return "", False
+    if tokens[-1] == "OTC" and len(tokens) > 1:
+        return "".join(tokens[:-1]), True
+    return "".join(tokens), False
+
+
+def resolve_asset(  # noqa: PLR0911  (one return per resolution-strategy step)
     raw: str,
     *,
     aliases: dict[str, str] | None = None,
@@ -68,29 +86,31 @@ def resolve_asset(
     if (mapped := _alias_lookup(raw, aliases)) is not None:
         return AssetResolution(raw=raw, code=mapped, via="alias")
 
-    stripped = _strip_upper(raw)
+    base, is_otc = _split_otc(raw)
+    if not base:
+        return AssetResolution(raw=raw, code="", via="fallback")
 
-    # 2 + 3. Exact / stripped match against known codes
+    otc_form = base + _OTC_SUFFIX        # e.g. "USDNGN_otc"
+    plain_form = base                    # e.g. "USDNGN"
+
     if known:
-        for candidate in (raw.strip(), stripped):
-            if candidate and candidate in known:
-                return AssetResolution(raw=raw, code=candidate, via="exact")
+        # 2. Exact match against the unaltered raw text — covers users
+        #    who write the broker code verbatim (rare but cheap).
+        if raw.strip() in known:
+            return AssetResolution(raw=raw, code=raw.strip(), via="exact")
 
-        # 4. _otc probe
-        if stripped:
-            otc_variant = (
-                stripped.removesuffix(_OTC_SUFFIX.upper())
-                if stripped.upper().endswith(_OTC_SUFFIX.upper())
-                else stripped + _OTC_SUFFIX
-            )
-            for candidate in (
-                stripped + _OTC_SUFFIX,
-                otc_variant,
-                stripped.lower() + _OTC_SUFFIX,
-            ):
-                if candidate in known:
-                    return AssetResolution(raw=raw, code=candidate, via="otc")
+        # 3. Prefer the form the channel announced.
+        if is_otc and otc_form in known:
+            return AssetResolution(raw=raw, code=otc_form, via="otc")
+        if plain_form in known:
+            return AssetResolution(raw=raw, code=plain_form, via="exact")
 
-    # 5. Fallback — return the stripped form (broker either accepts
-    #    it or rejects later).
-    return AssetResolution(raw=raw, code=stripped, via="fallback")
+        # 4. Cross-probe: channel didn't say OTC but broker only has
+        #    the OTC variant (or vice-versa).
+        if otc_form in known:
+            return AssetResolution(raw=raw, code=otc_form, via="otc")
+
+    # 5. Fallback — preserve the channel's intent. OTC-marked names
+    #    become ``<base>_otc``; bare names become ``<base>``.
+    code = otc_form if is_otc else plain_form
+    return AssetResolution(raw=raw, code=code, via="fallback")

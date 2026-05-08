@@ -183,6 +183,51 @@ def test_resolve_asset_no_known_set_falls_back() -> None:
     assert res.via == "fallback"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Trailing OTC token → ``<base>_otc`` regardless of catalogue.
+        ("USD NGN OTC", "USDNGN_otc"),
+        ("GOLD OTC", "GOLD_otc"),
+        ("EUR/USD OTC", "EURUSD_otc"),
+        ("USD-NGN-OTC", "USDNGN_otc"),
+        ("USDJPY otc", "USDJPY_otc"),  # case-insensitive
+        # No OTC token → just join the words.
+        ("USD EUR", "USDEUR"),
+        ("EUR USD", "EURUSD"),
+        ("EUR/USD", "EURUSD"),
+        ("EURUSD", "EURUSD"),
+        # Sole "OTC" can't be a meaningful asset.
+        ("OTC", "OTC"),
+    ],
+)
+def test_resolve_asset_otc_token_handling(raw: str, expected: str) -> None:
+    """OTC as a separate trailing word becomes the ``_otc`` suffix."""
+    res = resolve_asset(raw)
+    assert res.code == expected
+
+
+def test_resolve_asset_otc_with_catalogue_match() -> None:
+    """Catalogue lookup finds the OTC-suffixed code when channel says OTC."""
+    res = resolve_asset(
+        "USD NGN OTC",
+        known_assets=("USDNGN_otc", "GBPUSD"),
+    )
+    assert res.code == "USDNGN_otc"
+    assert res.via == "otc"
+
+
+def test_resolve_asset_no_otc_marker_with_otc_only_catalogue() -> None:
+    """Channel didn't say OTC but broker only has the OTC variant.
+
+    Cross-probe still finds it (e.g. weekend trading where the spot
+    market is closed but the OTC desk is open).
+    """
+    res = resolve_asset("EUR/USD", known_assets=("EURUSD_otc",))
+    assert res.code == "EURUSD_otc"
+    assert res.via == "otc"
+
+
 # ===========================================================================
 # Template + Regex parsers
 # ===========================================================================
@@ -416,8 +461,9 @@ def test_prep_trigger_fires_on_trigger() -> None:
     )
     assert isinstance(out, ParsedSignal)
     assert out.direction == "call"
-    # No broker catalogue → fallback strips the literal text.
-    assert out.asset == "USDNGNOTC"
+    # OTC token detection: even without a broker catalogue, the
+    # resolver's fallback produces the canonical ``<base>_otc`` form.
+    assert out.asset == "USDNGN_otc"
     assert out.asset_via == "fallback"
     assert out.duration_seconds == 60
     assert parser.pending_size() == 0
@@ -463,8 +509,8 @@ def test_prep_trigger_gap_timeout_drops_stale() -> None:
 
 
 def test_prep_trigger_asset_auto_resolves() -> None:
-    """Catalogue-aware: stripped+upper hits an _otc-suffixed broker code."""
-    parser = _pt_parser(known_assets=("USDNGNOTC_otc",))
+    """Catalogue match honours the channel's OTC marker."""
+    parser = _pt_parser(known_assets=("USDNGN_otc",))
     base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
 
     parser.feed(
@@ -479,8 +525,89 @@ def test_prep_trigger_asset_auto_resolves() -> None:
         RawMessage("👍", chat_id=-1001, sender_id=200, received_at=base),
     )
     assert isinstance(out, ParsedSignal)
-    assert out.asset == "USDNGNOTC_otc"
+    assert out.asset == "USDNGN_otc"
     assert out.asset_via == "otc"
+
+
+def test_prep_trigger_real_world_eliteclassbinary_format() -> None:
+    """The exact format from the user's EliteClassBinary channel.
+
+    Three samples — one with OTC and spaces, one with OTC and one
+    word, one without OTC — all need to resolve cleanly even though
+    the prep is across several lines and decorated with emojis.
+    """
+    # Regex-based prep that captures everything on the PAIR line
+    # (up to end-of-line) and skips arbitrary noise before TIME.
+    parser = PrepTriggerParser(
+        prep=(
+            r"PAIR\s*:\s*(?P<asset>[^\n]+?)\s*$"
+            r"[\s\S]*?TIME\s*:\s*(?P<duration>\d+)\s*Minute"
+        ),
+        trigger=r"(?P<direction>👍|👎)",
+        prep_kind="regex",
+        trigger_kind="regex",
+        gap_seconds=120,
+    )
+
+    cases = [
+        (
+            "🌐 PAIR: USD NGN OTC\n\n⏱️ TIME: 01 Minute\n\n🚨 IF LOSS TAKE 1 STEP MTG",
+            "USDNGN_otc",
+        ),
+        (
+            "🌐 PAIR:  GOLD  OTC \n\n⏱️ TIME:   01 Minute",  # extra whitespace
+            "GOLD_otc",
+        ),
+        (
+            "🌐 PAIR: USD EUR\n\n⏱️ TIME: 01 Minute\n\n🚨 IF LOSS TAKE 1 STEP MTG",
+            "USDEUR",
+        ),
+    ]
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+    for i, (prep_text, expected_asset) in enumerate(cases):
+        chat = -1000 - i  # different chat_ids so cases don't share state
+        parser.feed(
+            RawMessage(prep_text, chat_id=chat, sender_id=200, received_at=base),
+        )
+        out = parser.feed(
+            RawMessage("👍", chat_id=chat, sender_id=200, received_at=base),
+        )
+        assert isinstance(out, ParsedSignal), (
+            f"case {i} ({expected_asset!r}) didn't fire: {out}"
+        )
+        assert out.asset == expected_asset, f"case {i}: got {out.asset!r}"
+        assert out.duration_seconds == 60
+        assert out.direction == "call"
+
+
+def test_prep_trigger_eliteclassbinary_template() -> None:
+    """The same channel via the loosened {ASSET} template placeholder.
+
+    Works only when the format is well-behaved (no emoji-prefixed
+    TIME line) — for the messy real-world case use the regex.
+    """
+    parser = PrepTriggerParser(
+        prep="PAIR: {ASSET} TIME: {DURATION} Minute",
+        trigger="{DIRECTION}",
+        prep_kind="template",
+        trigger_kind="template",
+        gap_seconds=120,
+    )
+    base = datetime(2025, 5, 7, 12, 0, tzinfo=UTC)
+    parser.feed(
+        RawMessage(
+            "PAIR: USD NGN OTC TIME: 1 Minute",
+            chat_id=-1001,
+            sender_id=200,
+            received_at=base,
+        ),
+    )
+    out = parser.feed(
+        RawMessage("👍", chat_id=-1001, sender_id=200, received_at=base),
+    )
+    assert isinstance(out, ParsedSignal)
+    assert out.asset == "USDNGN_otc"
+    assert out.duration_seconds == 60
 
 
 def test_prep_trigger_template_kind() -> None:
