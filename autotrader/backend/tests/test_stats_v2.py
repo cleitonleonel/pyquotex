@@ -82,6 +82,7 @@ async def _seed_attempts(rows: list[dict]) -> None:
                     trade_mode=r.get("trade_mode", "live"),
                     status=r.get("status", "won"),
                     profit=r.get("profit"),
+                    error=r.get("error"),
                     received_at=r.get("received_at", datetime.now(UTC)),
                     placed_at=r.get("placed_at"),
                     settled_at=r.get("settled_at"),
@@ -602,3 +603,71 @@ async def test_breakdown_hour_of_week_uses_weekday_hour_key(
     keys = {row["key"] for row in rows}
     assert 3 in keys
     assert 110 in keys
+
+
+# ---------------------------------------------------------------------------
+# /stats/v2/funnel
+# ---------------------------------------------------------------------------
+
+
+async def test_funnel_empty(async_client: httpx.AsyncClient) -> None:
+    headers = await _login(async_client)
+    r = await async_client.get(
+        "/stats/v2/funnel",
+        params={"range": "24h"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    stages = {s["key"]: s["count"] for s in body["stages"]}
+    assert stages == {
+        "messages_received": 0,
+        "matched": 0,
+        "passed_risk": 0,
+        "placed": 0,
+        "settled": 0,
+    }
+
+
+async def test_funnel_counts_from_trade_attempts(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """passed_risk = total - rejected; placed = total - rejected -
+    broker_error; settled = won + lost."""
+    headers = await _login(async_client)
+    now = datetime.now(UTC)
+    base = now - timedelta(hours=1)
+    await _seed_attempts(
+        [
+            {"status": "won", "received_at": base,
+             "placed_at": base + timedelta(milliseconds=10)},
+            {"status": "lost", "received_at": base,
+             "placed_at": base + timedelta(milliseconds=20)},
+            {"status": "rejected", "received_at": base,
+             "error": "daily_loss_cap_exhausted"},
+            {"status": "broker_error", "received_at": base,
+             "error": "asset closed"},
+            {"status": "pending", "received_at": base,
+             "placed_at": base + timedelta(milliseconds=30)},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/funnel",
+        params={"range": "24h"},
+        headers=headers,
+    )
+    body = r.json()
+    stages = {s["key"]: s["count"] for s in body["stages"]}
+    # 5 trade rows total. messages_received / matched come from the
+    # in-memory ring (zero in Phase 2). The trade-attempts-derived
+    # stages: passed_risk = 4 (all but rejected), placed = 3 (all but
+    # rejected and broker_error), settled = 2 (won + lost only).
+    assert stages["passed_risk"] == 4
+    assert stages["placed"] == 3
+    assert stages["settled"] == 2
+
+    # Drop reasons aggregate the rejected rows' error column.
+    drop_reasons = body["drop_reasons"]["matched_to_passed_risk"]
+    assert len(drop_reasons) == 1
+    assert drop_reasons[0]["reason"] == "daily_loss_cap_exhausted"
+    assert drop_reasons[0]["count"] == 1

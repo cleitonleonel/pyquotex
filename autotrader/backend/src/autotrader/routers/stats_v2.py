@@ -102,6 +102,26 @@ class BreakdownResponse(BaseModel):
     filters_applied: dict
 
 
+class FunnelStage(BaseModel):
+    key: Literal[
+        "messages_received", "matched", "passed_risk",
+        "placed", "settled",
+    ]
+    label: str
+    count: int
+
+
+class FunnelDropReason(BaseModel):
+    reason: str
+    count: int
+
+
+class FunnelResponse(BaseModel):
+    stages: list[FunnelStage]
+    drop_reasons: dict[str, list[FunnelDropReason]]
+    filters_applied: dict
+
+
 def _resolve_bucket(
     bucket: Bucket,
     since: datetime,
@@ -563,5 +583,83 @@ async def breakdown_endpoint(  # noqa: PLR0912
     return BreakdownResponse(
         dim=dim,
         rows=[],
+        filters_applied=f.model_dump(mode="json"),
+    )
+
+
+@router.get("/funnel", response_model=FunnelResponse)
+async def funnel_endpoint(
+    session: SessionDep,
+    range: str = Query("24h", alias="range"),
+    custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
+    custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
+    channels: str | None = Query(None),
+    parsers: str | None = Query(None),
+    assets: str | None = Query(None),
+    direction: str | None = Query(None),
+    statuses: str | None = Query(None),
+) -> FunnelResponse:
+    """Five-stage signal funnel: received -> matched -> passed risk
+    -> placed -> settled.
+
+    `messages_received` and `matched` come from the in-memory pipeline-
+    decisions ring on the live Pipeline service, which has a finite
+    retention window (200 entries). Threading that ring through this
+    endpoint requires a Request-scoped dep change that's deferred to
+    Phase 3; in the meantime both stages render as 0 and the
+    frontend panel surfaces this caveat.
+    """
+    f = await _resolve_filters_from_query(
+        range, custom_from, custom_to, channels, parsers, assets,
+        direction, statuses,
+    )
+    rows = (await session.exec(_apply_filters(select(TradeAttempt), f))).all()
+
+    # trade-attempts-derived counts
+    total = len(rows)
+    rejected = sum(1 for row in rows if row.status == "rejected")
+    broker_error = sum(1 for row in rows if row.status == "broker_error")
+    settled_count = sum(1 for row in rows if row.status in ("won", "lost"))
+    passed_risk = total - rejected
+    placed = total - rejected - broker_error
+
+    # decisions-ring-derived counts: zero in Phase 2 — Phase 3 wires
+    # the Pipeline.recent_decisions ring through this endpoint.
+    messages_received = 0
+    matched = 0
+
+    stages = [
+        FunnelStage(key="messages_received", label="Messages received",
+                    count=messages_received),
+        FunnelStage(key="matched", label="Parser matched", count=matched),
+        FunnelStage(key="passed_risk", label="Passed risk gate",
+                    count=passed_risk),
+        FunnelStage(key="placed", label="Placed at broker", count=placed),
+        FunnelStage(key="settled", label="Settled (won + lost)",
+                    count=settled_count),
+    ]
+
+    # Drop reasons: parse rejected rows' `error` column for known
+    # reasons. The risk gate writes consistent strings (e.g.
+    # "daily_loss_cap_exhausted", "concurrency_cap",
+    # "kill_switch_engaged") into `error` so a simple counter works.
+    matched_to_passed_risk: dict[str, int] = {}
+    for row in rows:
+        if row.status == "rejected" and row.error:
+            matched_to_passed_risk[row.error] = (
+                matched_to_passed_risk.get(row.error, 0) + 1
+            )
+    drop_reasons = {
+        "matched_to_passed_risk": [
+            FunnelDropReason(reason=k, count=v)
+            for k, v in sorted(
+                matched_to_passed_risk.items(), key=lambda kv: -kv[1],
+            )
+        ],
+    }
+
+    return FunnelResponse(
+        stages=stages,
+        drop_reasons=drop_reasons,
         filters_applied=f.model_dump(mode="json"),
     )
