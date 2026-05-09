@@ -1,0 +1,21 @@
+# Autotrader-specific ignores (root .gitignore covers .env, .venv, node_modules, *.db)
+
+# Build artefacts
+.next/
+out/
+dist/
+build/
+
+# Runtime data
+data/
+*.session
+*.session-journal
+
+# Brainstorming companion artefacts (mockups, server state)
+.superpowers/
+
+# Lockfiles — KEEP these committed for reproducible builds
+# (uv.lock and bun.lock are the source of truth)
+!uv.lock
+!bun.lock
+!bun.lockb

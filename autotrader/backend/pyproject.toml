@@ -1,0 +1,110 @@
+[project]
+name = "autotrader"
+version = "0.1.0"
+description = "Telegram-driven autotrader for Quotex (pyquotex wrapper)."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "iahmedani" }]
+
+dependencies = [
+    # Web framework + ASGI runtime
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",      # bundles uvloop + httptools + websockets
+
+    # ORM + async DB
+    "sqlmodel>=0.0.22",
+    "aiosqlite>=0.20.0",
+
+    # Validation + settings
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+
+    # Performance
+    "orjson>=3.10.0",                 # FastAPI default JSON encoder
+    "msgspec>=0.18.6",                # internal hot-path structs
+
+    # Security
+    "cryptography>=43.0.0",           # Fernet for at-rest encryption
+    "argon2-cffi>=23.1.0",            # passcode hashing
+
+    # Logging
+    "structlog>=24.4.0",
+
+    # Telegram (Phase 2) — Pyrogram + native crypto extension.
+    # Pyrogram upstream has been quiet; if it lags, swap to the
+    # API-compatible fork `hydrogram` or `pyrofork` here without
+    # touching application code.
+    "pyrogram>=2.0.106",
+    "tgcrypto>=1.2.5",
+
+    # Optional error reporting (Phase 7). Init fires only when
+    # ``SENTRY_DSN`` is set; the SDK lives in the tree so opting in
+    # never requires a rebuild.
+    "sentry-sdk[fastapi]>=2.18.0",
+
+    # Browser-impersonating HTTP backend. Quotex's ``qxbroker.com``
+    # login page sits behind Cloudflare which 403s plain ``httpx``
+    # because the TLS / JA3 fingerprint isn't a real browser.
+    # ``curl_cffi`` ships ``impersonate="chrome120"`` which clears the
+    # gate. Pyquotex picks it up automatically when its
+    # ``ProxyConfig.use_browser_tls`` is set — we wire that on by
+    # default in ``QuotexManager``.
+    "curl_cffi>=0.7.0",
+
+    # Sibling project — wraps the Quotex broker API
+    "pyquotex",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[tool.uv.sources]
+pyquotex = { path = "../..", editable = false }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autotrader"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "I", "B", "UP", "N", "S",
+    "RUF", "ASYNC", "TID", "SIM", "PL",
+]
+ignore = [
+    "PLR0913",  # too many arguments
+    "PLR2004",  # magic numbers
+    "S101",     # assert in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "PLR2004"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["build/", "dist/"]
+
+[[tool.mypy.overrides]]
+module = ["pyrogram.*", "tgcrypto.*", "pyquotex.*"]
+ignore_missing_imports = true

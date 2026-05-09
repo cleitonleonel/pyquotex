@@ -1,0 +1,36 @@
+# Build context starts at the repo root, so this also serves as a filter
+# for everything outside autotrader/backend that shouldn't enter the image.
+
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/.git/
+**/.gitignore
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+**/*.egg-info/
+
+# Don't bake secrets / local data into the image.
+**/.env
+**/.env.*
+!**/.env.example
+**/data/
+**/*.db
+**/session.json
+**/settings/config.ini
+**/.session.pkl
+**/*.session
+**/*.session-journal
+
+# Local docs / images we don't need at runtime.
+**/*.png
+**/*.jpg
+docs/
+examples/
+tests/

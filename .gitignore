@@ -35,6 +35,10 @@ settings/config.ini
 poetry.lock
 package-lock.json
 node_modules/
+# uv at the repo root only — the parent project is Poetry-managed; the
+# autotrader/backend sub-project commits its own uv.lock from inside
+# its own directory tree.
+/uv.lock
 
 # Generated
 .docusaurus
