@@ -46,18 +46,22 @@ export function OverviewKpiHero() {
       : null;
 
   // Trade counts: sum across channels in the today snapshot.
-  const totals = (s.data?.channels ?? []).reduce(
-    (acc, c) => ({
-      total: acc.total + c.total,
-      won: acc.won + c.won,
-      lost: acc.lost + c.lost,
-      rejected: acc.rejected + c.rejected,
-      pending: acc.pending + c.pending,
-    }),
-    { total: 0, won: 0, lost: 0, rejected: 0, pending: 0 },
-  );
-  const settled = totals.won + totals.lost;
-  const winRate = settled > 0 ? totals.won / settled : null;
+  // When the stats query hasn't resolved yet, totals is null so the
+  // KPI cards can render "—" instead of misleading zeros.
+  const totals = s.data
+    ? s.data.channels.reduce(
+        (acc, c) => ({
+          total: acc.total + c.total,
+          won: acc.won + c.won,
+          lost: acc.lost + c.lost,
+          rejected: acc.rejected + c.rejected,
+          pending: acc.pending + c.pending,
+        }),
+        { total: 0, won: 0, lost: 0, rejected: 0, pending: 0 },
+      )
+    : null;
+  const settled = totals ? totals.won + totals.lost : 0;
+  const winRate = totals && settled > 0 ? totals.won / settled : null;
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -84,25 +88,29 @@ export function OverviewKpiHero() {
         value={winRate === null ? "—" : `${Math.round(winRate * 100)}%`}
         valueTone="neutral"
         subtext={
-          settled === 0
-            ? "no settled trades yet today"
-            : `${totals.won} won · ${totals.lost} lost`
+          totals === null
+            ? "stats loading…"
+            : settled === 0
+              ? "no settled trades yet today"
+              : `${totals.won} won · ${totals.lost} lost`
         }
       />
       <KpiCard
         label="Trades"
-        value={String(totals.total)}
+        value={totals === null ? "—" : String(totals.total)}
         valueTone="neutral"
         subtext={
-          totals.total === 0
-            ? "no trades dispatched yet"
-            : [
-                settled && `${settled} settled`,
-                totals.pending && `${totals.pending} open`,
-                totals.rejected && `${totals.rejected} rejected`,
-              ]
-                .filter(Boolean)
-                .join(" · ")
+          totals === null
+            ? "stats loading…"
+            : totals.total === 0
+              ? "no trades dispatched yet"
+              : [
+                  settled && `${settled} settled`,
+                  totals.pending && `${totals.pending} open`,
+                  totals.rejected && `${totals.rejected} rejected`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
         }
       />
       <KpiCard
