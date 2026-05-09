@@ -15,7 +15,11 @@ export default function TradesPage() {
   const trades = useQuery<TradeAttempt[]>({
     queryKey: ["pipeline", "trades"],
     queryFn: () => pipeline.trades(100),
-    refetchInterval: 15_000,
+    // Suppress polling while the WebSocket is live — trade.upserted
+    // frames already drive the cache via use-trade-feed. The 15s poll
+    // only kicks in as a self-healing fall-back when the socket drops.
+    refetchInterval: feedState === "live" ? false : 15_000,
+    staleTime: feedState === "live" ? Infinity : 0,
   });
 
   return (

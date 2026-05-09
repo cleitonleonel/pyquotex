@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { type ParserDecision, pipeline } from "@/lib/api";
+import { ApiError, type ParserDecision, pipeline } from "@/lib/api";
 import { type FeedState } from "@/lib/use-trade-feed";
 import { FeedIndicator } from "./trades-table";
 
@@ -43,12 +43,22 @@ export function DecisionsFeed({ feedState }: { feedState: FeedState }) {
         {decisions.isLoading && (
           <p className="text-sm text-muted-foreground">Loading…</p>
         )}
-        {!decisions.isLoading && (decisions.data ?? []).length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No parsing decisions yet. The next watched-chat message will
-            appear here as it&rsquo;s dispatched.
+        {decisions.isError && (
+          <p className="text-sm text-destructive">
+            Couldn&rsquo;t load decisions:{" "}
+            {decisions.error instanceof ApiError
+              ? decisions.error.message
+              : String(decisions.error)}
           </p>
         )}
+        {!decisions.isLoading &&
+          !decisions.isError &&
+          (decisions.data ?? []).length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No parsing decisions yet. The next watched-chat message will
+              appear here as it&rsquo;s dispatched.
+            </p>
+          )}
         {(decisions.data ?? []).length > 0 && (
           <div className="max-h-[28rem] overflow-auto">
             <table className="w-full text-xs">
