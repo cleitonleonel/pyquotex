@@ -6,7 +6,12 @@ import { FilterBar } from "../_components/filter-bar";
 import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-matrix";
 import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
 import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
+import { PanelLatencyDrift } from "../_components/panel-latency-drift";
+import { PanelMartingaleRoi } from "../_components/panel-martingale-roi";
+import { PanelParserComparison } from "../_components/panel-parser-comparison";
+import { PanelRiskCapUtilisation } from "../_components/panel-risk-cap-utilisation";
 import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
+import { PanelStreakDistribution } from "../_components/panel-streak-distribution";
 
 /**
  * Analytics page — 3 tabs (Performance / Execution / Risk).
@@ -51,6 +56,7 @@ function AnalyticsBody() {
       <Tabs defaultValue="performance" className="space-y-4">
         <TabsList>
           <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="parsers">Parsers</TabsTrigger>
           <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="risk">Risk</TabsTrigger>
         </TabsList>
@@ -59,13 +65,16 @@ function AnalyticsBody() {
           <PerformanceTab />
         </TabsContent>
 
+        <TabsContent value="parsers" className="space-y-4">
+          <ParsersTab />
+        </TabsContent>
+
         <TabsContent value="execution" className="space-y-4">
           <ExecutionTab />
         </TabsContent>
 
         <TabsContent value="risk" className="space-y-4">
-          {/* All risk panels are Phase 3. */}
-          <RiskTabPlaceholder />
+          <RiskTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -81,20 +90,30 @@ function PerformanceTab() {
   );
 }
 
+function ParsersTab() {
+  return (
+    <div className="space-y-4">
+      <PanelParserComparison />
+    </div>
+  );
+}
+
 function ExecutionTab() {
   return (
     <div className="space-y-4">
       <PanelHourHeatmap />
+      <PanelLatencyDrift />
       <PanelSignalFunnel />
     </div>
   );
 }
 
-function RiskTabPlaceholder() {
+function RiskTab() {
   return (
-    <p className="text-sm text-muted-foreground">
-      Risk-cap utilisation, martingale ladder ROI, and streak
-      distribution land in Phase 3.
-    </p>
+    <div className="space-y-4">
+      <PanelRiskCapUtilisation />
+      <PanelMartingaleRoi />
+      <PanelStreakDistribution />
+    </div>
   );
 }

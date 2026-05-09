@@ -60,6 +60,25 @@ export interface TimeseriesResponse {
   filters_applied: Record<string, unknown>;
 }
 
+/**
+ * Aggregate closed-streak summary attached to ``dim=parser`` rows.
+ *
+ * Source of truth: ``compute_parser_streaks()`` in
+ * ``backend/src/autotrader/services/filters.py``. The histogram keys are
+ * stringified ints (length -> count) because JSON preserves them more
+ * cleanly that way; recovery_rate is in [0, 1].
+ *
+ * NOTE: This shape replaces an earlier stubbed array form; the backend
+ * never emitted the array variant — Phase 3 Task 2 (Part A) wired the
+ * aggregate directly. Only ``dim=parser`` rows carry this field.
+ */
+export interface ParserStreaksAggregate {
+  longest_loss: number;
+  histogram: Record<string, number>;
+  recovered_count: number;
+  recovery_rate: number;
+}
+
 export interface BreakdownRow {
   key: number | string;
   label: string;
@@ -76,7 +95,7 @@ export interface BreakdownRow {
   realised_pnl: number;
   committed_stake: number;
   direction_split?: { call: BreakdownRow; put: BreakdownRow };
-  streaks?: { length: number; ended_in: "won" | "lost"; recovered: boolean }[];
+  streaks?: ParserStreaksAggregate;
 }
 
 export interface BreakdownResponse {
@@ -100,6 +119,14 @@ export interface FunnelResponse {
   stages: FunnelStage[];
   drop_reasons: Record<string, { reason: string; count: number }[]>;
   filters_applied: Record<string, unknown>;
+  /**
+   * Discriminator added in Phase 3 Part A Task 3: when ``"ring"`` the
+   * ``messages_received`` and ``matched`` stages are sourced from the
+   * in-process Pipeline.recent_decisions ring buffer (last N entries),
+   * NOT from the trade DB. The UI labels these stages accordingly so
+   * operators don't misread them as range-scoped totals.
+   */
+  messages_received_window?: "ring";
 }
 
 /**
@@ -133,6 +160,29 @@ function buildQuery(
   return params.toString();
 }
 
+/**
+ * Build a minimal range-only query string for endpoints (like
+ * /stats/v2/assets) that intentionally ignore the rest of the filter
+ * state. We don't reuse buildQuery() because it always emits "range="
+ * and we want the same here, but without dragging the unrelated
+ * channels/parsers/direction params along.
+ */
+function buildRangeQuery(params: {
+  range?: RangeLabel;
+  from?: string;
+  to?: string;
+}): string {
+  const qs = new URLSearchParams();
+  qs.set("range", params.range ?? "7d");
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+  return qs.toString();
+}
+
+export interface AssetsResponse {
+  assets: string[];
+}
+
 export const statsV2 = {
   timeseries: (
     filters: FilterParams,
@@ -150,4 +200,13 @@ export const statsV2 = {
 
   funnel: (filters: FilterParams) =>
     api<FunnelResponse>(`/stats/v2/funnel?${buildQuery(filters)}`),
+
+  /**
+   * Distinct assets traded inside the (range, from, to) window. The
+   * endpoint deliberately ignores chats/parsers/direction so the pill
+   * shows the full universe — operators can pivot between channels
+   * without first widening other pills.
+   */
+  assets: (params: { range?: RangeLabel; from?: string; to?: string } = {}) =>
+    api<AssetsResponse>(`/stats/v2/assets?${buildRangeQuery(params)}`),
 };

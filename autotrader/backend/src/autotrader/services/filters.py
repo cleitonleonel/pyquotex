@@ -94,3 +94,45 @@ def parse_csv_str(raw: str | None) -> list[str]:
     if not raw:
         return []
     return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def compute_parser_streaks(outcomes: list[str]) -> dict[str, object]:
+    """Aggregate closed losing streaks for one parser's chronological run.
+
+    A *closed* losing streak is a maximal run of consecutive ``lost``
+    outcomes followed by at least one non-``lost`` outcome. The trailing
+    run with no recovery yet is ignored — its length is not yet final.
+
+    ``recovered_count`` counts streaks whose closing outcome is exactly
+    ``won``; expired/rejected/broker_error close a streak (it's
+    "complete") but do not count as recovery — only an actual win
+    counts as bouncing back.
+
+    Returns a dict with stringified-int histogram keys so JSON survives
+    without numeric-key gymnastics on the wire.
+    """
+    longest = 0
+    histogram: dict[str, int] = {}
+    closed_total = 0
+    recovered = 0
+
+    run = 0
+    for outcome in outcomes:
+        if outcome == "lost":
+            run += 1
+            continue
+        if run > 0:
+            histogram[str(run)] = histogram.get(str(run), 0) + 1
+            longest = max(longest, run)
+            closed_total += 1
+            if outcome == "won":
+                recovered += 1
+            run = 0
+
+    rate = recovered / closed_total if closed_total else 0.0
+    return {
+        "longest_loss": longest,
+        "histogram": histogram,
+        "recovered_count": recovered,
+        "recovery_rate": rate,
+    }

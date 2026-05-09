@@ -7,12 +7,16 @@
  *
  * Source: /stats/v2/funnel
  *
- * Note: messages_received and matched are zero in Phase 2 — the
- * pipeline-decisions ring isn't threaded through the endpoint yet.
- * The empty state surfaces this caveat.
+ * Phase 3: messages_received and matched come from the in-process
+ * Pipeline.recent_decisions ring buffer (last N entries) — NOT from
+ * the trade DB and NOT scoped to the active range/filter pills. The
+ * stage label carries a "last 200 from ring" badge to make this
+ * explicit; passed_risk / placed / settled remain DB-derived and
+ * honour every active filter.
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -34,6 +38,8 @@ export function PanelSignalFunnel() {
   const stages = data?.stages ?? [];
   const maxCount = stages.reduce((m, s) => Math.max(m, s.count), 0);
   const dropReasons = data?.drop_reasons.matched_to_passed_risk ?? [];
+  const ringScoped = data?.messages_received_window === "ring";
+  const ringLabel = new Set(["messages_received", "matched"]);
 
   return (
     <Card>
@@ -41,8 +47,9 @@ export function PanelSignalFunnel() {
         <CardTitle>Signal funnel</CardTitle>
         <CardDescription>
           Where signals leak out. messages_received and matched come
-          from the in-memory pipeline-decisions ring (zeroed in Phase
-          2 — wired in Phase 3); the rest derive from trade attempts.
+          from the in-process decision ring (last N), not the trade
+          DB — so they ignore the range/filter pills. passed_risk,
+          placed, and settled are DB-derived and honour every filter.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -62,8 +69,16 @@ export function PanelSignalFunnel() {
                     className="grid items-center gap-2"
                     style={{ gridTemplateColumns: "140px 1fr 60px" }}
                   >
-                    <span className="text-xs text-muted-foreground">
-                      {s.label}
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span>{s.label}</span>
+                      {ringScoped && ringLabel.has(s.key) && (
+                        <Badge
+                          variant="outline"
+                          className="px-1 py-0 text-[9px] font-normal"
+                        >
+                          last 200 from ring
+                        </Badge>
+                      )}
                     </span>
                     <div className="h-3 rounded bg-muted/30">
                       <div

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import SessionDep
+from autotrader.dependencies import PipelineDep, SessionDep
 from autotrader.models.parser_config import ParserConfig
 from autotrader.models.trade_attempt import TradeAttempt
 from autotrader.models.watched_channel import WatchedChannel
@@ -26,6 +26,7 @@ from autotrader.services.filters import (
     Direction,
     ResolvedFilter,
     TradeStatus,
+    compute_parser_streaks,
     parse_csv_int,
     parse_csv_str,
     resolve_range,
@@ -78,7 +79,12 @@ class BreakdownRow(BaseModel):
     # Per-dim extras attached as needed (DirectionSplit for asset,
     # streaks for parser).
     direction_split: DirectionSplit | None = None
-    streaks: list[dict] | None = None
+    # Streaks roll-up for dim=parser rows: a dict with keys
+    # ``longest_loss`` (int), ``histogram`` (dict[str, int] of
+    # closed-streak length -> count), ``recovered_count`` (int) and
+    # ``recovery_rate`` (float, 0 when no closed streaks). None for
+    # all other dims.
+    streaks: dict | None = None
 
 
 class DirectionSplit(BaseModel):
@@ -120,6 +126,13 @@ class FunnelResponse(BaseModel):
     stages: list[FunnelStage]
     drop_reasons: dict[str, list[FunnelDropReason]]
     filters_applied: dict
+    # Discriminator for the messages_received / matched stage counts:
+    # ``"ring"`` means "last N entries from the in-memory pipeline
+    # decision ring" (bounded by Pipeline._DECISION_RING_SIZE), not
+    # "last <range> of decisions". The frontend uses this to label
+    # the stage truthfully — it should not imply the count scales
+    # with the user's selected range.
+    messages_received_window: Literal["ring"] = "ring"
 
 
 def _resolve_bucket(
@@ -443,7 +456,7 @@ async def timeseries_endpoint(  # noqa: PLR0912, PLR0915
 
 
 @router.get("/breakdown", response_model=BreakdownResponse)
-async def breakdown_endpoint(  # noqa: PLR0912
+async def breakdown_endpoint(  # noqa: PLR0912, PLR0915
     session: SessionDep,
     dim: Dim = Query(...),  # noqa: B008
     range: str = Query("24h", alias="range"),
@@ -491,11 +504,20 @@ async def breakdown_endpoint(  # noqa: PLR0912
             grouped_p.setdefault(row.parser_config_id, []).append(row)
         out_p: list[BreakdownRow] = []
         for parser_id, attempts in grouped_p.items():
-            out_p.append(_build_breakdown_row(
+            base = _build_breakdown_row(
                 key=parser_id,
                 label=names.get(parser_id, f"parser {parser_id}"),
                 attempts=attempts,
-            ))
+            )
+            # Streaks need chronological order — the SQL query has no
+            # ORDER BY so attempts arrive in insertion order; sort
+            # explicitly so streak boundaries match wall-clock reality
+            # rather than DB-page layout.
+            ordered = sorted(attempts, key=lambda a: a.received_at)
+            base.streaks = compute_parser_streaks(
+                [a.status for a in ordered],
+            )
+            out_p.append(base)
         out_p.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
         return BreakdownResponse(
             dim="parser",
@@ -587,9 +609,49 @@ async def breakdown_endpoint(  # noqa: PLR0912
     )
 
 
+@router.get("/assets")
+async def assets_endpoint(
+    session: SessionDep,
+    range: str = Query("24h", alias="range"),
+    custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
+    custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
+) -> dict[str, list[str]]:
+    """Distinct asset symbols traded inside the time window.
+
+    Powers the asset filter pill on the frontend. Deliberately does
+    not accept chat/parser/direction filters: the pill must show the
+    full universe of assets so an operator can pivot across channels
+    without first clearing the other filter pills. Sorted case-
+    insensitively for stable UI ordering.
+
+    Pydantic parses ISO datetimes without offset as naive — normalize
+    to UTC before passing to ``resolve_range`` so the comparison with
+    ``received_at`` (always UTC) doesn't TypeError.
+    """
+    if custom_from is not None and custom_from.tzinfo is None:
+        custom_from = custom_from.replace(tzinfo=UTC)
+    if custom_to is not None and custom_to.tzinfo is None:
+        custom_to = custom_to.replace(tzinfo=UTC)
+    since, until = resolve_range(
+        range,
+        now=datetime.now(UTC),
+        custom_from=custom_from,
+        custom_to=custom_to,
+    )
+    stmt = (
+        select(TradeAttempt.asset)
+        .where(TradeAttempt.received_at >= since)
+        .where(TradeAttempt.received_at < until)
+        .distinct()
+    )
+    rows = (await session.exec(stmt)).all()
+    return {"assets": sorted({r for r in rows if r}, key=str.lower)}
+
+
 @router.get("/funnel", response_model=FunnelResponse)
 async def funnel_endpoint(
     session: SessionDep,
+    pipeline: PipelineDep,
     range: str = Query("24h", alias="range"),
     custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
     custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
@@ -602,12 +664,15 @@ async def funnel_endpoint(
     """Five-stage signal funnel: received -> matched -> passed risk
     -> placed -> settled.
 
-    `messages_received` and `matched` come from the in-memory pipeline-
-    decisions ring on the live Pipeline service, which has a finite
-    retention window (200 entries). Threading that ring through this
-    endpoint requires a Request-scoped dep change that's deferred to
-    Phase 3; in the meantime both stages render as 0 and the
-    frontend panel surfaces this caveat.
+    The downstream three stages (passed_risk / placed / settled) come
+    from ``trade_attempts`` and honour the ``range`` window. The two
+    upstream stages (messages_received / matched) come from the live
+    ``Pipeline.recent_decisions`` ring — a bounded in-memory deque
+    (``Pipeline._DECISION_RING_SIZE``, currently 200). Because the
+    ring is bounded and lives in process memory, those counts are
+    "last N decisions" not "last <range> of decisions"; the
+    ``messages_received_window`` field on the response surfaces that
+    distinction so the frontend can label the stage honestly.
     """
     f = await _resolve_filters_from_query(
         range, custom_from, custom_to, channels, parsers, assets,
@@ -615,7 +680,7 @@ async def funnel_endpoint(
     )
     rows = (await session.exec(_apply_filters(select(TradeAttempt), f))).all()
 
-    # trade-attempts-derived counts
+    # trade-attempts-derived counts (downstream three stages)
     total = len(rows)
     rejected = sum(1 for row in rows if row.status == "rejected")
     broker_error = sum(1 for row in rows if row.status == "broker_error")
@@ -623,10 +688,13 @@ async def funnel_endpoint(
     passed_risk = total - rejected
     placed = total - rejected - broker_error
 
-    # decisions-ring-derived counts: zero in Phase 2 — Phase 3 wires
-    # the Pipeline.recent_decisions ring through this endpoint.
-    messages_received = 0
-    matched = 0
+    # decisions-ring-derived counts (upstream two stages). Snapshot
+    # the ring once so the two derived counts agree on the same view —
+    # the property returns a fresh list, but a concurrent dispatch
+    # could otherwise grow it between the two reads.
+    ring = pipeline.recent_decisions
+    messages_received = len(ring)
+    matched = sum(1 for d in ring if d.get("outcome") == "matched")
 
     stages = [
         FunnelStage(key="messages_received", label="Messages received",

@@ -6,3 +6,9 @@ out/
 .env*.local
 next-env.d.ts.bak
 *.tsbuildinfo
+
+# Playwright (Phase 3 Task 11)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

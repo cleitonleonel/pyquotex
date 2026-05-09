@@ -1,37 +1,46 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+
 import {
   Card,
   CardContent,
   CardHeader,
 } from "@/components/ui/card";
-import {
-  type RiskOverview,
-  type StatsOverview,
-  risk,
-  stats,
-} from "@/lib/api";
+import { type RiskOverview, risk } from "@/lib/api";
+import { statsV2 } from "@/lib/api-stats-v2";
+import { useFilters } from "@/lib/use-filters";
 
 /**
- * Phase 1 KPI hero. Reads what already exists:
- *   - /risk/overview for today's budget + caps (P&L, risk-budget-left)
- *   - /stats/overview for today's per-channel summary (rolled up to
- *     dashboard-wide trade/win count)
+ * KPI hero. Reads from:
+ *   - /risk/overview  for today's budget + caps (P&L, risk-budget-left)
+ *   - /stats/v2/breakdown?dim=channel  for the trade-count / win-rate
+ *     summary, rolled up across channels and honouring the global
+ *     filter bar (range, channels, parsers, assets, direction, statuses).
  *
- * Deltas are intentionally absent in Phase 1 — there's no historical
- * comparison endpoint yet. The card layout already has a slot for
- * them so Phase 2 can drop the values in without touching markup.
+ * The migration off /stats/overview (Phase 3 Task 2) means the trades
+ * + win-rate tiles now respect the filter pills, while the P&L and
+ * risk-budget tiles still reflect the *today UTC* risk-engine state —
+ * those numbers are about the bot's live risk posture, not the
+ * window the operator is browsing, so they intentionally stay
+ * filter-independent.
+ *
+ * Deltas are intentionally absent — there's no historical comparison
+ * endpoint yet. The card layout has a slot for them so a future phase
+ * can drop the values in without touching markup.
  */
 export function OverviewKpiHero() {
+  const { filters } = useFilters();
+
   const r = useQuery<RiskOverview>({
     queryKey: ["risk", "overview"],
     queryFn: risk.overview,
     refetchInterval: 10_000,
   });
-  const s = useQuery<StatsOverview>({
-    queryKey: ["stats", "overview"],
-    queryFn: stats.overview,
+  const breakdown = useQuery({
+    queryKey: ["overview-hero", "channel-breakdown", filters],
+    queryFn: () => statsV2.breakdown(filters, "channel"),
     refetchInterval: 15_000,
   });
 
@@ -45,21 +54,23 @@ export function OverviewKpiHero() {
       ? Math.max(0, cap - Math.abs(Math.min(0, realised)))
       : null;
 
-  // Trade counts: sum across channels in the today snapshot.
-  // When the stats query hasn't resolved yet, totals is null so the
-  // KPI cards can render "—" instead of misleading zeros.
-  const totals = s.data
-    ? s.data.channels.reduce(
-        (acc, c) => ({
-          total: acc.total + c.total,
-          won: acc.won + c.won,
-          lost: acc.lost + c.lost,
-          rejected: acc.rejected + c.rejected,
-          pending: acc.pending + c.pending,
-        }),
-        { total: 0, won: 0, lost: 0, rejected: 0, pending: 0 },
-      )
-    : null;
+  // Roll the per-channel breakdown rows up to dashboard-wide totals.
+  // While the query is pending, totals stays null so the cards render
+  // "—" instead of misleading zeros.
+  const totals = useMemo(() => {
+    if (!breakdown.data) return null;
+    return breakdown.data.rows.reduce(
+      (acc, row) => ({
+        total: acc.total + row.total,
+        won: acc.won + row.won,
+        lost: acc.lost + row.lost,
+        rejected: acc.rejected + row.rejected,
+        pending: acc.pending + row.pending,
+      }),
+      { total: 0, won: 0, lost: 0, rejected: 0, pending: 0 },
+    );
+  }, [breakdown.data]);
+
   const settled = totals ? totals.won + totals.lost : 0;
   const winRate = totals && settled > 0 ? totals.won / settled : null;
 
@@ -91,7 +102,7 @@ export function OverviewKpiHero() {
           totals === null
             ? "stats loading…"
             : settled === 0
-              ? "no settled trades yet today"
+              ? "no settled trades in window"
               : `${totals.won} won · ${totals.lost} lost`
         }
       />
@@ -103,7 +114,7 @@ export function OverviewKpiHero() {
           totals === null
             ? "stats loading…"
             : totals.total === 0
-              ? "no trades dispatched yet"
+              ? "no trades in window"
               : [
                   settled && `${settled} settled`,
                   totals.pending && `${totals.pending} open`,
