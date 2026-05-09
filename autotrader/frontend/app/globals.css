@@ -25,6 +25,21 @@
     --input: 240 5.9% 90%;
     --ring: 240 5.9% 10%;
     --radius: 0.5rem;
+
+    /* New semantic state tokens (Phase 1). */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 98%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 98%;
+
+    /* Chart palette — Recharts series colors (Phase 2). */
+    --chart-1: 142 71% 45%;
+    --chart-2: 217 91% 60%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
   }
 
   .dark {
@@ -47,6 +62,21 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+
+    /* New semantic state tokens (Phase 1). */
+    --success: 142 71% 50%;
+    --success-foreground: 240 10% 5%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 240 10% 5%;
+    --info: 217 91% 65%;
+    --info-foreground: 240 10% 5%;
+
+    /* Chart palette (Phase 2). */
+    --chart-1: 142 71% 50%;
+    --chart-2: 217 91% 65%;
+    --chart-3: 38 92% 55%;
+    --chart-4: 280 65% 65%;
+    --chart-5: 340 75% 60%;
   }
 }
 
@@ -71,6 +101,17 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --radius: var(--radius);
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
 }
 
 body {
