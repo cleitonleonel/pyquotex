@@ -6,6 +6,7 @@ import { FilterBar } from "../_components/filter-bar";
 import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-matrix";
 import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
 import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
+import { PanelLatencyDrift } from "../_components/panel-latency-drift";
 import { PanelParserComparison } from "../_components/panel-parser-comparison";
 import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
 
@@ -99,6 +100,7 @@ function ExecutionTab() {
   return (
     <div className="space-y-4">
       <PanelHourHeatmap />
+      <PanelLatencyDrift />
       <PanelSignalFunnel />
     </div>
   );
