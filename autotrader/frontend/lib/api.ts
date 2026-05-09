@@ -526,44 +526,15 @@ export const risk = {
 };
 
 // ---------------------------------------------------------------------------
-// Stats + live trade feed (Phase 6)
+// Live trade feed (Phase 6)
+//
+// The legacy /stats/overview typed client and its supporting types
+// (StatsOverview, ChannelStats, LatencyStats, LatencyTile) were removed
+// in Phase 3 Task 10 — every dashboard surface now reads from
+// /stats/v2/* via lib/api-stats-v2.ts which honours the global filter
+// bar. The backend route still exists for ad-hoc curl use but no
+// frontend code path should resurrect a typed client for it.
 // ---------------------------------------------------------------------------
-
-export interface ChannelStats {
-  chat_id: number;
-  title: string;
-  total: number;
-  won: number;
-  lost: number;
-  rejected: number;
-  broker_error: number;
-  expired: number;
-  pending: number;
-  win_rate: number | null;
-  realised_pnl: number;
-  committed_stake: number;
-}
-
-export interface LatencyTile {
-  count: number;
-  p50_ms: number | null;
-  p99_ms: number | null;
-}
-
-export interface LatencyStats {
-  signal_to_place: LatencyTile;
-  place_to_settle: LatencyTile;
-}
-
-export interface StatsOverview {
-  channels: ChannelStats[];
-  latency: LatencyStats;
-  window: "today_utc";
-}
-
-export const stats = {
-  overview: () => api<StatsOverview>("/stats/overview"),
-};
 
 /**
  * WebSocket URL for the live trade feed. Uses ``ws://`` for local dev
