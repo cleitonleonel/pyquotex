@@ -41,5 +41,23 @@ class GlobalSettings(SQLModel, table=True):
     daily_max_stake: float = Field(default=0.0, nullable=False)
     max_concurrent_trades: int = Field(default=0, nullable=False)
 
+    # ------------------------------------------------------------------
+    # Admin Telegram bot (Phase 8).
+    # ------------------------------------------------------------------
+    # The Telegram user_id of the bound admin. ``None`` = unbound; the
+    # first /start the bot receives writes the sender's user_id here,
+    # and from that point only that user_id can issue commands. Cleared
+    # by /unbind (from the bot or the dashboard) so the next /start can
+    # re-bind.
+    admin_telegram_user_id: int | None = Field(default=None, nullable=True)
+
+    # Per-class notification toggles. Operators can mute a single class
+    # via ``/notify <class> off`` from the bot. Defaults to ON for all
+    # four so a fresh bind immediately sees the firehose.
+    admin_notify_placed: bool = Field(default=True, nullable=False)
+    admin_notify_settled: bool = Field(default=True, nullable=False)
+    admin_notify_risk_rejected: bool = Field(default=True, nullable=False)
+    admin_notify_system_error: bool = Field(default=True, nullable=False)
+
     created_at: datetime = Field(default_factory=utc_now, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)
