@@ -115,3 +115,51 @@ def test_parse_csv_str_handles_empty_and_whitespace() -> None:
     assert parse_csv_str("EURUSD,GBPJPY") == ["EURUSD", "GBPJPY"]
     assert parse_csv_str(" EURUSD , GBPJPY ") == ["EURUSD", "GBPJPY"]
     assert parse_csv_str("") == []
+
+
+@pytest.mark.asyncio
+async def test_phase2_indices_are_actually_used() -> None:
+    """EXPLAIN QUERY PLAN should show our composite indices in use
+    for the typical received_at range scan (the hot path for all v2
+    endpoints).  We query with received_at bounds only so SQLite must
+    use ix_trade_attempts_received_chat; adding an equality filter on
+    chat_id lets SQLite substitute the lighter single-column index on
+    empty tables."""
+    import autotrader.models  # noqa: PLC0415, F401 — registers models on SQLModel.metadata
+    from autotrader.db import _create_indices, _migrate_in_place  # noqa: PLC0415
+
+    db_url = os.environ["AUTOTRADER_DB_URL"]
+    engine = create_async_engine(db_url, future=True)
+    try:
+        async with engine.begin() as conn:
+            await _migrate_in_place(conn)
+            await conn.run_sync(SQLModel.metadata.create_all)
+            await _create_indices(conn)
+
+        async with async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False,
+        )() as s:
+            # Use a received_at-only range scan so SQLite is forced to
+            # use ix_trade_attempts_received_chat (no equality column
+            # for the chat_id single-column index to win on).
+            result = await s.exec(
+                text(
+                    "EXPLAIN QUERY PLAN "
+                    "SELECT * FROM trade_attempts "
+                    "WHERE received_at >= '2026-05-01' "
+                    "  AND received_at < '2026-05-09'",
+                ),
+            )
+            plan = " ".join(str(r) for r in result.all())
+    finally:
+        await engine.dispose()
+    # SQLite may pick either of the two received_at-leading composite
+    # indices (received_chat or received_parser) — both cover the hot
+    # path equally well. Assert that at least one is used.
+    uses_our_index = (
+        "ix_trade_attempts_received_chat" in plan
+        or "ix_trade_attempts_received_parser" in plan
+    )
+    assert uses_our_index, (
+        f"expected a Phase-2 composite index in the query plan, got: {plan}"
+    )
