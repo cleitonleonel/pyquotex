@@ -11,6 +11,7 @@ import { PanelMartingaleRoi } from "../_components/panel-martingale-roi";
 import { PanelParserComparison } from "../_components/panel-parser-comparison";
 import { PanelRiskCapUtilisation } from "../_components/panel-risk-cap-utilisation";
 import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
+import { PanelStreakDistribution } from "../_components/panel-streak-distribution";
 
 /**
  * Analytics page — 3 tabs (Performance / Execution / Risk).
@@ -112,6 +113,7 @@ function RiskTab() {
     <div className="space-y-4">
       <PanelRiskCapUtilisation />
       <PanelMartingaleRoi />
+      <PanelStreakDistribution />
     </div>
   );
 }
