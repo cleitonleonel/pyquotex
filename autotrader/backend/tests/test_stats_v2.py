@@ -495,3 +495,119 @@ async def test_breakdown_channel_sort_by_total_desc(
     )
     rows = r.json()["rows"]
     assert [row["key"] for row in rows] == [2, 1]
+
+
+async def test_breakdown_parser_label_from_config(
+    async_client: httpx.AsyncClient,
+) -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        s.add(ParserConfig(
+            id=42, chat_id=12345, name="scalp-v2", priority=100,
+            parser_type="template", parser_config_json="{}",
+            timezone="UTC", timezone_offset_minutes=0,
+            asset_aliases_json="{}", aggregate_window_seconds=0,
+            default_stake=1.0, default_duration_seconds=60,
+            trade_mode="auto", martingale_enabled=False,
+            martingale_multiplier=2.0, martingale_max_streak=5,
+            martingale_reset_on_win=True, enabled=True,
+        ))
+        await s.commit()
+
+    headers = await _login(async_client)
+    await _seed_attempts(
+        [{"parser_config_id": 42, "status": "won", "profit": 1.0,
+          "received_at": datetime.now(UTC) - timedelta(hours=1)}],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "parser", "range": "24h"},
+        headers=headers,
+    )
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["key"] == 42
+    assert rows[0]["label"] == "scalp-v2"
+
+
+async def test_breakdown_asset_with_direction_split(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Asset dim attaches a direction_split sub-stats dict per row."""
+    headers = await _login(async_client)
+    now = datetime.now(UTC)
+    await _seed_attempts(
+        [
+            {"asset": "EURUSD", "direction": "call", "status": "won", "profit": 1.0,
+             "received_at": now - timedelta(hours=1)},
+            {"asset": "EURUSD", "direction": "call", "status": "won", "profit": 1.0,
+             "received_at": now - timedelta(hours=1)},
+            {"asset": "EURUSD", "direction": "put", "status": "lost", "profit": -1.0,
+             "received_at": now - timedelta(hours=1)},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "asset", "range": "24h"},
+        headers=headers,
+    )
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["key"] == "EURUSD"
+    assert row["label"] == "EURUSD"
+    split = row["direction_split"]
+    assert split["call"]["won"] == 2
+    assert split["call"]["lost"] == 0
+    assert split["put"]["won"] == 0
+    assert split["put"]["lost"] == 1
+
+
+async def test_breakdown_direction_two_rows(
+    async_client: httpx.AsyncClient,
+) -> None:
+    headers = await _login(async_client)
+    now = datetime.now(UTC)
+    await _seed_attempts(
+        [
+            {"direction": "call", "status": "won", "profit": 1.0,
+             "received_at": now - timedelta(hours=1)},
+            {"direction": "put", "status": "lost", "profit": -1.0,
+             "received_at": now - timedelta(hours=1)},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "direction", "range": "24h"},
+        headers=headers,
+    )
+    keys = {row["key"] for row in r.json()["rows"]}
+    assert keys == {"call", "put"}
+
+
+async def test_breakdown_hour_of_week_uses_weekday_hour_key(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """key = weekday * 24 + hour, where Monday=0."""
+    headers = await _login(async_client)
+    # Monday 2026-05-04 03:30 UTC -> weekday=0, hour=3 -> key=3
+    monday_03 = datetime(2026, 5, 4, 3, 30, 0, tzinfo=UTC)
+    # Friday 2026-05-08 14:00 UTC -> weekday=4, hour=14 -> key=110
+    friday_14 = datetime(2026, 5, 8, 14, 0, 0, tzinfo=UTC)
+    await _seed_attempts(
+        [
+            {"status": "won", "profit": 1.0, "received_at": monday_03},
+            {"status": "lost", "profit": -1.0, "received_at": friday_14},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "hour_of_week", "range": "30d"},
+        headers=headers,
+    )
+    rows = r.json()["rows"]
+    keys = {row["key"] for row in rows}
+    assert 3 in keys
+    assert 110 in keys

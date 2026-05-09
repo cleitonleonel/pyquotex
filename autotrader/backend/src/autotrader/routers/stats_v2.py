@@ -406,7 +406,7 @@ async def timeseries_endpoint(  # noqa: PLR0912, PLR0915
 
 
 @router.get("/breakdown", response_model=BreakdownResponse)
-async def breakdown_endpoint(
+async def breakdown_endpoint(  # noqa: PLR0912
     session: SessionDep,
     dim: Dim = Query(...),  # noqa: B008
     range: str = Query("24h", alias="range"),
@@ -447,8 +447,104 @@ async def breakdown_endpoint(
             filters_applied=f.model_dump(mode="json"),
         )
 
+    if dim == "parser":
+        from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+        configs = (await session.exec(select(ParserConfig))).all()
+        names = {c.id: c.name for c in configs if c.id is not None}
+        grouped_p: dict[int, list[TradeAttempt]] = {}
+        for row in rows:
+            grouped_p.setdefault(row.parser_config_id, []).append(row)
+        out_p: list[BreakdownRow] = []
+        for parser_id, attempts in grouped_p.items():
+            out_p.append(_build_breakdown_row(
+                key=parser_id,
+                label=names.get(parser_id, f"parser {parser_id}"),
+                attempts=attempts,
+            ))
+        out_p.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
+        return BreakdownResponse(
+            dim="parser",
+            rows=out_p,
+            filters_applied=f.model_dump(mode="json"),
+        )
 
-    # Other dims land in Task 8.
+    if dim == "asset":
+        # Asset rows include a direction_split sub-stats dict so the
+        # asset*direction matrix panel can read both polarities in one
+        # round-trip.
+        grouped_a: dict[str, list[TradeAttempt]] = {}
+        for row in rows:
+            grouped_a.setdefault(row.asset, []).append(row)
+        out_a: list[BreakdownRow] = []
+        for asset_sym, attempts in grouped_a.items():
+            base = _build_breakdown_row(
+                key=asset_sym, label=asset_sym, attempts=attempts,
+            )
+            calls = [a for a in attempts if a.direction == "call"]
+            puts = [a for a in attempts if a.direction == "put"]
+            base.direction_split = {
+                "call": _build_breakdown_row(
+                    key=asset_sym, label=asset_sym, attempts=calls,
+                ).model_dump(),
+                "put": _build_breakdown_row(
+                    key=asset_sym, label=asset_sym, attempts=puts,
+                ).model_dump(),
+            }
+            out_a.append(base)
+        out_a.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
+        return BreakdownResponse(
+            dim="asset",
+            rows=out_a,
+            filters_applied=f.model_dump(mode="json"),
+        )
+
+    if dim == "direction":
+        grouped_d: dict[str, list[TradeAttempt]] = {"call": [], "put": []}
+        for row in rows:
+            if row.direction in grouped_d:
+                grouped_d[row.direction].append(row)
+        out_d: list[BreakdownRow] = []
+        for direction_key in ("call", "put"):
+            attempts = grouped_d[direction_key]
+            if not attempts:
+                continue
+            out_d.append(_build_breakdown_row(
+                key=direction_key,
+                label=direction_key.upper(),
+                attempts=attempts,
+            ))
+        return BreakdownResponse(
+            dim="direction",
+            rows=out_d,
+            filters_applied=f.model_dump(mode="json"),
+        )
+
+    if dim == "hour_of_week":
+        # 168 cells (7 days * 24 hours). key = weekday * 24 + hour
+        # where Monday = 0.
+        grouped_h: dict[int, list[TradeAttempt]] = {}
+        for row in rows:
+            ts = _as_utc(row.received_at)
+            key = ts.weekday() * 24 + ts.hour
+            grouped_h.setdefault(key, []).append(row)
+        out_h: list[BreakdownRow] = []
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for key, attempts in grouped_h.items():
+            wd = key // 24
+            hr = key % 24
+            out_h.append(_build_breakdown_row(
+                key=key,
+                label=f"{weekday_names[wd]} {hr:02d}:00",
+                attempts=attempts,
+            ))
+        out_h.sort(key=lambda r: r.key)  # type: ignore[arg-type, return-value]
+        return BreakdownResponse(
+            dim="hour_of_week",
+            rows=out_h,
+            filters_applied=f.model_dump(mode="json"),
+        )
+
+    # Unreachable: FastAPI validates dim against the Literal type.
     return BreakdownResponse(
         dim=dim,
         rows=[],
