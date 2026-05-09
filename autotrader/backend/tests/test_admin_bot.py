@@ -91,3 +91,70 @@ def test_migration_adds_admin_columns_to_legacy_global_settings(
     assert "admin_notify_settled" in cols
     assert "admin_notify_risk_rejected" in cols
     assert "admin_notify_system_error" in cols
+
+
+def test_admin_bot_no_token_is_no_op() -> None:
+    """Without ``TELEGRAM_BOT_TOKEN`` set, ``start()`` must complete
+    silently and leave the bot in ``state="disabled"``. A missing token
+    is the most common 'I haven't set up the bot yet' state — it
+    must not crash startup."""
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+
+    bot = AdminBot(bot_token=None)
+
+    async def _run() -> None:
+        await bot.start()
+        assert bot.status().state == "disabled"
+        assert bot.status().bound_user_id is None
+        await bot.stop()  # idempotent on disabled
+
+    asyncio.new_event_loop().run_until_complete(_run())
+
+
+def test_admin_bot_starts_with_fake_client() -> None:
+    """When a token *and* a client factory are provided, ``start()``
+    constructs the client, calls ``start()`` on it, and reports
+    ``state="running"``."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(
+        bot_token="123:abc",
+        client_factory=lambda token: fake,
+    )
+
+    async def _run() -> None:
+        await bot.start()
+        assert fake.started is True
+        assert bot.status().state == "running"
+        await bot.stop()
+        assert fake.started is False
+        assert bot.status().state == "stopped"
+
+    asyncio.new_event_loop().run_until_complete(_run())
+
+
+def test_admin_bot_start_failure_sets_error_state() -> None:
+    """If ``client.start()`` raises (bad token, network) the bot ends
+    in ``state="error"`` with ``last_error`` populated, but no exception
+    propagates to the caller — startup must not crash the app."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+
+    class _BoomFake(FakePyrogramBot):
+        async def start(self) -> None:  # type: ignore[override]
+            raise RuntimeError("invalid token")
+
+    bot = AdminBot(
+        bot_token="123:abc",
+        client_factory=lambda token: _BoomFake(),
+    )
+
+    async def _run() -> None:
+        await bot.start()
+        st = bot.status()
+        assert st.state == "error"
+        assert "invalid token" in (st.last_error or "")
+
+    asyncio.new_event_loop().run_until_complete(_run())
