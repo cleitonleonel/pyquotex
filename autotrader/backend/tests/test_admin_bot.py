@@ -502,6 +502,10 @@ def _reset_global_settings_flags() -> None:
                 gs.daily_max_stake = 0.0
                 gs.max_concurrent_trades = 0
                 gs.default_stake = 1.0
+                gs.admin_notify_placed = True
+                gs.admin_notify_settled = True
+                gs.admin_notify_risk_rejected = True
+                gs.admin_notify_system_error = True
                 s.add(gs)
                 await s.commit()
 
@@ -828,3 +832,68 @@ def test_caps_invalid_subcommand_replies_usage() -> None:
 
     text = asyncio.new_event_loop().run_until_complete(_run())
     assert "usage" in text.lower() or "loss" in text.lower()
+
+
+def test_notify_settled_off_persists() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> bool:
+        await bot.start()
+        await fake.fire_message(555, "/notify settled off")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.admin_notify_settled if gs else True
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) is False
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_notify_invalid_class_replies_usage() -> None:
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/notify pancakes off")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    assert "usage" in text.lower() or "placed" in text
+
+
+def test_unbind_requires_confirm_then_clears() -> None:
+    """`/unbind` first sends a confirm keyboard. The confirm callback
+    clears ``admin_telegram_user_id`` AND ``bot.bound_user_id``."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services import admin_bot_state  # noqa: PLC0415
+
+    # We use _make_bound_bot_with_callbacks because the unbind flow
+    # requires the callback hook to fire confirm:unbind.
+    bot, fake = _make_bound_bot_with_callbacks()
+    # Stash the bot in the resolver so the confirm handler can find it.
+    admin_bot_state.attach(pipeline=None, quotex=None, admin_bot=bot)
+
+    async def _run() -> tuple[int | None, int | None]:
+        await bot.start()
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            s.add(gs); await s.commit()
+        await fake.fire_message(555, "/unbind")
+        # Click confirm.
+        await fake.fire_callback(555, "confirm:unbind")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return (
+                gs.admin_telegram_user_id if gs else None,
+                bot.status().bound_user_id,
+            )
+
+    persisted, in_memory = asyncio.new_event_loop().run_until_complete(_run())
+    assert persisted is None
+    assert in_memory is None

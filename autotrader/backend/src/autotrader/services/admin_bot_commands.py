@@ -287,14 +287,18 @@ async def handle_streaks(_message: Any, _bot: Any) -> Reply:
 
 
 def _parse_on_off(text: str) -> bool | None:
-    """Parse ``on`` / ``off`` (case-insensitive) from the command body.
-    Returns None when neither token is found — caller replies with usage."""
+    """Parse ``on`` / ``off`` (case-insensitive) from the LAST token of
+    the command body. Looking at the last token (rather than the second)
+    lets the same helper serve both two-arg commands ("/killswitch on")
+    and three-arg commands ("/notify settled off"). Returns None when
+    neither token matches — caller replies with usage."""
     parts = text.lower().split()
     if len(parts) < 2:
         return None
-    if parts[1] in ("on", "true", "1", "engage"):
+    last = parts[-1]
+    if last in ("on", "true", "1", "engage"):
         return True
-    if parts[1] in ("off", "false", "0", "disengage"):
+    if last in ("off", "false", "0", "disengage"):
         return False
     return None
 
@@ -583,6 +587,77 @@ async def handle_stake(message: Any, _bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# /notify <class> on|off
+# --------------------------------------------------------------------------
+
+
+_NOTIFY_FIELDS = {
+    "placed": "admin_notify_placed",
+    "settled": "admin_notify_settled",
+    "risk_rejected": "admin_notify_risk_rejected",
+    "system_error": "admin_notify_system_error",
+}
+
+
+async def handle_notify(message: Any, _bot: Any) -> Reply:
+    parts = message.text.split()
+    if len(parts) < 3:
+        return Reply(
+            text=(
+                "Usage: /notify <class> on|off\n"
+                "Classes: placed, settled, risk_rejected, system_error"
+            ),
+        )
+    cls = parts[1].lower()
+    field = _NOTIFY_FIELDS.get(cls)
+    if field is None:
+        return Reply(
+            text=(
+                f"Unknown class '{cls}'. "
+                "Use: placed, settled, risk_rejected, system_error"
+            ),
+        )
+    state = _parse_on_off(message.text)
+    if state is None:
+        return Reply(text="Usage: /notify <class> on|off")
+    await _set_settings_flag(field, state)
+    return Reply(
+        text=f"Notify *{cls}* is now *{'on' if state else 'off'}*.",
+    )
+
+
+# --------------------------------------------------------------------------
+# /unbind — requires confirm
+# --------------------------------------------------------------------------
+
+
+async def handle_unbind(_message: Any, _bot: Any) -> Reply:
+    return Reply(
+        text=(
+            "Release admin binding?\n"
+            "After unbind, the next /start from any user re-binds."
+        ),
+        markup=_confirm_keyboard("unbind"),
+    )
+
+
+async def _confirm_unbind() -> str:
+    async with AsyncSessionLocal() as session:
+        gs = await session.get(GlobalSettings, 1)
+        if gs is not None:
+            gs.admin_telegram_user_id = None
+            gs.updated_at = utc_now()
+            await session.commit()
+    # Clear in-memory binding too — both sources of truth must move
+    # together so the next /start isn't rejected by stale in-memory state.
+    from autotrader.services.admin_bot_state import get_admin_bot  # noqa: PLC0415
+    bot = get_admin_bot()
+    if bot is not None:
+        bot.set_bound_user_id(None)
+    return "Unbound."
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -602,6 +677,8 @@ COMMANDS: dict[str, Handler] = {
     "/mode": handle_mode,
     "/caps": handle_caps,
     "/stake": handle_stake,
+    "/notify": handle_notify,
+    "/unbind": handle_unbind,
     "/channels": handle_channels,
     "/channel": handle_channel_detail,
     "/parsers": handle_parsers,
@@ -725,6 +802,7 @@ async def _confirm_mode_real() -> str:
 
 CONFIRM_HANDLERS: dict[str, ConfirmHandler] = {
     "mode:real": _confirm_mode_real,
+    "unbind": _confirm_unbind,
 }
 
 
