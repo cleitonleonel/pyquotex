@@ -119,12 +119,14 @@ def test_parse_csv_str_handles_empty_and_whitespace() -> None:
 
 @pytest.mark.asyncio
 async def test_phase2_indices_are_actually_used() -> None:
-    """EXPLAIN QUERY PLAN should show our composite indices in use
-    for the typical received_at range scan (the hot path for all v2
-    endpoints).  We query with received_at bounds only so SQLite must
-    use ix_trade_attempts_received_chat; adding an equality filter on
-    chat_id lets SQLite substitute the lighter single-column index on
-    empty tables."""
+    """EXPLAIN QUERY PLAN should show one of our composite indices in
+    use for the typical received_at range scan (the hot path for all
+    v2 endpoints). We query with received_at bounds only; SQLite must
+    choose one of the two received_at-leading composite indices
+    (ix_trade_attempts_received_chat or ix_trade_attempts_received_parser)
+    since the single-column chat_id index can't satisfy a range
+    predicate alone. Either composite is correct — both cover the
+    range scan equally well."""
     import autotrader.models  # noqa: PLC0415, F401 — registers models on SQLModel.metadata
     from autotrader.db import _create_indices, _migrate_in_place  # noqa: PLC0415
 
