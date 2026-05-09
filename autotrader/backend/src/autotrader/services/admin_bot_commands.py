@@ -381,6 +381,149 @@ async def handle_mode(message: Any, _bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# /channels and /parsers — list with detail-drilldown for inline-keyboard toggles
+# --------------------------------------------------------------------------
+
+
+def _row_keyboard(callback_data_prefix: str, target_id: int, enabled: bool) -> Any:
+    """One-row inline keyboard with a single button whose label flips
+    with state. Showing both Pause and Resume as separate buttons would
+    clutter the chat at scale (tens of channels)."""
+    from pyrogram.types import (  # noqa: PLC0415
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+    )
+    label = "Pause" if enabled else "Resume"
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            label, callback_data=f"{callback_data_prefix}:{target_id}:toggle",
+        ),
+    ]])
+
+
+async def handle_channels(_message: Any, _bot: Any) -> Reply:
+    from sqlmodel import select  # noqa: PLC0415
+
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        result = await session.exec(
+            select(WatchedChannel).order_by(WatchedChannel.title),  # type: ignore[arg-type]
+        )
+        rows = list(result.all())
+
+    if not rows:
+        return Reply(text="No watched channels.")
+
+    lines = ["*Watched channels*"]
+    for r in rows:
+        flag = "[on]" if r.enabled else "[paused]"
+        lines.append(f"{flag} `{r.chat_id}` {r.title}")
+    lines.append("\nTap /channel <id> for per-channel actions.")
+    return Reply(text="\n".join(lines))
+
+
+async def handle_channel_detail(message: Any, _bot: Any) -> Reply:
+    """``/channel <id>`` shows one row with the inline pause/resume
+    button. The id can be negative — split on whitespace and parse
+    the second token; bail if missing."""
+    parts = message.text.split()
+    if len(parts) < 2:
+        return Reply(text="Usage: /channel <chat_id>")
+    try:
+        chat_id = int(parts[1])
+    except ValueError:
+        return Reply(text="chat_id must be an integer.")
+
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        row = await session.get(WatchedChannel, chat_id)
+
+    if row is None:
+        return Reply(text=f"No watched channel with chat_id `{chat_id}`.")
+
+    flag = "active" if row.enabled else "paused"
+    text = (
+        f"*Channel `{chat_id}`*\n"
+        f"Title: {row.title}\n"
+        f"Type: {row.chat_type}\n"
+        f"State: {flag}"
+    )
+    return Reply(text=text, markup=_row_keyboard("chan", chat_id, row.enabled))
+
+
+async def handle_parsers(message: Any, _bot: Any) -> Reply:
+    from sqlmodel import select  # noqa: PLC0415
+
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    parts = message.text.split()
+    chat_filter: int | None = None
+    if len(parts) >= 2:
+        try:
+            chat_filter = int(parts[1])
+        except ValueError:
+            return Reply(text="Usage: /parsers [chat_id]")
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(ParserConfig)
+        if chat_filter is not None:
+            stmt = stmt.where(ParserConfig.chat_id == chat_filter)
+        stmt = stmt.order_by(ParserConfig.chat_id, ParserConfig.priority, ParserConfig.id)  # type: ignore[arg-type]
+        rows = list((await session.exec(stmt)).all())
+
+    if not rows:
+        return Reply(text="No parser configs.")
+
+    lines = ["*Parsers*"]
+    for r in rows:
+        flag = "[on]" if r.enabled else "[paused]"
+        lines.append(
+            f"{flag} `{r.id}` chat=`{r.chat_id}` *{r.name or '(unnamed)'}* "
+            f"({r.parser_type})"
+        )
+    lines.append("\nTap /parser <id> for per-parser actions.")
+    return Reply(text="\n".join(lines))
+
+
+async def handle_parser_detail(message: Any, _bot: Any) -> Reply:
+    parts = message.text.split()
+    if len(parts) < 2:
+        return Reply(text="Usage: /parser <id>")
+    try:
+        parser_id = int(parts[1])
+    except ValueError:
+        return Reply(text="parser id must be an integer.")
+
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        row = await session.get(ParserConfig, parser_id)
+
+    if row is None:
+        return Reply(text=f"No parser with id `{parser_id}`.")
+
+    flag = "active" if row.enabled else "paused"
+    text = (
+        f"*Parser `{parser_id}`*\n"
+        f"Name: {row.name or '(unnamed)'}\n"
+        f"Chat: `{row.chat_id}`\n"
+        f"Type: {row.parser_type}\n"
+        f"Stake: ${row.default_stake:.2f}, "
+        f"duration: {row.default_duration_seconds}s, mode: {row.trade_mode}\n"
+        f"Martingale: enabled={row.martingale_enabled} "
+        f"x{row.martingale_multiplier} max={row.martingale_max_streak} "
+        f"auto_recovery={row.martingale_auto_recovery}\n"
+        f"State: {flag}"
+    )
+    return Reply(
+        text=text,
+        markup=_row_keyboard("parser", parser_id, row.enabled),
+    )
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -398,6 +541,10 @@ COMMANDS: dict[str, Handler] = {
     "/pipeline": handle_pipeline,
     "/panic": handle_panic,
     "/mode": handle_mode,
+    "/channels": handle_channels,
+    "/channel": handle_channel_detail,
+    "/parsers": handle_parsers,
+    "/parser": handle_parser_detail,
 }
 
 
@@ -464,5 +611,116 @@ def build_message_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
                 )
                 return
             await message.reply_text(reply.text, reply_markup=reply.markup)
+
+    return _hook
+
+
+# --------------------------------------------------------------------------
+# Callback routing — InlineKeyboard taps land here
+# --------------------------------------------------------------------------
+
+
+async def _toggle_channel_enabled(chat_id: int) -> bool | None:
+    """Flip the WatchedChannel.enabled flag for ``chat_id``. Returns
+    the *new* state, or None if the row no longer exists."""
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        row = await session.get(WatchedChannel, chat_id)
+        if row is None:
+            return None
+        row.enabled = not row.enabled
+        row.updated_at = utc_now()
+        await session.commit()
+        return row.enabled
+
+
+async def _toggle_parser_enabled(parser_id: int) -> bool | None:
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        row = await session.get(ParserConfig, parser_id)
+        if row is None:
+            return None
+        row.enabled = not row.enabled
+        row.updated_at = utc_now()
+        await session.commit()
+        return row.enabled
+
+
+# Confirm-action registry. Mode:real handler defined further below;
+# /unbind handler is added in Task 13.
+ConfirmHandler = Callable[[], Awaitable[str]]
+
+
+async def _confirm_mode_real() -> str:
+    from autotrader.services.admin_bot_state import get_quotex  # noqa: PLC0415
+    qx = get_quotex()
+    if qx is None:
+        return "Broker manager not attached."
+    await qx.set_account_mode("REAL")
+    return "Broker mode set to REAL."
+
+
+CONFIRM_HANDLERS: dict[str, ConfirmHandler] = {
+    "mode:real": _confirm_mode_real,
+}
+
+
+def build_callback_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
+    """Returns the coroutine ``AdminBot.set_callback_hook`` expects.
+
+    Same auth model as ``build_message_hook``: drop callbacks from any
+    user_id other than the bound admin (silently — Telegram already
+    debounces the button press, and an unauthorised tap shouldn't even
+    show an 'answer' toast).
+    """
+
+    async def _hook(_client: Any, query: Any) -> None:
+        sender_id = int(getattr(query.from_user, "id", 0))
+        bound = bot.status().bound_user_id
+        if bound is None or sender_id != bound:
+            log.info("admin_bot.callback.dropped", sender=sender_id)
+            return
+
+        data = (getattr(query, "data", "") or "").strip()
+        # Format: ``<kind>:<id>:<action>`` (e.g. ``chan:-1001:toggle``)
+        # plus shorter sentinels: ``cancel`` / ``confirm:<action>``.
+        if data == "cancel":
+            await query.answer("Cancelled.")
+            return
+
+        parts = data.split(":")
+        async with _dispatch_lock:
+            try:
+                if parts[0] == "chan" and len(parts) == 3 and parts[2] == "toggle":
+                    new_state = await _toggle_channel_enabled(int(parts[1]))
+                    if new_state is None:
+                        await query.answer("Channel no longer exists.")
+                    else:
+                        await query.answer(
+                            f"Channel {'active' if new_state else 'paused'}",
+                        )
+                elif parts[0] == "parser" and len(parts) == 3 and parts[2] == "toggle":
+                    new_state = await _toggle_parser_enabled(int(parts[1]))
+                    if new_state is None:
+                        await query.answer("Parser no longer exists.")
+                    else:
+                        await query.answer(
+                            f"Parser {'active' if new_state else 'paused'}",
+                        )
+                elif parts[0] == "confirm":
+                    action = ":".join(parts[1:])
+                    handler = CONFIRM_HANDLERS.get(action)
+                    if handler is None:
+                        await query.answer("Unknown confirm action.")
+                        return
+                    text = await handler()
+                    await query.answer(text)
+                else:
+                    await query.answer("Unknown action.")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("admin_bot.callback_failed", data=data)
+                await query.answer(f"failed: {type(exc).__name__}")
 
     return _hook

@@ -235,9 +235,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     # just drops updates.
     if admin_bot.status().state == "running":
         from autotrader.services.admin_bot_commands import (  # noqa: PLC0415
+            build_callback_hook,
             build_message_hook,
         )
         admin_bot.set_message_hook(build_message_hook(admin_bot))
+        admin_bot.set_callback_hook(build_callback_hook(admin_bot))
 
     # Sweep ``pending`` trades from the previous process. In-memory
     # watchers don't survive restart, so without this every old

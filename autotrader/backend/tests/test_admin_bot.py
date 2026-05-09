@@ -590,3 +590,168 @@ def test_mode_real_requires_confirm() -> None:
     text, markup = asyncio.new_event_loop().run_until_complete(_run())
     assert "confirm" in text.lower() or "real" in text.lower()
     assert markup is not None
+
+
+def _make_bound_bot_with_callbacks() -> tuple[Any, Any]:
+    """Helper: a started bot bound to user 555 with BOTH message + callback
+    hooks wired. The message-only ``_make_bound_bot`` would silently drop
+    the inline-keyboard callbacks Task 11 introduces."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_commands import (  # noqa: PLC0415
+        build_callback_hook,
+        build_message_hook,
+    )
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(bot_token="123:abc", client_factory=lambda t: fake, bound_user_id=555)
+    bot.set_message_hook(build_message_hook(bot))
+    bot.set_callback_hook(build_callback_hook(bot))
+    return bot, fake
+
+
+def test_channels_lists_watched() -> None:
+    """`/channels` reads the WatchedChannel rows and renders one line per.
+    Uses unique chat_ids (-9001 / -9002) to avoid bleeding into
+    test_pipeline.py (which uses -1001 / -1002)."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+    from sqlmodel import delete  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot_with_callbacks()
+
+    async def _seed_and_run() -> str:
+        async with AsyncSessionLocal() as s:
+            s.add(WatchedChannel(
+                chat_id=-9001, title="Signals", chat_type="channel",
+                username="signals", enabled=True,
+            ))
+            s.add(WatchedChannel(
+                chat_id=-9002, title="Backup", chat_type="channel",
+                username="backup", enabled=False,
+            ))
+            await s.commit()
+        await bot.start()
+        await fake.fire_message(555, "/channels")
+        return fake.sent_messages[-1][1]
+
+    async def _cleanup() -> None:
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(WatchedChannel).where(  # type: ignore[call-overload]
+                WatchedChannel.chat_id.in_([-9001, -9002]),
+            ))
+            await s.commit()
+
+    try:
+        text = asyncio.new_event_loop().run_until_complete(_seed_and_run())
+        assert "Signals" in text or "-9001" in text
+        assert "Backup" in text or "-9002" in text
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def test_channel_callback_toggles_enabled_flag() -> None:
+    """Tapping the inline Pause button on a channel detail flips
+    ``enabled`` from True to False. Uses chat_id -9001 (unique)."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+    from sqlmodel import delete  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot_with_callbacks()
+
+    async def _seed_then_toggle() -> bool:
+        async with AsyncSessionLocal() as s:
+            s.add(WatchedChannel(
+                chat_id=-9001, title="Signals", chat_type="channel",
+                username="signals", enabled=True,
+            ))
+            await s.commit()
+        await bot.start()
+        await fake.fire_callback(555, "chan:-9001:toggle")
+        async with AsyncSessionLocal() as s:
+            row = await s.get(WatchedChannel, -9001)
+            return row.enabled if row else True
+
+    async def _cleanup() -> None:
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(WatchedChannel).where(  # type: ignore[call-overload]
+                WatchedChannel.chat_id == -9001,
+            ))
+            await s.commit()
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_seed_then_toggle()) is False
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def test_parser_callback_toggles_enabled_flag() -> None:
+    """Tapping the inline Pause button on a parser detail flips
+    ``enabled`` from True to False. Uses parser id 9042 + chat_id -9001
+    (unique to avoid collision with other tests)."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from sqlmodel import delete  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot_with_callbacks()
+
+    async def _seed_then_toggle() -> bool:
+        async with AsyncSessionLocal() as s:
+            s.add(ParserConfig(
+                id=9042, chat_id=-9001, name="DreamVIP",
+                parser_type="regex", enabled=True,
+            ))
+            await s.commit()
+        await bot.start()
+        await fake.fire_callback(555, "parser:9042:toggle")
+        async with AsyncSessionLocal() as s:
+            row = await s.get(ParserConfig, 9042)
+            return row.enabled if row else True
+
+    async def _cleanup() -> None:
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(ParserConfig).where(  # type: ignore[call-overload]
+                ParserConfig.id == 9042,
+            ))
+            await s.commit()
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_seed_then_toggle()) is False
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def test_callback_from_unauthorised_user_is_ignored() -> None:
+    """A CallbackQuery from a non-bound user must NOT mutate state.
+    Uses chat_id -9001 (unique)."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+    from sqlmodel import delete  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot_with_callbacks()
+
+    async def _seed_then_attack() -> bool:
+        async with AsyncSessionLocal() as s:
+            s.add(WatchedChannel(
+                chat_id=-9001, title="Signals", chat_type="channel",
+                username="signals", enabled=True,
+            ))
+            await s.commit()
+        await bot.start()
+        # User 999 is NOT bound (555 is). The callback must be ignored.
+        await fake.fire_callback(999, "chan:-9001:toggle")
+        async with AsyncSessionLocal() as s:
+            row = await s.get(WatchedChannel, -9001)
+            return row.enabled if row else False
+
+    async def _cleanup() -> None:
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(WatchedChannel).where(  # type: ignore[call-overload]
+                WatchedChannel.chat_id == -9001,
+            ))
+            await s.commit()
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_seed_then_attack()) is True
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())
