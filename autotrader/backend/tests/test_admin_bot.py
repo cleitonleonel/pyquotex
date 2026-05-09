@@ -362,3 +362,124 @@ def test_status_includes_pipeline_kill_switch_broker() -> None:
     text = asyncio.new_event_loop().run_until_complete(_run())
     for label in ("pipeline", "kill switch", "broker"):
         assert label.lower() in text.lower()
+
+
+def test_trades_renders_last_n() -> None:
+    """``/trades 3`` reads the most recent 3 trade attempts and renders
+    a one-line-per-row summary including asset / direction / outcome."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _seed_then_fetch() -> str:
+        async with AsyncSessionLocal() as s:
+            for asset, direction, status_, profit in [
+                ("EURUSD_otc", "call", "won", 1.8),
+                ("GBPUSD_otc", "put", "lost", -1.0),
+                ("USDJPY_otc", "call", "pending", None),
+            ]:
+                s.add(TradeAttempt(
+                    chat_id=-9001,  # unique to avoid bleeding into test_pipeline
+                    parser_config_id=9001,
+                    asset=asset,
+                    asset_raw=asset,
+                    direction=direction,
+                    duration_seconds=60,
+                    stake=1.0,
+                    trade_mode="live",  # required field (plan omitted it)
+                    status=status_,
+                    profit=profit,
+                ))
+            await s.commit()
+        await bot.start()
+        await fake.fire_message(555, "/trades 3")
+        return fake.sent_messages[-1][1]
+
+    async def _cleanup() -> None:
+        # Delete the seeded trades so they don't bleed into other test
+        # files that share this conftest's tempfile-backed SQLite DB
+        # and assert "no trades yet" / specific counts.
+        from sqlmodel import delete  # noqa: PLC0415
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(TradeAttempt).where(  # type: ignore[call-overload]
+                TradeAttempt.chat_id == -9001,
+            ))
+            await s.commit()
+
+    try:
+        text = asyncio.new_event_loop().run_until_complete(_seed_then_fetch())
+        assert "EURUSD_otc" in text
+        assert "GBPUSD_otc" in text
+        assert "USDJPY_otc" in text
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def test_decisions_renders_recent_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``/decisions`` reads from the in-memory ring buffer on the
+    Pipeline. We monkeypatch the resolver to return canned decisions."""
+    from autotrader.services import admin_bot_commands as cmds  # noqa: PLC0415
+
+    canned = [
+        {"ts": "2026-05-09T10:00:00", "chat_id": -1001,
+         "parser_config_id": 1, "parser_name": "DreamVIP",
+         "parser_type": "regex", "outcome": "matched",
+         "reasons": [], "signals": 1, "text_preview": "BUY EURUSD 1m"},
+        {"ts": "2026-05-09T10:00:01", "chat_id": -1002,
+         "parser_config_id": None, "parser_name": None,
+         "parser_type": None, "outcome": "no_configs",
+         "reasons": [], "signals": 0, "text_preview": "stray msg"},
+    ]
+    monkeypatch.setattr(cmds, "_recent_decisions_snapshot", lambda: canned)
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/decisions 5")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    assert "matched" in text
+    assert "no_configs" in text
+
+
+def test_streaks_lists_per_parser_state() -> None:
+    """``/streaks`` reads MartingaleState rows and renders one line per."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from sqlmodel import delete  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _seed_then_fetch() -> str:
+        async with AsyncSessionLocal() as s:
+            s.add(ParserConfig(
+                id=9042, chat_id=-9001, name="DreamVIP",
+                parser_type="regex", default_stake=10.0,
+                martingale_enabled=True, martingale_multiplier=2.0,
+            ))
+            s.add(MartingaleState(parser_config_id=9042, current_streak=2, last_stake=40.0))
+            await s.commit()
+        await bot.start()
+        await fake.fire_message(555, "/streaks")
+        return fake.sent_messages[-1][1]
+
+    async def _cleanup() -> None:
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(MartingaleState).where(  # type: ignore[call-overload]
+                MartingaleState.parser_config_id == 9042,
+            ))
+            await s.exec(delete(ParserConfig).where(  # type: ignore[call-overload]
+                ParserConfig.id == 9042,
+            ))
+            await s.commit()
+
+    try:
+        text = asyncio.new_event_loop().run_until_complete(_seed_then_fetch())
+        assert "DreamVIP" in text
+        assert "2" in text  # the streak number
+    finally:
+        asyncio.new_event_loop().run_until_complete(_cleanup())

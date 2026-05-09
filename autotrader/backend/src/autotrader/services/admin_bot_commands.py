@@ -175,6 +175,113 @@ async def handle_balance(_message: Any, _bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# /trades [N]
+# --------------------------------------------------------------------------
+
+
+def _parse_int_arg(text: str, default: int, min_v: int, max_v: int) -> int:
+    """Parse the second token of a command body as an int with bounds.
+    Falls back to ``default`` on missing or unparseable input — handlers
+    are forgiving about whitespace and stray characters."""
+    parts = text.split()
+    if len(parts) < 2:
+        return default
+    try:
+        n = int(parts[1])
+    except ValueError:
+        return default
+    return max(min_v, min(max_v, n))
+
+
+async def handle_trades(message: Any, _bot: Any) -> Reply:
+    from autotrader.models.trade_attempt import list_recent  # noqa: PLC0415
+
+    n = _parse_int_arg(message.text, default=10, min_v=1, max_v=50)
+    async with AsyncSessionLocal() as session:
+        rows = await list_recent(session, limit=n)
+
+    if not rows:
+        return Reply(text="No trades yet.")
+
+    lines = ["*Recent trades*"]
+    for r in rows:
+        marker = {"won": "+", "lost": "-", "pending": "?",
+                  "rejected": "x", "refund": "="}.get(r.status, "•")
+        pnl = f"{r.profit:+.2f}" if r.profit is not None else "—"
+        lines.append(
+            f"{marker} {r.asset} {r.direction.upper()} "
+            f"{r.duration_seconds}s ${r.stake:.2f} -> {r.status} ({pnl})"
+        )
+    return Reply(text="\n".join(lines))
+
+
+# --------------------------------------------------------------------------
+# /decisions [N]
+# --------------------------------------------------------------------------
+
+
+def _recent_decisions_snapshot() -> list[dict[str, Any]]:
+    """Resolver indirection — tests monkeypatch this. In production
+    pulls from ``app.state.pipeline.recent_decisions`` via the
+    fastapi-state stash set up in main.py."""
+    from autotrader.services.admin_bot_state import get_pipeline  # noqa: PLC0415
+    pipeline = get_pipeline()
+    if pipeline is None:
+        return []
+    return pipeline.recent_decisions
+
+
+async def handle_decisions(message: Any, _bot: Any) -> Reply:
+    n = _parse_int_arg(message.text, default=10, min_v=1, max_v=50)
+    snapshot = _recent_decisions_snapshot()[:n]
+    if not snapshot:
+        return Reply(text="No decisions in the ring buffer yet.")
+    lines = ["*Recent decisions*"]
+    for d in snapshot:
+        outcome = d.get("outcome", "?")
+        chat_id = d.get("chat_id", "?")
+        parser = d.get("parser_name") or "—"
+        reasons = "; ".join(d.get("reasons") or [])
+        suffix = f" — {reasons}" if reasons else ""
+        lines.append(f"{outcome} · chat {chat_id} · {parser}{suffix}")
+    return Reply(text="\n".join(lines))
+
+
+# --------------------------------------------------------------------------
+# /streaks
+# --------------------------------------------------------------------------
+
+
+async def handle_streaks(_message: Any, _bot: Any) -> Reply:
+    from sqlmodel import select  # noqa: PLC0415
+
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as session:
+        configs_q = await session.exec(
+            select(ParserConfig).where(ParserConfig.martingale_enabled == True),  # noqa: E712
+        )
+        configs = list(configs_q.all())
+        states_q = await session.exec(select(MartingaleState))
+        states = {s.parser_config_id: s for s in states_q.all()}
+
+    if not configs:
+        return Reply(text="No martingale-enabled parsers.")
+
+    lines = ["*Martingale streaks*"]
+    for c in configs:
+        st = states.get(c.id or 0)
+        step = st.current_streak if st else 0
+        last = f"${st.last_stake:.2f}" if st and st.last_stake else "—"
+        lines.append(
+            f"{c.name or f'cfg-{c.id}'} step {step} x{c.martingale_multiplier} "
+            f"max={c.martingale_max_streak} last={last}"
+        )
+    return Reply(text="\n".join(lines))
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -185,6 +292,9 @@ COMMANDS: dict[str, Handler] = {
     "/whoami": handle_whoami,
     "/status": handle_status,
     "/balance": handle_balance,
+    "/trades": handle_trades,
+    "/decisions": handle_decisions,
+    "/streaks": handle_streaks,
 }
 
 

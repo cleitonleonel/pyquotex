@@ -224,6 +224,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     app.state.admin_bot = admin_bot
     await admin_bot.start()
 
+    # Stash references the admin-bot command handlers need (pipeline
+    # ring buffer, broker manager, the bot itself). Avoids handlers
+    # depending on FastAPI's request context — see admin_bot_state.py.
+    from autotrader.services import admin_bot_state  # noqa: PLC0415
+    admin_bot_state.attach(pipeline=pipeline, quotex=manager, admin_bot=admin_bot)
+
     # Wire the command dispatcher only if the bot is actually running.
     # When disabled / errored, leaving the hook unset means AdminBot
     # just drops updates.
