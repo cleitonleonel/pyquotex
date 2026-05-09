@@ -119,6 +119,14 @@ export interface FunnelResponse {
   stages: FunnelStage[];
   drop_reasons: Record<string, { reason: string; count: number }[]>;
   filters_applied: Record<string, unknown>;
+  /**
+   * Discriminator added in Phase 3 Part A Task 3: when ``"ring"`` the
+   * ``messages_received`` and ``matched`` stages are sourced from the
+   * in-process Pipeline.recent_decisions ring buffer (last N entries),
+   * NOT from the trade DB. The UI labels these stages accordingly so
+   * operators don't misread them as range-scoped totals.
+   */
+  messages_received_window?: "ring";
 }
 
 /**
