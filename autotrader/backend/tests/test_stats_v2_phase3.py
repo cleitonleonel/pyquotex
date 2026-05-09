@@ -225,3 +225,55 @@ async def test_breakdown_parser_includes_streaks(
     assert streaks["histogram"] == {"3": 1}
     assert streaks["recovered_count"] == 1
     assert streaks["recovery_rate"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# /stats/v2/funnel — top stages now read from Pipeline.recent_decisions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_funnel_uses_pipeline_ring_for_top_stages(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """messages_received and matched count Pipeline.recent_decisions,
+    not just trade_attempts. The dependency_overrides escape hatch lets
+    us inject a deterministic ring without spinning up a real Pipeline.
+    """
+    from typing import ClassVar  # noqa: PLC0415
+
+    from autotrader.dependencies import get_pipeline  # noqa: PLC0415
+    from autotrader.main import app as live_app  # noqa: PLC0415
+
+    class _StubPipeline:
+        recent_decisions: ClassVar[list[dict[str, object]]] = [
+            {"chat_id": -100, "outcome": "no_match",
+             "ts": "2026-05-09T00:00:00Z"},
+            {"chat_id": -100, "outcome": "matched",
+             "ts": "2026-05-09T00:01:00Z"},
+            {"chat_id": -100, "outcome": "matched",
+             "ts": "2026-05-09T00:02:00Z"},
+        ]
+
+    stub = _StubPipeline()
+    headers = await _login(async_client)
+    live_app.dependency_overrides[get_pipeline] = lambda: stub
+    try:
+        r = await async_client.get(
+            "/stats/v2/funnel",
+            params={"range": "24h"},
+            headers=headers,
+        )
+    finally:
+        live_app.dependency_overrides.pop(get_pipeline, None)
+
+    assert r.status_code == 200
+    body = r.json()
+    stages = {s["key"]: s["count"] for s in body["stages"]}
+    assert stages["messages_received"] == 3
+    assert stages["matched"] == 2
+    # Honesty about ring semantics: the ring is bounded and lives in
+    # process memory, so messages_received is "last N decisions" not
+    # "last <range>". Frontend uses this discriminator to label the
+    # stage truthfully.
+    assert body["messages_received_window"] == "ring"

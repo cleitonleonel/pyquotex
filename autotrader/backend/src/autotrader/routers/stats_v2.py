@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import SessionDep
+from autotrader.dependencies import PipelineDep, SessionDep
 from autotrader.models.parser_config import ParserConfig
 from autotrader.models.trade_attempt import TradeAttempt
 from autotrader.models.watched_channel import WatchedChannel
@@ -126,6 +126,13 @@ class FunnelResponse(BaseModel):
     stages: list[FunnelStage]
     drop_reasons: dict[str, list[FunnelDropReason]]
     filters_applied: dict
+    # Discriminator for the messages_received / matched stage counts:
+    # ``"ring"`` means "last N entries from the in-memory pipeline
+    # decision ring" (bounded by Pipeline._DECISION_RING_SIZE), not
+    # "last <range> of decisions". The frontend uses this to label
+    # the stage truthfully — it should not imply the count scales
+    # with the user's selected range.
+    messages_received_window: Literal["ring"] = "ring"
 
 
 def _resolve_bucket(
@@ -644,6 +651,7 @@ async def assets_endpoint(
 @router.get("/funnel", response_model=FunnelResponse)
 async def funnel_endpoint(
     session: SessionDep,
+    pipeline: PipelineDep,
     range: str = Query("24h", alias="range"),
     custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
     custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
@@ -656,12 +664,15 @@ async def funnel_endpoint(
     """Five-stage signal funnel: received -> matched -> passed risk
     -> placed -> settled.
 
-    `messages_received` and `matched` come from the in-memory pipeline-
-    decisions ring on the live Pipeline service, which has a finite
-    retention window (200 entries). Threading that ring through this
-    endpoint requires a Request-scoped dep change that's deferred to
-    Phase 3; in the meantime both stages render as 0 and the
-    frontend panel surfaces this caveat.
+    The downstream three stages (passed_risk / placed / settled) come
+    from ``trade_attempts`` and honour the ``range`` window. The two
+    upstream stages (messages_received / matched) come from the live
+    ``Pipeline.recent_decisions`` ring — a bounded in-memory deque
+    (``Pipeline._DECISION_RING_SIZE``, currently 200). Because the
+    ring is bounded and lives in process memory, those counts are
+    "last N decisions" not "last <range> of decisions"; the
+    ``messages_received_window`` field on the response surfaces that
+    distinction so the frontend can label the stage honestly.
     """
     f = await _resolve_filters_from_query(
         range, custom_from, custom_to, channels, parsers, assets,
@@ -669,7 +680,7 @@ async def funnel_endpoint(
     )
     rows = (await session.exec(_apply_filters(select(TradeAttempt), f))).all()
 
-    # trade-attempts-derived counts
+    # trade-attempts-derived counts (downstream three stages)
     total = len(rows)
     rejected = sum(1 for row in rows if row.status == "rejected")
     broker_error = sum(1 for row in rows if row.status == "broker_error")
@@ -677,10 +688,13 @@ async def funnel_endpoint(
     passed_risk = total - rejected
     placed = total - rejected - broker_error
 
-    # decisions-ring-derived counts: zero in Phase 2 — Phase 3 wires
-    # the Pipeline.recent_decisions ring through this endpoint.
-    messages_received = 0
-    matched = 0
+    # decisions-ring-derived counts (upstream two stages). Snapshot
+    # the ring once so the two derived counts agree on the same view —
+    # the property returns a fresh list, but a concurrent dispatch
+    # could otherwise grow it between the two reads.
+    ring = pipeline.recent_decisions
+    messages_received = len(ring)
+    matched = sum(1 for d in ring if d.get("outcome") == "matched")
 
     stages = [
         FunnelStage(key="messages_received", label="Messages received",
