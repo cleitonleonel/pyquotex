@@ -60,6 +60,25 @@ export interface TimeseriesResponse {
   filters_applied: Record<string, unknown>;
 }
 
+/**
+ * Aggregate closed-streak summary attached to ``dim=parser`` rows.
+ *
+ * Source of truth: ``compute_parser_streaks()`` in
+ * ``backend/src/autotrader/services/filters.py``. The histogram keys are
+ * stringified ints (length -> count) because JSON preserves them more
+ * cleanly that way; recovery_rate is in [0, 1].
+ *
+ * NOTE: This shape replaces an earlier stubbed array form; the backend
+ * never emitted the array variant — Phase 3 Task 2 (Part A) wired the
+ * aggregate directly. Only ``dim=parser`` rows carry this field.
+ */
+export interface ParserStreaksAggregate {
+  longest_loss: number;
+  histogram: Record<string, number>;
+  recovered_count: number;
+  recovery_rate: number;
+}
+
 export interface BreakdownRow {
   key: number | string;
   label: string;
@@ -76,7 +95,7 @@ export interface BreakdownRow {
   realised_pnl: number;
   committed_stake: number;
   direction_split?: { call: BreakdownRow; put: BreakdownRow };
-  streaks?: { length: number; ended_in: "won" | "lost"; recovered: boolean }[];
+  streaks?: ParserStreaksAggregate;
 }
 
 export interface BreakdownResponse {

@@ -6,6 +6,7 @@ import { FilterBar } from "../_components/filter-bar";
 import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-matrix";
 import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
 import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
+import { PanelParserComparison } from "../_components/panel-parser-comparison";
 import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
 
 /**
@@ -51,12 +52,17 @@ function AnalyticsBody() {
       <Tabs defaultValue="performance" className="space-y-4">
         <TabsList>
           <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="parsers">Parsers</TabsTrigger>
           <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="risk">Risk</TabsTrigger>
         </TabsList>
 
         <TabsContent value="performance" className="space-y-4">
           <PerformanceTab />
+        </TabsContent>
+
+        <TabsContent value="parsers" className="space-y-4">
+          <ParsersTab />
         </TabsContent>
 
         <TabsContent value="execution" className="space-y-4">
@@ -77,6 +83,14 @@ function PerformanceTab() {
     <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
       <PanelChannelLeaderboard />
       <PanelAssetDirectionMatrix />
+    </div>
+  );
+}
+
+function ParsersTab() {
+  return (
+    <div className="space-y-4">
+      <PanelParserComparison />
     </div>
   );
 }
