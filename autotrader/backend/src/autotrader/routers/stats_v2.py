@@ -55,6 +55,36 @@ class TimeseriesResponse(BaseModel):
     filters_applied: dict
 
 
+Dim = Literal["channel", "parser", "asset", "direction", "hour_of_week"]
+
+
+class BreakdownRow(BaseModel):
+    key: int | str
+    label: str
+    total: int
+    won: int
+    lost: int
+    rejected: int
+    broker_error: int
+    expired: int
+    pending: int
+    win_rate: float | None
+    win_rate_ci_low: float | None = None
+    win_rate_ci_high: float | None = None
+    realised_pnl: float
+    committed_stake: float
+    # Per-dim extras attached as needed (direction_split for asset,
+    # streaks for parser). See the spec for shapes.
+    direction_split: dict | None = None
+    streaks: list[dict] | None = None
+
+
+class BreakdownResponse(BaseModel):
+    dim: Dim
+    rows: list[BreakdownRow]
+    filters_applied: dict
+
+
 def _resolve_bucket(
     bucket: Bucket,
     since: datetime,
@@ -98,6 +128,23 @@ def _floor_to_bucket(
     return anchor + bucket_size * n
 
 
+def _wilson_ci(
+    successes: int, n: int, *, z: float = 1.96,
+) -> tuple[float | None, float | None]:
+    """Wilson score interval at the given z (default 95% = 1.96).
+
+    Returns (low, high). For n=0 returns (None, None) — there's no
+    interval to draw on the chart.
+    """
+    if n == 0:
+        return None, None
+    p = successes / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = (z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)) / denom
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
 def _percentile(samples: list[float], pct: float) -> float | None:
     """Linear-interpolation percentile. Returns None for empty input.
 
@@ -112,6 +159,41 @@ def _percentile(samples: list[float], pct: float) -> float | None:
     upper = min(lower + 1, len(ordered) - 1)
     weight = rank - lower
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _build_breakdown_row(
+    *, key: int | str, label: str, attempts: list[TradeAttempt],
+) -> BreakdownRow:
+    """Compute the standard per-row fields shared across all dims."""
+    won = sum(1 for r in attempts if r.status == "won")
+    lost = sum(1 for r in attempts if r.status == "lost")
+    rejected = sum(1 for r in attempts if r.status == "rejected")
+    broker_error = sum(1 for r in attempts if r.status == "broker_error")
+    expired = sum(1 for r in attempts if r.status == "expired")
+    pending = sum(1 for r in attempts if r.status == "pending")
+    settled = won + lost
+    pnl = sum(r.profit or 0.0 for r in attempts)
+    committed = sum(
+        r.stake for r in attempts if r.status in ("pending", "won", "lost")
+    )
+    win_rate = (won / settled) if settled else None
+    ci_low, ci_high = _wilson_ci(won, settled) if settled else (None, None)
+    return BreakdownRow(
+        key=key,
+        label=label,
+        total=len(attempts),
+        won=won,
+        lost=lost,
+        rejected=rejected,
+        broker_error=broker_error,
+        expired=expired,
+        pending=pending,
+        win_rate=win_rate,
+        win_rate_ci_low=ci_low,
+        win_rate_ci_high=ci_high,
+        realised_pnl=pnl,
+        committed_stake=committed,
+    )
 
 
 async def _resolve_filters_from_query(
@@ -319,5 +401,56 @@ async def timeseries_endpoint(  # noqa: PLR0912, PLR0915
         metric=metric,
         bucket=bucket,
         points=[],
+        filters_applied=f.model_dump(mode="json"),
+    )
+
+
+@router.get("/breakdown", response_model=BreakdownResponse)
+async def breakdown_endpoint(
+    session: SessionDep,
+    dim: Dim = Query(...),  # noqa: B008
+    range: str = Query("24h", alias="range"),
+    custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
+    custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
+    channels: str | None = Query(None),
+    parsers: str | None = Query(None),
+    assets: str | None = Query(None),
+    direction: str | None = Query(None),
+    statuses: str | None = Query(None),
+) -> BreakdownResponse:
+    f = await _resolve_filters_from_query(
+        range, custom_from, custom_to, channels, parsers, assets,
+        direction, statuses,
+    )
+    rows = (await session.exec(_apply_filters(select(TradeAttempt), f))).all()
+
+    if dim == "channel":
+        # Resolve labels from WatchedChannel rows. Trades from chats
+        # without a WatchedChannel row still appear, labelled `chat N`.
+        from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+        watched = (await session.exec(select(WatchedChannel))).all()
+        titles = {w.chat_id: w.title for w in watched}
+        grouped: dict[int, list[TradeAttempt]] = {}
+        for row in rows:
+            grouped.setdefault(row.chat_id, []).append(row)
+        out: list[BreakdownRow] = []
+        for chat_id, attempts in grouped.items():
+            out.append(_build_breakdown_row(
+                key=chat_id,
+                label=titles.get(chat_id, f"chat {chat_id}"),
+                attempts=attempts,
+            ))
+        out.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
+        return BreakdownResponse(
+            dim="channel",
+            rows=out,
+            filters_applied=f.model_dump(mode="json"),
+        )
+
+
+    # Other dims land in Task 8.
+    return BreakdownResponse(
+        dim=dim,
+        rows=[],
         filters_applied=f.model_dump(mode="json"),
     )

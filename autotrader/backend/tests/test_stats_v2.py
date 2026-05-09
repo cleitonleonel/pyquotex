@@ -375,3 +375,123 @@ async def test_timeseries_custom_range_with_naive_datetimes(
     assert body["metric"] == "equity"
     assert len(body["points"]) == 1
     assert body["points"][0]["value"] == pytest.approx(1.0, abs=0.001)
+
+
+# ---------------------------------------------------------------------------
+# /stats/v2/breakdown — dim=channel
+# ---------------------------------------------------------------------------
+
+
+async def _add_watch_row(
+    *, chat_id: int, title: str, enabled: bool = True,
+) -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        s.add(
+            WatchedChannel(
+                chat_id=chat_id,
+                title=title,
+                chat_type="channel",
+                username=None,
+                enabled=enabled,
+            ),
+        )
+        await s.commit()
+
+
+async def test_breakdown_channel_empty(async_client: httpx.AsyncClient) -> None:
+    headers = await _login(async_client)
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "channel", "range": "24h"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["dim"] == "channel"
+    assert body["rows"] == []
+
+
+async def test_breakdown_channel_single_with_label(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Channel breakdown joins WatchedChannel.title for human labels."""
+    headers = await _login(async_client)
+    await _add_watch_row(chat_id=12345, title="FX Pro")
+    now = datetime.now(UTC)
+    await _seed_attempts(
+        [
+            {"chat_id": 12345, "status": "won", "profit": 1.0, "stake": 1.0,
+             "received_at": now - timedelta(hours=1)},
+            {"chat_id": 12345, "status": "lost", "profit": -1.0, "stake": 1.0,
+             "received_at": now - timedelta(hours=1)},
+            {"chat_id": 12345, "status": "won", "profit": 0.85, "stake": 1.0,
+             "received_at": now - timedelta(hours=1)},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "channel", "range": "24h"},
+        headers=headers,
+    )
+    body = r.json()
+    rows = body["rows"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["key"] == 12345
+    assert row["label"] == "FX Pro"
+    assert row["total"] == 3
+    assert row["won"] == 2
+    assert row["lost"] == 1
+    assert row["win_rate"] == pytest.approx(2 / 3, abs=0.001)
+    assert row["realised_pnl"] == pytest.approx(0.85, abs=0.001)
+    # Wilson 95% CI bounds: roughly (0.21, 0.94) for 2/3 with n=3
+    assert 0.0 < row["win_rate_ci_low"] < row["win_rate_ci_high"] < 1.0
+
+
+async def test_breakdown_channel_unknown_chat_falls_back_to_id_label(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Trades from a chat with no WatchedChannel row still appear,
+    labelled as `chat <id>`."""
+    headers = await _login(async_client)
+    await _seed_attempts(
+        [
+            {"chat_id": 99, "status": "won", "profit": 1.0,
+             "received_at": datetime.now(UTC) - timedelta(hours=1)},
+        ],
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "channel", "range": "24h"},
+        headers=headers,
+    )
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["key"] == 99
+    assert rows[0]["label"] == "chat 99"
+
+
+async def test_breakdown_channel_sort_by_total_desc(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Most active channels first."""
+    headers = await _login(async_client)
+    await _add_watch_row(chat_id=1, title="A")
+    await _add_watch_row(chat_id=2, title="B")
+    now = datetime.now(UTC)
+    await _seed_attempts(
+        [{"chat_id": 1, "status": "won", "profit": 1.0,
+          "received_at": now - timedelta(hours=1)}] * 5
+        + [{"chat_id": 2, "status": "won", "profit": 1.0,
+            "received_at": now - timedelta(hours=1)}] * 12,
+    )
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "channel", "range": "24h"},
+        headers=headers,
+    )
+    rows = r.json()["rows"]
+    assert [row["key"] for row in rows] == [2, 1]
