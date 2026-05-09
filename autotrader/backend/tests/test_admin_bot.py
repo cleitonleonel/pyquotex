@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -310,3 +311,54 @@ def test_non_admin_message_is_silently_dropped() -> None:
 
     sent = asyncio.new_event_loop().run_until_complete(_run())
     assert sent == []
+
+
+def _make_bound_bot() -> tuple[Any, Any]:
+    """Helper: a started bot bound to user 555."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_commands import build_message_hook  # noqa: PLC0415
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(bot_token="123:abc", client_factory=lambda t: fake, bound_user_id=555)
+    bot.set_message_hook(build_message_hook(bot))
+    return bot, fake
+
+
+def test_help_lists_commands() -> None:
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/help")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    for command in ("/status", "/balance", "/killswitch", "/channels", "/parsers"):
+        assert command in text, f"{command} missing from /help text"
+
+
+def test_whoami_echoes_user_id() -> None:
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/whoami")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    assert "555" in text
+
+
+def test_status_includes_pipeline_kill_switch_broker() -> None:
+    """The /status command must mention all three core gauges."""
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/status")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    for label in ("pipeline", "kill switch", "broker"):
+        assert label.lower() in text.lower()

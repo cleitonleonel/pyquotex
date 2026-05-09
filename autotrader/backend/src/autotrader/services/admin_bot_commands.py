@@ -89,12 +89,102 @@ async def handle_start(message: Any, bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# /help — static command summary (kept in sync by hand)
+# --------------------------------------------------------------------------
+
+
+_HELP_TEXT = (
+    "*Admin bot commands*\n"
+    "\n"
+    "*Read*\n"
+    "  /status — pipeline / kill switch / broker / Telegram pulse\n"
+    "  /balance — demo + real balances\n"
+    "  /trades [N] — last N trades (default 10)\n"
+    "  /decisions [N] — last N parser decisions\n"
+    "  /streaks — martingale streaks per parser\n"
+    "  /channels — list watched channels\n"
+    "  /parsers [chat_id] — list parsers (optionally filtered)\n"
+    "  /caps — current daily-loss / stake / concurrency caps\n"
+    "  /whoami — your Telegram user_id\n"
+    "\n"
+    "*Write*\n"
+    "  /killswitch on|off\n"
+    "  /pipeline on|off\n"
+    "  /panic — kill switch + pipeline off in one shot\n"
+    "  /mode demo|real — switch broker account mode\n"
+    "  /stake <amount> — set default stake\n"
+    "  /caps loss|stake|concurrent <value>\n"
+    "  /notify placed|settled|risk_rejected|system_error on|off\n"
+    "  /channel <id> | /parser <id> — details + pause/resume buttons\n"
+    "  /unbind — release admin binding (with confirm)\n"
+)
+
+
+async def handle_help(_message: Any, _bot: Any) -> Reply:
+    return Reply(text=_HELP_TEXT)
+
+
+# --------------------------------------------------------------------------
+# /whoami
+# --------------------------------------------------------------------------
+
+
+async def handle_whoami(message: Any, _bot: Any) -> Reply:
+    sender_id = int(message.from_user.id)
+    return Reply(text=f"You are user_id `{sender_id}`.")
+
+
+# --------------------------------------------------------------------------
+# /status — composes a one-screen health summary
+# --------------------------------------------------------------------------
+
+
+async def handle_status(_message: Any, _bot: Any) -> Reply:
+    async with AsyncSessionLocal() as session:
+        gs = await session.get(GlobalSettings, 1) or GlobalSettings(id=1)
+
+    pipeline_label = "ON" if gs.pipeline_active else "OFF"
+    kill_label = "ENGAGED" if gs.kill_switch_engaged else "off"
+
+    text = (
+        "*Status*\n"
+        f"Pipeline: *{pipeline_label}*\n"
+        f"Kill switch: *{kill_label}*\n"
+        f"Broker: see dashboard /pipeline/status\n"
+        f"Default stake: ${gs.default_stake:.2f}\n"
+        f"Caps: loss=${gs.daily_max_loss:.2f}, "
+        f"stake=${gs.daily_max_stake:.2f}, "
+        f"concurrent={gs.max_concurrent_trades}"
+    )
+    return Reply(text=text)
+
+
+# --------------------------------------------------------------------------
+# /balance — read-only broker balance (best-effort)
+# --------------------------------------------------------------------------
+
+
+async def handle_balance(_message: Any, _bot: Any) -> Reply:
+    return Reply(
+        text=(
+            "*Balance*\n"
+            "Live balances are on the dashboard (/balance is wired in "
+            "v2 once QuotexManager exposes a cached snapshot)."
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
 
 COMMANDS: dict[str, Handler] = {
     "/start": handle_start,
+    "/help": handle_help,
+    "/whoami": handle_whoami,
+    "/status": handle_status,
+    "/balance": handle_balance,
 }
 
 
