@@ -11,7 +11,7 @@ removes its callers; the new endpoints are additive.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, get_args
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -21,7 +21,9 @@ from autotrader.auth import require_auth
 from autotrader.dependencies import SessionDep
 from autotrader.models.trade_attempt import TradeAttempt
 from autotrader.services.filters import (
+    Direction,
     ResolvedFilter,
+    TradeStatus,
     parse_csv_int,
     parse_csv_str,
     resolve_range,
@@ -122,22 +124,28 @@ async def _resolve_filters_from_query(
     direction: str | None,
     statuses_csv: str | None,
 ) -> ResolvedFilter:
+    # Pydantic parses ISO datetimes without offset as naive — normalize
+    # to UTC so downstream arithmetic with f.since/f.until (always UTC)
+    # doesn't TypeError.
+    if custom_from is not None and custom_from.tzinfo is None:
+        custom_from = custom_from.replace(tzinfo=UTC)
+    if custom_to is not None and custom_to.tzinfo is None:
+        custom_to = custom_to.replace(tzinfo=UTC)
     since, until = resolve_range(
         range_label,
         now=datetime.now(UTC),
         custom_from=custom_from,
         custom_to=custom_to,
     )
-    valid_statuses = {
-        "won", "lost", "rejected", "broker_error", "expired", "pending",
-    }
+    valid_directions = set(get_args(Direction))
+    valid_statuses = set(get_args(TradeStatus))
     return ResolvedFilter(
         since=since,
         until=until,
         channels=parse_csv_int(channels_csv),
         parsers=parse_csv_int(parsers_csv),
         assets=parse_csv_str(assets_csv),
-        direction=direction if direction in ("call", "put") else None,  # type: ignore[arg-type]
+        direction=direction if direction in valid_directions else None,  # type: ignore[arg-type]
         statuses=[
             s for s in parse_csv_str(statuses_csv) if s in valid_statuses
         ],  # type: ignore[misc]

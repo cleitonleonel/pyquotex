@@ -79,6 +79,9 @@ def _percentile(samples: list[float], pct: float) -> float | None:
 
     Returns ``None`` for empty input. Defined locally so we don't pull
     in numpy for two numbers per request.
+
+    NOTE: Duplicated verbatim in ``routers/stats_v2.py``. Keep in sync
+    if you change the interpolation behaviour.
     """
     if not samples:
         return None

@@ -338,3 +338,40 @@ async def test_timeseries_outcomes_returns_counts_dict(
         "expired": 1,
         "pending": 1,
     }
+
+
+async def test_timeseries_custom_range_with_naive_datetimes(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """range=custom with naive ISO datetimes should not 500.
+
+    The Phase 2 frontend sends ISO strings without offsets via
+    react-day-picker; FastAPI parses them as naive. Without UTC
+    normalisation, _floor_to_bucket raises TypeError on the first
+    DB row with an aware filter bound. This regression test pins
+    the fix at the resolver boundary.
+    """
+    headers = await _login(async_client)
+    now = datetime.now(UTC)
+    # Seed a single row inside the custom range.
+    await _seed_attempts(
+        [{"status": "won", "profit": 1.0, "received_at": now - timedelta(hours=2)}],
+    )
+    # Use ISO strings without offset (the FastAPI/Pydantic naive case).
+    from_iso = (now - timedelta(hours=24)).replace(tzinfo=None).isoformat()
+    to_iso = now.replace(tzinfo=None).isoformat()
+    r = await async_client.get(
+        "/stats/v2/timeseries",
+        params={
+            "metric": "equity",
+            "range": "custom",
+            "from": from_iso,
+            "to": to_iso,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["metric"] == "equity"
+    assert len(body["points"]) == 1
+    assert body["points"][0]["value"] == pytest.approx(1.0, abs=0.001)
