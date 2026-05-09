@@ -7,6 +7,7 @@ import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-
 import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
 import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
 import { PanelLatencyDrift } from "../_components/panel-latency-drift";
+import { PanelMartingaleRoi } from "../_components/panel-martingale-roi";
 import { PanelParserComparison } from "../_components/panel-parser-comparison";
 import { PanelRiskCapUtilisation } from "../_components/panel-risk-cap-utilisation";
 import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
@@ -110,6 +111,7 @@ function RiskTab() {
   return (
     <div className="space-y-4">
       <PanelRiskCapUtilisation />
+      <PanelMartingaleRoi />
     </div>
   );
 }
