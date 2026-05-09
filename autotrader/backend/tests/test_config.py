@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_empty_telegram_api_id_falls_back_to_none(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """docker-compose passes ``TELEGRAM_API_ID=""`` when unset.
@@ -41,3 +43,30 @@ def test_telegram_api_id_parses_when_set(monkeypatch) -> None:  # type: ignore[n
     assert s.api_id == 12345
     assert s.api_hash is not None
     assert s.api_hash.get_secret_value() == "deadbeef"
+
+
+def test_telegram_settings_parses_bot_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``TELEGRAM_BOT_TOKEN`` env var is parsed as a SecretStr.
+
+    The bot token comes from @BotFather and looks like
+    ``123456:ABC-DEF...``. We never want it visible in logs / repr —
+    SecretStr enforces that at the type level.
+    """
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:fake-token")
+    from autotrader.config import TelegramSettings  # noqa: PLC0415
+
+    s = TelegramSettings()  # type: ignore[call-arg]
+    assert s.bot_token is not None
+    assert s.bot_token.get_secret_value() == "123456:fake-token"
+    # SecretStr never leaks the value through repr.
+    assert "fake-token" not in repr(s.bot_token)
+
+
+def test_telegram_settings_bot_token_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing ``TELEGRAM_BOT_TOKEN`` leaves the field as None — admin bot
+    becomes a no-op rather than crashing startup."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    from autotrader.config import TelegramSettings  # noqa: PLC0415
+
+    s = TelegramSettings()  # type: ignore[call-arg]
+    assert s.bot_token is None

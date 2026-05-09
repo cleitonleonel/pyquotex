@@ -97,6 +97,11 @@ class TelegramSettings(BaseSettings):
 
     api_id: int | None = None
     api_hash: SecretStr | None = None
+    # @BotFather token for the *admin* bot (separate from the userbot
+    # MTProto session). When unset the admin bot is a no-op — see
+    # ``services/admin_bot.py``. Stored as SecretStr so it's never
+    # leaked through ``repr(settings)`` or accidental logging.
+    bot_token: SecretStr | None = None
 
 
 settings = Settings()  # type: ignore[call-arg]
