@@ -133,6 +133,29 @@ function buildQuery(
   return params.toString();
 }
 
+/**
+ * Build a minimal range-only query string for endpoints (like
+ * /stats/v2/assets) that intentionally ignore the rest of the filter
+ * state. We don't reuse buildQuery() because it always emits "range="
+ * and we want the same here, but without dragging the unrelated
+ * channels/parsers/direction params along.
+ */
+function buildRangeQuery(params: {
+  range?: RangeLabel;
+  from?: string;
+  to?: string;
+}): string {
+  const qs = new URLSearchParams();
+  qs.set("range", params.range ?? "7d");
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+  return qs.toString();
+}
+
+export interface AssetsResponse {
+  assets: string[];
+}
+
 export const statsV2 = {
   timeseries: (
     filters: FilterParams,
@@ -150,4 +173,13 @@ export const statsV2 = {
 
   funnel: (filters: FilterParams) =>
     api<FunnelResponse>(`/stats/v2/funnel?${buildQuery(filters)}`),
+
+  /**
+   * Distinct assets traded inside the (range, from, to) window. The
+   * endpoint deliberately ignores chats/parsers/direction so the pill
+   * shows the full universe — operators can pivot between channels
+   * without first widening other pills.
+   */
+  assets: (params: { range?: RangeLabel; from?: string; to?: string } = {}) =>
+    api<AssetsResponse>(`/stats/v2/assets?${buildRangeQuery(params)}`),
 };

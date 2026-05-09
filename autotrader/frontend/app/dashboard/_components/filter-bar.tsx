@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import type { TradeStatus } from "@/lib/api-stats-v2";
 import { useFilters } from "@/lib/use-filters";
+import { FilterPillAssets } from "./filter-pill-assets";
 import { FilterPillDirection } from "./filter-pill-direction";
 import {
   FilterPillMultiSelect,
@@ -72,6 +73,7 @@ export function FilterBar() {
         selected={filters.parsers ?? []}
         onChange={(v) => setFilter("parsers", v)}
       />
+      <FilterPillAssets />
       <FilterPillMultiSelect
         label="Status"
         options={STATUS_OPTIONS}
