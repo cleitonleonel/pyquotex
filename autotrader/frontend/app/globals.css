@@ -28,11 +28,11 @@
 
     /* New semantic state tokens (Phase 1). */
     --success: 142 71% 45%;
-    --success-foreground: 0 0% 98%;
+    --success-foreground: 142 71% 12%;
     --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 98%;
+    --warning-foreground: 38 92% 10%;
     --info: 217 91% 60%;
-    --info-foreground: 0 0% 98%;
+    --info-foreground: 217 91% 15%;
 
     /* Chart palette — Recharts series colors (Phase 2). */
     --chart-1: 142 71% 45%;
