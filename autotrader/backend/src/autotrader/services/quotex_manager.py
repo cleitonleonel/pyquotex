@@ -26,7 +26,7 @@ import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from pyquotex.stable_api import Quotex
@@ -78,10 +78,16 @@ def _mask_email(email: str) -> str:
 class QuotexManager:
     """Single warm Quotex client, async-safe."""
 
-    def __init__(self, *, root_path: str = ".") -> None:
+    def __init__(
+        self,
+        *,
+        root_path: str = ".",
+        event_bus: Any | None = None,
+    ) -> None:
         self._root_path = root_path
         Path(root_path).mkdir(parents=True, exist_ok=True)
 
+        self._event_bus = event_bus
         self._client: Quotex | None = None
         self._email: str | None = None
         self._password: str | None = None
@@ -264,6 +270,7 @@ class QuotexManager:
                 self._state = "error"
                 self._last_error = reason
                 log.warning("broker.connect.rejected", reason=reason)
+                self._emit_system_error(kind="connect.rejected", detail=reason)
             self._reset_otp()
 
     async def disconnect(self) -> None:
@@ -278,6 +285,7 @@ class QuotexManager:
                 await self._client.close()
             except Exception as exc:  # pragma: no cover - best-effort cleanup
                 log.warning("broker.disconnect.error", error=str(exc))
+                self._emit_system_error(kind="disconnect.error", detail=str(exc))
             finally:
                 self._client = None
                 self._connected_at = None
@@ -347,6 +355,27 @@ class QuotexManager:
             self._state = "idle"
 
     # ------------------------------------------------------------------
+    # Event bus
+    # ------------------------------------------------------------------
+
+    def _emit_system_error(
+        self,
+        *,
+        kind: str,
+        detail: str,
+        recoverable: bool = True,
+    ) -> None:
+        """Publish a ``system.error`` event for the admin notifier."""
+        if self._event_bus is None:
+            return
+        self._event_bus.publish("system.error", {
+            "component": "broker",
+            "kind": kind,
+            "detail": detail,
+            "recoverable": recoverable,
+        })
+
+    # ------------------------------------------------------------------
     # Account mode
     # ------------------------------------------------------------------
 
@@ -363,6 +392,7 @@ class QuotexManager:
             except Exception as exc:
                 self._last_error = f"change_account: {exc}"
                 log.error("broker.account_mode.failed", mode=mode, error=str(exc))
+                self._emit_system_error(kind="account_mode.failed", detail=str(exc))
                 raise QuotexManagerError(self._last_error) from exc
             log.info("broker.account_mode.ok", mode=mode)
 
@@ -386,6 +416,7 @@ class QuotexManager:
         except Exception as exc:
             self._last_error = f"get_balance: {exc}"
             log.warning("broker.balance.failed", error=str(exc))
+            self._emit_system_error(kind="balance.failed", detail=str(exc))
             raise QuotexManagerError(self._last_error) from exc
 
     @property

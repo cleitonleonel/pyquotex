@@ -135,7 +135,8 @@ class TelegramManager:
     # the source of truth.
     _CLIENT_NAME = "autotrader"
 
-    def __init__(self) -> None:
+    def __init__(self, *, event_bus: Any | None = None) -> None:
+        self._event_bus = event_bus
         self._client: Client | None = None
         self._state: LoginState = "idle"
         self._phone: str | None = None
@@ -224,6 +225,23 @@ class TelegramManager:
         self._username = getattr(me, "username", None)
         self._first_name = getattr(me, "first_name", None)
         self._phone = self._phone or getattr(me, "phone_number", None)
+
+    def _emit_system_error(
+        self,
+        *,
+        kind: str,
+        detail: str,
+        recoverable: bool = True,
+    ) -> None:
+        """Publish a ``system.error`` event for the admin notifier."""
+        if self._event_bus is None:
+            return
+        self._event_bus.publish("system.error", {
+            "component": "telegram",
+            "kind": kind,
+            "detail": detail,
+            "recoverable": recoverable,
+        })
 
     # ------------------------------------------------------------------
     # Session restore
@@ -571,6 +589,7 @@ class TelegramManager:
                 self._client.add_handler(RawUpdateHandler(_on_raw_update))
         except Exception as exc:  # pragma: no cover  (handler API drift)
             log.warning("telegram.handler.attach_failed", error=str(exc))
+            self._emit_system_error(kind="handler.attach_failed", detail=str(exc))
             return
         self._handler_attached = True
         log.info("telegram.handler.attached")
@@ -607,6 +626,7 @@ class TelegramManager:
             log.info("telegram.peer_cache.primed", dialogs=count)
         except Exception as exc:  # pragma: no cover - best-effort
             log.warning("telegram.peer_cache.failed", error=str(exc))
+            self._emit_system_error(kind="peer_cache.failed", detail=str(exc))
             return
 
         # Touch each watched channel/group so Pyrogram subscribes its

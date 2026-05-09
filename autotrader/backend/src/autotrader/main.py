@@ -111,7 +111,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     """Bootstraps DB + Quotex client; tears down on shutdown."""
     await init_db()
 
-    manager = QuotexManager(root_path=_broker_root_path())
+    # Construct the trade event bus first so the broker + telegram
+    # managers can publish ``system.error`` events from the moment
+    # they're alive. (The pipeline / executor / notifier are wired
+    # later in this same lifespan.)
+    event_bus = TradeEventBus()
+    app.state.event_bus = event_bus
+
+    manager = QuotexManager(root_path=_broker_root_path(), event_bus=event_bus)
     app.state.quotex_manager = manager
 
     # Auto-load credentials and pre-warm the connection so the first
@@ -159,7 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
 
     # Telegram manager + session restore. Phase 2 just keeps the
     # client warm; Phase 3 attaches the live message handler.
-    telegram_manager = TelegramManager()
+    telegram_manager = TelegramManager(event_bus=event_bus)
     app.state.telegram_manager = telegram_manager
     async with AsyncSessionLocal() as session:
         tg_row = await load_telegram_session(session)
@@ -197,9 +204,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     # but the master switch (GlobalSettings.pipeline_active) and the
     # per-config ``enabled`` flag still gate every dispatch — flipping
     # the env flag alone never auto-trades.
-    event_bus = TradeEventBus()
-    app.state.event_bus = event_bus
-
     executor = TradeExecutor(
         manager=manager,
         live_trading_enabled_env=settings.live_trading_enabled,

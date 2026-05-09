@@ -1249,3 +1249,50 @@ def test_risk_rejected_event_is_published() -> None:
     assert payload["parser_config_id"] == cfg_id
     assert payload["parser_name"] == "dr"
     assert "kill switch" in payload["reason"].lower()
+
+
+def test_quotex_manager_publishes_system_error_on_disconnect_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``QuotexManager.disconnect()`` raises (broker IO failure)
+    the manager must emit a ``system.error`` event so the notifier
+    can DM the admin."""
+    from autotrader.services.event_bus import TradeEventBus  # noqa: PLC0415
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+    from tests.test_broker import FakeQuotex  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex", FakeQuotex,
+    )
+    bus = TradeEventBus()
+    seen: list[dict] = []
+
+    async def _run() -> None:
+        async def _drain() -> None:
+            async for event in bus.subscribe():
+                if event.type == "system.error":
+                    seen.append(dict(event.payload))
+                    return
+        manager = QuotexManager(root_path=".", event_bus=bus)
+        manager.set_credentials("a@b.c", "p", "PRACTICE")
+        manager.begin_connect()
+        await manager.wait_settled(timeout=1.0)
+        # Force a disconnect failure by swapping out the inner client
+        # for one whose ``close_connection`` raises.
+        class _BoomClient:
+            async def close_connection(self) -> None:
+                raise RuntimeError("simulated broker io failure")
+            check_connect = False
+        manager._client = _BoomClient()  # type: ignore[attr-defined]
+
+        drain = asyncio.create_task(_drain())
+        # Yield once so ``_drain`` can enter ``bus.subscribe()`` and
+        # register its queue before the publish fires synchronously
+        # inside ``disconnect()``.
+        await asyncio.sleep(0)
+        await manager.disconnect()
+        await asyncio.wait_for(drain, timeout=1.0)
+
+    asyncio.new_event_loop().run_until_complete(_run())
+    assert any("disconnect" in p.get("kind", "").lower() for p in seen), seen
+    assert any(p.get("component") == "broker" for p in seen), seen
