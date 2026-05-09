@@ -587,6 +587,45 @@ async def breakdown_endpoint(  # noqa: PLR0912
     )
 
 
+@router.get("/assets")
+async def assets_endpoint(
+    session: SessionDep,
+    range: str = Query("24h", alias="range"),
+    custom_from: datetime | None = Query(None, alias="from"),  # noqa: B008
+    custom_to: datetime | None = Query(None, alias="to"),  # noqa: B008
+) -> dict[str, list[str]]:
+    """Distinct asset symbols traded inside the time window.
+
+    Powers the asset filter pill on the frontend. Deliberately does
+    not accept chat/parser/direction filters: the pill must show the
+    full universe of assets so an operator can pivot across channels
+    without first clearing the other filter pills. Sorted case-
+    insensitively for stable UI ordering.
+
+    Pydantic parses ISO datetimes without offset as naive — normalize
+    to UTC before passing to ``resolve_range`` so the comparison with
+    ``received_at`` (always UTC) doesn't TypeError.
+    """
+    if custom_from is not None and custom_from.tzinfo is None:
+        custom_from = custom_from.replace(tzinfo=UTC)
+    if custom_to is not None and custom_to.tzinfo is None:
+        custom_to = custom_to.replace(tzinfo=UTC)
+    since, until = resolve_range(
+        range,
+        now=datetime.now(UTC),
+        custom_from=custom_from,
+        custom_to=custom_to,
+    )
+    stmt = (
+        select(TradeAttempt.asset)
+        .where(TradeAttempt.received_at >= since)
+        .where(TradeAttempt.received_at < until)
+        .distinct()
+    )
+    rows = (await session.exec(stmt)).all()
+    return {"assets": sorted({r for r in rows if r}, key=str.lower)}
+
+
 @router.get("/funnel", response_model=FunnelResponse)
 async def funnel_endpoint(
     session: SessionDep,
