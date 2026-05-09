@@ -504,16 +504,7 @@ async def test_breakdown_parser_label_from_config(
     from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
 
     async with AsyncSessionLocal() as s:
-        s.add(ParserConfig(
-            id=42, chat_id=12345, name="scalp-v2", priority=100,
-            parser_type="template", parser_config_json="{}",
-            timezone="UTC", timezone_offset_minutes=0,
-            asset_aliases_json="{}", aggregate_window_seconds=0,
-            default_stake=1.0, default_duration_seconds=60,
-            trade_mode="auto", martingale_enabled=False,
-            martingale_multiplier=2.0, martingale_max_streak=5,
-            martingale_reset_on_win=True, enabled=True,
-        ))
+        s.add(ParserConfig(id=42, chat_id=12345, name="scalp-v2"))
         await s.commit()
 
     headers = await _login(async_client)

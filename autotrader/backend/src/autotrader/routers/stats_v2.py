@@ -19,7 +19,9 @@ from sqlmodel import select
 
 from autotrader.auth import require_auth
 from autotrader.dependencies import SessionDep
+from autotrader.models.parser_config import ParserConfig
 from autotrader.models.trade_attempt import TradeAttempt
+from autotrader.models.watched_channel import WatchedChannel
 from autotrader.services.filters import (
     Direction,
     ResolvedFilter,
@@ -73,10 +75,25 @@ class BreakdownRow(BaseModel):
     win_rate_ci_high: float | None = None
     realised_pnl: float
     committed_stake: float
-    # Per-dim extras attached as needed (direction_split for asset,
-    # streaks for parser). See the spec for shapes.
-    direction_split: dict | None = None
+    # Per-dim extras attached as needed (DirectionSplit for asset,
+    # streaks for parser).
+    direction_split: DirectionSplit | None = None
     streaks: list[dict] | None = None
+
+
+class DirectionSplit(BaseModel):
+    """Per-direction sub-stats attached to BreakdownRow when dim=asset.
+
+    Both fields are full BreakdownRow shapes computed from the
+    asset's call vs put trades respectively.
+    """
+
+    call: BreakdownRow
+    put: BreakdownRow
+
+
+# Resolve the forward reference now that DirectionSplit is defined.
+BreakdownRow.model_rebuild()
 
 
 class BreakdownResponse(BaseModel):
@@ -427,28 +444,26 @@ async def breakdown_endpoint(  # noqa: PLR0912
     if dim == "channel":
         # Resolve labels from WatchedChannel rows. Trades from chats
         # without a WatchedChannel row still appear, labelled `chat N`.
-        from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
         watched = (await session.exec(select(WatchedChannel))).all()
         titles = {w.chat_id: w.title for w in watched}
-        grouped: dict[int, list[TradeAttempt]] = {}
+        grouped_c: dict[int, list[TradeAttempt]] = {}
         for row in rows:
-            grouped.setdefault(row.chat_id, []).append(row)
-        out: list[BreakdownRow] = []
-        for chat_id, attempts in grouped.items():
-            out.append(_build_breakdown_row(
+            grouped_c.setdefault(row.chat_id, []).append(row)
+        out_c: list[BreakdownRow] = []
+        for chat_id, attempts in grouped_c.items():
+            out_c.append(_build_breakdown_row(
                 key=chat_id,
                 label=titles.get(chat_id, f"chat {chat_id}"),
                 attempts=attempts,
             ))
-        out.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
+        out_c.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
         return BreakdownResponse(
             dim="channel",
-            rows=out,
+            rows=out_c,
             filters_applied=f.model_dump(mode="json"),
         )
 
     if dim == "parser":
-        from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
         configs = (await session.exec(select(ParserConfig))).all()
         names = {c.id: c.name for c in configs if c.id is not None}
         grouped_p: dict[int, list[TradeAttempt]] = {}
@@ -482,14 +497,14 @@ async def breakdown_endpoint(  # noqa: PLR0912
             )
             calls = [a for a in attempts if a.direction == "call"]
             puts = [a for a in attempts if a.direction == "put"]
-            base.direction_split = {
-                "call": _build_breakdown_row(
+            base.direction_split = DirectionSplit(
+                call=_build_breakdown_row(
                     key=asset_sym, label=asset_sym, attempts=calls,
-                ).model_dump(),
-                "put": _build_breakdown_row(
+                ),
+                put=_build_breakdown_row(
                     key=asset_sym, label=asset_sym, attempts=puts,
-                ).model_dump(),
-            }
+                ),
+            )
             out_a.append(base)
         out_a.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
         return BreakdownResponse(
