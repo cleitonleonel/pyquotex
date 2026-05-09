@@ -49,6 +49,31 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await _migrate_in_place(conn)
         await conn.run_sync(SQLModel.metadata.create_all)
+        await _create_indices(conn)
+
+
+async def _create_indices(conn) -> None:  # type: ignore[no-untyped-def]
+    """Create composite indices after tables exist.
+
+    Must run after ``create_all`` so the target tables are guaranteed
+    to exist. All statements use ``IF NOT EXISTS`` so they are
+    idempotent and safe to run on every startup.
+    """
+    # Phase 2: composite indices on trade_attempts(received_at, dim).
+    # Without these the timeseries/breakdown queries do a full table
+    # scan on (received_at >= since) for every request.
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_trade_attempts_received_chat "
+            "ON trade_attempts(received_at, chat_id)",
+        ),
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_trade_attempts_received_parser "
+            "ON trade_attempts(received_at, parser_config_id)",
+        ),
+    )
 
 
 async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]

@@ -1,6 +1,6 @@
 "use client";
 
-import { OverviewEquityStub } from "./_components/overview-equity-stub";
+import { PanelEquityCurve } from "./_components/panel-equity-curve";
 import { OverviewKpiHero } from "./_components/overview-kpi-hero";
 import { OverviewRecentActivity } from "./_components/overview-recent-activity";
 import { OverviewStatusCards } from "./_components/overview-status-cards";
@@ -18,7 +18,7 @@ export default function OverviewPage() {
 
       <OverviewKpiHero />
 
-      <OverviewEquityStub />
+      <PanelEquityCurve compact />
 
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
         <OverviewRecentActivity />

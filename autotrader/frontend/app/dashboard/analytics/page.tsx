@@ -1,41 +1,100 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Suspense } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FilterBar } from "../_components/filter-bar";
+import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-matrix";
+import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
+import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
+import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
 
-export default function AnalyticsPlaceholderPage() {
+/**
+ * Analytics page — 3 tabs (Performance / Execution / Risk).
+ *
+ * Suspense wrapper is required by Next.js 15 because useSearchParams
+ * (used inside FilterBar via useFilters) opts the page out of static
+ * rendering unless wrapped.
+ */
+export default function AnalyticsPage() {
+  return (
+    <Suspense fallback={<AnalyticsLoading />}>
+      <AnalyticsBody />
+    </Suspense>
+  );
+}
+
+function AnalyticsLoading() {
+  return (
+    <div className="space-y-6">
+      <section>
+        <h2 className="text-2xl font-semibold tracking-tight">Analytics</h2>
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </section>
+    </div>
+  );
+}
+
+function AnalyticsBody() {
   return (
     <div className="space-y-6">
       <section>
         <h2 className="text-2xl font-semibold tracking-tight">Analytics</h2>
         <p className="text-sm text-muted-foreground">
-          Advanced analytics ship in Phase 2.
+          Performance, execution health, and risk-cap utilisation across
+          your watched channels. Use the filter bar to scope by date
+          range, channel, parser, status, or direction.
         </p>
       </section>
-      <Card>
-        <CardHeader>
-          <CardTitle>Coming soon</CardTitle>
-          <CardDescription>
-            Phase 2 lands the global filter bar and 5 actionable panels
-            (equity curve, hour-of-day heatmap, channel leaderboard,
-            asset×direction matrix, signal funnel). Phase 3 adds parser
-            comparison, latency drift, risk-cap utilization, martingale
-            ladder ROI, and streak distribution.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            For now, see <strong>Trades</strong> for raw history,{" "}
-            <strong>Decisions</strong> for the live dispatch feed, and{" "}
-            <strong>Pipeline</strong> for status &amp; controls.
-          </p>
-        </CardContent>
-      </Card>
+
+      <FilterBar />
+
+      <Tabs defaultValue="performance" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="execution">Execution</TabsTrigger>
+          <TabsTrigger value="risk">Risk</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="performance" className="space-y-4">
+          <PerformanceTab />
+        </TabsContent>
+
+        <TabsContent value="execution" className="space-y-4">
+          <ExecutionTab />
+        </TabsContent>
+
+        <TabsContent value="risk" className="space-y-4">
+          {/* All risk panels are Phase 3. */}
+          <RiskTabPlaceholder />
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+function PerformanceTab() {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      <PanelChannelLeaderboard />
+      <PanelAssetDirectionMatrix />
+    </div>
+  );
+}
+
+function ExecutionTab() {
+  return (
+    <div className="space-y-4">
+      <PanelHourHeatmap />
+      <PanelSignalFunnel />
+    </div>
+  );
+}
+
+function RiskTabPlaceholder() {
+  return (
+    <p className="text-sm text-muted-foreground">
+      Risk-cap utilisation, martingale ladder ROI, and streak
+      distribution land in Phase 3.
+    </p>
   );
 }
