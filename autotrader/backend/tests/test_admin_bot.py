@@ -1130,3 +1130,122 @@ def test_notifier_resets_backoff_on_admin_message() -> None:
         return notifier.outbound_paused
 
     assert asyncio.new_event_loop().run_until_complete(_run()) is False
+
+
+def test_risk_rejected_event_is_published() -> None:
+    """When the risk gate refuses a signal, the executor publishes a
+    ``risk.rejected`` event on the bus carrying the rejection reason
+    plus the parser/asset/direction context."""
+    from sqlmodel import delete  # noqa: PLC0415
+
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+    from autotrader.services.event_bus import TradeEventBus  # noqa: PLC0415
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+    from autotrader.services.parsers.base import ParsedSignal  # noqa: PLC0415
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+    bus = TradeEventBus()
+
+    async def _drain() -> None:
+        async for event in bus.subscribe():
+            seen.append((event.type, dict(event.payload)))
+            if any(t == "risk.rejected" for t, _ in seen):
+                return
+
+    async def _run() -> int:
+        from autotrader.db import AsyncSessionLocal, init_db  # noqa: PLC0415
+
+        # Ensure schema exists when this test runs in isolation (other
+        # tests in the suite happen to call init_db via bot startup
+        # paths, but this one doesn't go through that flow).
+        await init_db()
+
+        async with AsyncSessionLocal() as s:
+            s.add(WatchedChannel(
+                chat_id=-9001, title="t", chat_type="channel",
+                username=None, enabled=True,
+            ))
+            cfg = ParserConfig(
+                id=9043, chat_id=-9001, name="dr", parser_type="regex",
+                default_stake=1.0, enabled=True,
+            )
+            s.add(cfg)
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.kill_switch_engaged = True
+            gs.pipeline_active = True
+            s.add(gs)
+            await s.commit()
+            await s.refresh(cfg)
+            cfg_id = cfg.id or 0
+
+        # Stand up a fake quotex manager — enough surface for the
+        # executor's "broker_connected" check; the kill switch will
+        # block the trade before any real broker call happens.
+        class _FakeQM:
+            connected = True
+            account_mode = "PRACTICE"
+
+            def status(self) -> Any:  # noqa: ANN401
+                class _Status:
+                    account_mode = "PRACTICE"
+                return _Status()
+
+        executor = TradeExecutor(
+            manager=_FakeQM(),  # type: ignore[arg-type]
+            live_trading_enabled_env=False,
+            event_bus=bus,
+        )
+
+        signal = ParsedSignal(
+            asset="EURUSD_otc", direction="call",
+            duration_seconds=60, stake=10.0, fire_at=None,
+            raw_text="test", parser_id="x", asset_raw="EURUSD",
+        )
+        async with AsyncSessionLocal() as s:
+            settings_row = await s.get(GlobalSettings, 1)
+            assert settings_row is not None
+
+        drain = asyncio.create_task(_drain())
+        # Yield once so the drain task gets to register its subscriber
+        # queue on the bus before submit() publishes.
+        await asyncio.sleep(0)
+        await executor.submit(
+            signal=signal, parser_config=cfg, settings=settings_row,
+        )
+        await asyncio.wait_for(drain, timeout=2.0)
+        return cfg_id
+
+    async def _cleanup(cfg_id: int) -> None:
+        from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+
+        async with AsyncSessionLocal() as s:
+            await s.exec(delete(TradeAttempt).where(  # type: ignore[call-overload]
+                TradeAttempt.chat_id == -9001,
+            ))
+            await s.exec(delete(ParserConfig).where(  # type: ignore[call-overload]
+                ParserConfig.id == cfg_id,
+            ))
+            await s.exec(delete(WatchedChannel).where(  # type: ignore[call-overload]
+                WatchedChannel.chat_id == -9001,
+            ))
+            await s.commit()
+
+    cfg_id = 0
+    try:
+        cfg_id = asyncio.new_event_loop().run_until_complete(_run())
+    finally:
+        if cfg_id:
+            asyncio.new_event_loop().run_until_complete(_cleanup(cfg_id))
+        _reset_global_settings_flags()
+
+    types = [t for t, _ in seen]
+    assert "risk.rejected" in types, f"saw events: {types}"
+    payload = next(p for t, p in seen if t == "risk.rejected")
+    assert payload["asset"] == "EURUSD_otc"
+    assert payload["direction"] == "call"
+    assert payload["chat_id"] == -9001
+    assert payload["parser_config_id"] == cfg_id
+    assert payload["parser_name"] == "dr"
+    assert "kill switch" in payload["reason"].lower()

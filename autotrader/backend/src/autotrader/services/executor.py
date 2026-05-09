@@ -146,6 +146,18 @@ class TradeExecutor:
                 asset=signal.asset,
                 reason=decision.reason,
             )
+            # Fan out to the admin-bot notifier (and any other
+            # consumer). The bus is fire-and-forget; missing
+            # subscribers silently no-op.
+            if self._event_bus is not None:
+                self._event_bus.publish("risk.rejected", {
+                    "chat_id": parser_config.chat_id,
+                    "parser_config_id": parser_config.id,
+                    "parser_name": parser_config.name,
+                    "asset": signal.asset,
+                    "direction": signal.direction,
+                    "reason": decision.reason,
+                })
             return attempt
 
         # Attempt is in DB; place the trade.
