@@ -524,6 +524,65 @@ async def handle_parser_detail(message: Any, _bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# /caps and /stake — numeric setters
+# --------------------------------------------------------------------------
+
+
+def _format_caps(gs: GlobalSettings) -> str:
+    return (
+        "*Caps*\n"
+        f"Daily-loss: ${gs.daily_max_loss:.2f}\n"
+        f"Daily-stake: ${gs.daily_max_stake:.2f}\n"
+        f"Max concurrent: {gs.max_concurrent_trades}\n"
+        "(0 = uncapped)"
+    )
+
+
+async def handle_caps(message: Any, _bot: Any) -> Reply:
+    parts = message.text.split()
+    if len(parts) == 1:
+        async with AsyncSessionLocal() as session:
+            gs = await session.get(GlobalSettings, 1) or GlobalSettings(id=1)
+        return Reply(text=_format_caps(gs))
+
+    if len(parts) < 3:
+        return Reply(text="Usage: /caps loss|stake|concurrent <value>")
+    sub = parts[1].lower()
+    raw = parts[2]
+    field_map = {
+        "loss": ("daily_max_loss", float),
+        "stake": ("daily_max_stake", float),
+        "concurrent": ("max_concurrent_trades", int),
+    }
+    spec = field_map.get(sub)
+    if spec is None:
+        return Reply(text="Usage: /caps loss|stake|concurrent <value>")
+    field, parser = spec
+    try:
+        value = parser(raw)
+    except ValueError:
+        return Reply(text=f"'{raw}' is not a valid {parser.__name__}.")
+    if value < 0:
+        return Reply(text="value must be >= 0 (0 = uncapped).")
+    gs = await _set_settings_flag(field, value)
+    return Reply(text=_format_caps(gs))
+
+
+async def handle_stake(message: Any, _bot: Any) -> Reply:
+    parts = message.text.split()
+    if len(parts) < 2:
+        return Reply(text="Usage: /stake <amount>")
+    try:
+        amount = float(parts[1])
+    except ValueError:
+        return Reply(text=f"'{parts[1]}' is not a number.")
+    if amount <= 0:
+        return Reply(text="amount must be > 0.")
+    gs = await _set_settings_flag("default_stake", amount)
+    return Reply(text=f"Default stake set to ${gs.default_stake:.2f}.")
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -541,6 +600,8 @@ COMMANDS: dict[str, Handler] = {
     "/pipeline": handle_pipeline,
     "/panic": handle_panic,
     "/mode": handle_mode,
+    "/caps": handle_caps,
+    "/stake": handle_stake,
     "/channels": handle_channels,
     "/channel": handle_channel_detail,
     "/parsers": handle_parsers,

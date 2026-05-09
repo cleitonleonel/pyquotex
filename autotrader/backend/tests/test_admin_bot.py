@@ -486,9 +486,9 @@ def test_streaks_lists_per_parser_state() -> None:
 
 
 def _reset_global_settings_flags() -> None:
-    """Reset the kill-switch / pipeline-active flags so toggle tests
-    don't leak state into test_pipeline.py (which expects a fresh
-    pipeline_active=False default on its first run)."""
+    """Reset GlobalSettings to its default-value shape so toggle / caps
+    / stake tests don't leak state into test_pipeline.py (which expects
+    pipeline_active=False, killswitch=False, uncapped (0) caps)."""
     from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
     from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
 
@@ -498,6 +498,10 @@ def _reset_global_settings_flags() -> None:
             if gs is not None:
                 gs.kill_switch_engaged = False
                 gs.pipeline_active = False
+                gs.daily_max_loss = 0.0
+                gs.daily_max_stake = 0.0
+                gs.max_concurrent_trades = 0
+                gs.default_stake = 1.0
                 s.add(gs)
                 await s.commit()
 
@@ -755,3 +759,72 @@ def test_callback_from_unauthorised_user_is_ignored() -> None:
         assert asyncio.new_event_loop().run_until_complete(_seed_then_attack()) is True
     finally:
         asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def test_caps_loss_persists_value() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> float:
+        await bot.start()
+        await fake.fire_message(555, "/caps loss 50")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.daily_max_loss if gs else 0.0
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) == 50.0
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_caps_concurrent_persists_value() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> int:
+        await bot.start()
+        await fake.fire_message(555, "/caps concurrent 4")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.max_concurrent_trades if gs else 0
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) == 4
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_stake_persists_value() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> float:
+        await bot.start()
+        await fake.fire_message(555, "/stake 7.5")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.default_stake if gs else 0.0
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) == 7.5
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_caps_invalid_subcommand_replies_usage() -> None:
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> str:
+        await bot.start()
+        await fake.fire_message(555, "/caps banana 10")
+        return fake.sent_messages[-1][1]
+
+    text = asyncio.new_event_loop().run_until_complete(_run())
+    assert "usage" in text.lower() or "loss" in text.lower()
