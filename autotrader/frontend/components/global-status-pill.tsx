@@ -18,17 +18,25 @@ import { Badge } from "@/components/ui/badge";
 import { type PipelineStatus, pipeline } from "@/lib/api";
 
 export function GlobalStatusPill() {
-  const { data, isLoading } = useQuery<PipelineStatus>({
+  const { data, isLoading, isError } = useQuery<PipelineStatus>({
     queryKey: ["pipeline", "status"],
     queryFn: pipeline.status,
     refetchInterval: 5_000,
   });
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <Badge variant="outline" className="gap-1.5">
         <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
         loading…
+      </Badge>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <Badge variant="destructive" className="gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        API unreachable
       </Badge>
     );
   }

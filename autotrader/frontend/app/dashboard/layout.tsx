@@ -7,6 +7,20 @@ import { AppTopbar } from "@/components/app-topbar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getToken } from "@/lib/api";
 
+/**
+ * shadcn's <SidebarProvider> writes the collapsed/expanded preference to
+ * document.cookie on every toggle but does NOT read it back on mount —
+ * the caller is expected to seed `defaultOpen` from the cookie. In a
+ * Server Component you'd read it via next/headers; here the layout is
+ * forced client-side by the auth gate, so we read the cookie directly
+ * in a useState initializer (sync, before first paint).
+ */
+function readSidebarCookie(): boolean {
+  if (typeof document === "undefined") return true;
+  const match = document.cookie.match(/(?:^|;\s*)sidebar_state=([^;]+)/);
+  return match ? match[1] === "true" : true;
+}
+
 export default function DashboardLayout({
   children,
 }: {
@@ -14,6 +28,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
+  const [sidebarOpen] = useState(readSidebarCookie);
 
   useEffect(() => {
     if (!getToken()) {
@@ -26,10 +41,7 @@ export default function DashboardLayout({
   if (!authed) return null;
 
   return (
-    // ``defaultOpen`` = true keeps the rail expanded on first visit;
-    // shadcn persists the user's collapsed/expanded preference to a
-    // cookie automatically.
-    <SidebarProvider defaultOpen>
+    <SidebarProvider defaultOpen={sidebarOpen}>
       <AppSidebar />
       <SidebarInset>
         <AppTopbar />
