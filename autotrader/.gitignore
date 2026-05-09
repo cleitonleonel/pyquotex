@@ -11,6 +11,9 @@ data/
 *.session
 *.session-journal
 
+# Brainstorming companion artefacts (mockups, server state)
+.superpowers/
+
 # Lockfiles — KEEP these committed for reproducible builds
 # (uv.lock and bun.lock are the source of truth)
 !uv.lock
