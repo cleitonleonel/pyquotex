@@ -30,14 +30,14 @@ from autotrader.models.telegram_session import (
 from autotrader.models.telegram_session import (
     load_session as load_telegram_session,
 )
-from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, telegram
 from autotrader.routers import admin_bot as admin_bot_router
+from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, stats_v2, telegram
 from autotrader.routers import pipeline as pipeline_router
+from autotrader.services.admin_bot import AdminBot
 from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
-from autotrader.services.admin_bot import AdminBot
 from autotrader.services.quotex_manager import QuotexManager
 from autotrader.services.telegram_manager import TelegramManager
 
@@ -107,7 +107,7 @@ def _default_backup_dir() -> str:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (linear startup script)
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0915  (linear startup script)
     """Bootstraps DB + Quotex client; tears down on shutdown."""
     await init_db()
 
@@ -337,6 +337,7 @@ app.include_router(parsers.router)
 app.include_router(pipeline_router.router)
 app.include_router(risk.router)
 app.include_router(stats.router)
+app.include_router(stats_v2.router)
 app.include_router(feed.router)
 app.include_router(admin_bot_router.router)
 
