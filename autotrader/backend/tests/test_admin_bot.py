@@ -230,3 +230,83 @@ def test_admin_bot_unbind_clears_user_id(monkeypatch: pytest.MonkeyPatch) -> Non
                 gs = await s.get(GlobalSettings, 1)
                 return gs.admin_telegram_user_id if gs else None
         assert asyncio.new_event_loop().run_until_complete(_read()) is None
+
+
+def test_first_start_binds_admin_user_id() -> None:
+    """The first ``/start`` from any user binds that user_id to the
+    settings row AND to the in-memory bot, then replies confirm."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_commands import build_message_hook  # noqa: PLC0415
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(bot_token="123:abc", client_factory=lambda t: fake)
+    bot.set_message_hook(build_message_hook(bot))
+
+    async def _run() -> tuple[int | None, list[tuple[int, str, object]]]:
+        await bot.start()
+        # First /start from user 555 binds.
+        await fake.fire_message(user_id=555, text="/start")
+        return bot.status().bound_user_id, list(fake.sent_messages)
+
+    bound, sent = asyncio.new_event_loop().run_until_complete(_run())
+    assert bound == 555
+    # Exactly one reply, confirming the bind.
+    assert len(sent) == 1
+    chat_id, text, _ = sent[0]
+    assert chat_id == 555
+    assert "bound" in text.lower()
+
+
+def test_second_start_from_other_user_is_rejected() -> None:
+    """Once bound, /start from a *different* user replies 'bound to
+    another admin' and does NOT change the bound id."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_commands import build_message_hook  # noqa: PLC0415
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    async def _seed_first() -> None:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            s.add(gs); await s.commit()
+
+    asyncio.new_event_loop().run_until_complete(_seed_first())
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(bot_token="123:abc", client_factory=lambda t: fake, bound_user_id=555)
+    bot.set_message_hook(build_message_hook(bot))
+
+    async def _run() -> tuple[int | None, list[tuple[int, str, object]]]:
+        await bot.start()
+        await fake.fire_message(user_id=999, text="/start")
+        return bot.status().bound_user_id, list(fake.sent_messages)
+
+    bound, sent = asyncio.new_event_loop().run_until_complete(_run())
+    assert bound == 555  # unchanged
+    assert len(sent) == 1
+    chat_id, text, _ = sent[0]
+    assert chat_id == 999
+    assert "another admin" in text.lower()
+
+
+def test_non_admin_message_is_silently_dropped() -> None:
+    """Any *non-/start* message from a non-admin user must be silently
+    dropped — no reply, no log noise to the user."""
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_commands import build_message_hook  # noqa: PLC0415
+
+    fake = FakePyrogramBot()
+    bot = AdminBot(bot_token="123:abc", client_factory=lambda t: fake, bound_user_id=555)
+    bot.set_message_hook(build_message_hook(bot))
+
+    async def _run() -> list[tuple[int, str, object]]:
+        await bot.start()
+        await fake.fire_message(user_id=999, text="/status")
+        return list(fake.sent_messages)
+
+    sent = asyncio.new_event_loop().run_until_complete(_run())
+    assert sent == []

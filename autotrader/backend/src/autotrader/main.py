@@ -224,6 +224,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     app.state.admin_bot = admin_bot
     await admin_bot.start()
 
+    # Wire the command dispatcher only if the bot is actually running.
+    # When disabled / errored, leaving the hook unset means AdminBot
+    # just drops updates.
+    if admin_bot.status().state == "running":
+        from autotrader.services.admin_bot_commands import (  # noqa: PLC0415
+            build_message_hook,
+        )
+        admin_bot.set_message_hook(build_message_hook(admin_bot))
+
     # Sweep ``pending`` trades from the previous process. In-memory
     # watchers don't survive restart, so without this every old
     # pending row stays pending forever — the concurrency cap then
