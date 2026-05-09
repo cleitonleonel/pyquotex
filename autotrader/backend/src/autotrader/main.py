@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from autotrader import __version__
-from autotrader.config import settings
+from autotrader.config import settings, telegram_settings
 from autotrader.crypto import CryptoError
 from autotrader.db import AsyncSessionLocal, close_db, init_db
 from autotrader.logging_setup import configure_logging
@@ -21,6 +21,7 @@ from autotrader.models.broker_credentials import (
     delete_credentials,
     load_credentials,
 )
+from autotrader.models.settings import GlobalSettings
 from autotrader.models.telegram_session import (
     delete_session as delete_telegram_session,
 )
@@ -33,6 +34,7 @@ from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
+from autotrader.services.admin_bot import AdminBot
 from autotrader.services.quotex_manager import QuotexManager
 from autotrader.services.telegram_manager import TelegramManager
 
@@ -205,6 +207,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
     app.state.executor = executor
     telegram_manager.set_message_callback(pipeline.dispatch)
 
+    # Admin Telegram bot (Phase 8). The token is *optional* — when
+    # unset, the bot is constructed in ``state="disabled"`` and ``start()``
+    # is a no-op. The rest of the app keeps trading either way.
+    bot_token_secret = telegram_settings.bot_token
+    bot_token = (
+        bot_token_secret.get_secret_value() if bot_token_secret is not None else None
+    )
+    async with AsyncSessionLocal() as session:
+        gs = await session.get(GlobalSettings, 1)
+    admin_bot = AdminBot(
+        bot_token=bot_token,
+        bound_user_id=(gs.admin_telegram_user_id if gs is not None else None),
+    )
+    app.state.admin_bot = admin_bot
+    await admin_bot.start()
+
     # Sweep ``pending`` trades from the previous process. In-memory
     # watchers don't survive restart, so without this every old
     # pending row stays pending forever — the concurrency cap then
@@ -240,6 +258,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
         log.info("autotrader.shutdown")
         await backup_scheduler.stop()
         telegram_manager.set_message_callback(None)
+        await admin_bot.stop()
         await executor.shutdown()
         await manager.disconnect()
         with contextlib.suppress(Exception):

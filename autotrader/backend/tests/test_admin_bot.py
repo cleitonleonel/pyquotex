@@ -158,3 +158,20 @@ def test_admin_bot_start_failure_sets_error_state() -> None:
         assert "invalid token" in (st.last_error or "")
 
     asyncio.new_event_loop().run_until_complete(_run())
+
+
+def test_admin_bot_attached_to_app_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lifespan must attach an ``AdminBot`` instance to
+    ``app.state.admin_bot`` so routers + the notifier can find it."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from tests.test_broker import FakeQuotex  # noqa: PLC0415
+
+    monkeypatch.setattr("autotrader.services.quotex_manager.Quotex", FakeQuotex)
+
+    from autotrader.main import app  # noqa: PLC0415
+    with TestClient(app):
+        bot = app.state.admin_bot
+        # No token -> disabled, but the instance is still attached.
+        assert bot.status().state == "disabled"
