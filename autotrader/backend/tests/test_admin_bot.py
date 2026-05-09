@@ -1046,3 +1046,87 @@ def test_notifier_rate_limit_coalesces_burst() -> None:
         assert any("suppressed" in s for s in sent), sent
     finally:
         _reset_notifier_settings()
+
+
+# ---------------------------------------------------------------------------
+# Task 15: AdminBotNotifier — bus subscribe + format trade events
+# ---------------------------------------------------------------------------
+
+
+def test_notifier_subscribes_and_renders_trade_upserted() -> None:
+    """Publishing a ``trade.upserted`` event with status=pending lands
+    a *placed* notification; status=won lands a *settled* notification."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+    from autotrader.services.event_bus import TradeEventBus  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+    bus = TradeEventBus()
+    notifier = AdminBotNotifier(bot=bot)
+
+    async def _run() -> list[str]:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            gs.admin_notify_placed = True
+            gs.admin_notify_settled = True
+            s.add(gs); await s.commit()
+        await bot.start()
+        task = asyncio.create_task(notifier.run(bus))
+
+        # Give the subscriber loop a tick to register.
+        await asyncio.sleep(0.01)
+
+        # Pending -> placed
+        bus.publish("trade.upserted", {
+            "id": 1, "asset": "EURUSD_otc", "direction": "call",
+            "duration_seconds": 60, "stake": 20.0, "status": "pending",
+            "profit": None, "parser_config_id": 4, "trade_mode": "live",
+            "martingale_step": 1, "base_stake": 10.0,
+        })
+        # Won -> settled
+        bus.publish("trade.upserted", {
+            "id": 1, "asset": "EURUSD_otc", "direction": "call",
+            "duration_seconds": 60, "stake": 20.0, "status": "won",
+            "profit": 18.4, "parser_config_id": 4, "trade_mode": "live",
+            "martingale_step": 1, "base_stake": 10.0,
+        })
+
+        # Allow the subscriber to drain.
+        await asyncio.sleep(0.05)
+        await notifier.shutdown()
+        try:
+            task.cancel()
+            await task
+        except asyncio.CancelledError:
+            pass
+        return [t for _, t, _ in fake.sent_messages]
+
+    try:
+        sent = asyncio.new_event_loop().run_until_complete(_run())
+        assert any("PLACED" in s for s in sent), sent
+        assert any("WIN" in s for s in sent), sent
+    finally:
+        _reset_notifier_settings()
+
+
+def test_notifier_resets_backoff_on_admin_message() -> None:
+    """After the backoff engages, an *incoming* /command from the admin
+    must clear it via the message hook."""
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> bool:
+        from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+        from autotrader.services import admin_bot_state  # noqa: PLC0415
+        notifier = AdminBotNotifier(bot=bot)
+        # Force the backoff state.
+        notifier._outbound_paused = True
+        notifier._consecutive_failures = 7
+        # Stash on the resolver so the hook can find it.
+        admin_bot_state.attach(pipeline=None, quotex=None, notifier=notifier)
+        await bot.start()
+        await fake.fire_message(555, "/whoami")
+        return notifier.outbound_paused
+
+    assert asyncio.new_event_loop().run_until_complete(_run()) is False

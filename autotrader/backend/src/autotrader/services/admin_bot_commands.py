@@ -730,6 +730,13 @@ def build_message_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
             log.info("admin_bot.dropped.unauthorised", sender=sender_id, command=head)
             return
 
+        # Any accepted command from the bound admin proves the channel
+        # is healthy — clear the notifier backoff if it was engaged.
+        from autotrader.services.admin_bot_state import get_notifier  # noqa: PLC0415
+        notifier = get_notifier()
+        if notifier is not None:
+            notifier.reset_failures()
+
         handler = COMMANDS.get(head)
         if handler is None:
             await message.reply_text(

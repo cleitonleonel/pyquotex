@@ -208,3 +208,132 @@ class AdminBotNotifier:
                     "admin_bot_notify.backoff.engaged",
                     threshold=self._FAILURE_THRESHOLD,
                 )
+
+
+# --------------------------------------------------------------------------
+# Format helpers
+# --------------------------------------------------------------------------
+
+
+def format_trade_placed(payload: dict[str, Any]) -> str:
+    asset = payload.get("asset", "?")
+    direction = (payload.get("direction") or "?").upper()
+    duration = payload.get("duration_seconds", 0)
+    stake = float(payload.get("stake") or 0.0)
+    base = float(payload.get("base_stake") or stake)
+    step = int(payload.get("martingale_step") or 0)
+    mode = payload.get("trade_mode") or "auto"
+    step_note = ""
+    if step > 0 and base > 0:
+        ratio = stake / base
+        step_note = f" (step {step}, x{ratio:.1f} from base)"
+    return (
+        f"PLACED  {asset} - {direction} - {duration}s\n"
+        f"stake : ${stake:.2f}{step_note}\n"
+        f"mode  : {mode}"
+    )
+
+
+def format_trade_settled(payload: dict[str, Any]) -> str:
+    asset = payload.get("asset", "?")
+    direction = (payload.get("direction") or "?").upper()
+    duration = payload.get("duration_seconds", 0)
+    profit = payload.get("profit")
+    status = payload.get("status", "?")
+    if status == "won":
+        prefix = "WIN"
+    elif status == "lost":
+        prefix = "LOSS"
+    elif status == "refund":
+        prefix = "REFUND"
+    else:
+        prefix = status.upper()
+    pnl = f"{profit:+.2f}" if isinstance(profit, (int, float)) else "—"
+    return f"{prefix}   {asset} - {direction} - {duration}s   {pnl}"
+
+
+def format_risk_rejected(payload: dict[str, Any]) -> str:
+    asset = payload.get("asset", "?")
+    direction = (payload.get("direction") or "?").upper()
+    parser = payload.get("parser_name") or "?"
+    reason = payload.get("reason") or "(no reason)"
+    return (
+        f"REJECTED  {asset} - {direction}  ({parser})\n"
+        f"reason: {reason}"
+    )
+
+
+def format_system_error(payload: dict[str, Any]) -> str:
+    component = payload.get("component", "?")
+    kind = payload.get("kind", "?")
+    detail = payload.get("detail", "")
+    return (
+        f"SYSTEM  {component} {kind}\n"
+        f"detail: {detail}"
+    )
+
+
+# --------------------------------------------------------------------------
+# Bus subscriber loop — patched onto AdminBotNotifier so the format
+# functions above stay module-level (re-usable from tests).
+# --------------------------------------------------------------------------
+
+
+async def _consume(self: "AdminBotNotifier", bus: Any) -> None:
+    """Forever-loop: subscribes to the bus, formats events, dispatches
+    to ``self.notify``. Cancelled at shutdown."""
+    self._digest_task = asyncio.create_task(_digest_loop(self))
+    try:
+        async for event in bus.subscribe():
+            try:
+                if event.type == "trade.upserted":
+                    status = event.payload.get("status")
+                    if status == "pending":
+                        await self.notify("placed", format_trade_placed(event.payload))
+                    elif status in ("won", "lost", "refund"):
+                        await self.notify("settled", format_trade_settled(event.payload))
+                elif event.type == "risk.rejected":
+                    await self.notify("risk_rejected", format_risk_rejected(event.payload))
+                elif event.type == "system.error":
+                    await self.notify("system_error", format_system_error(event.payload))
+            except Exception:  # noqa: BLE001
+                log.exception("admin_bot_notify.consume.format_failed",
+                              event_type=event.type)
+    finally:
+        if self._digest_task is not None:
+            self._digest_task.cancel()
+            try:
+                await self._digest_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def _digest_loop(self: "AdminBotNotifier") -> None:
+    """Periodic flush of pending suppression digests."""
+    while True:
+        try:
+            await self.flush_digests()
+        except Exception:  # noqa: BLE001
+            log.exception("admin_bot_notify.digest_loop.failed")
+        await asyncio.sleep(self._digest_window)
+
+
+async def _shutdown(self: "AdminBotNotifier") -> None:
+    """Best-effort flush + cancel the digest loop."""
+    try:
+        await self.flush_digests()
+    except Exception:  # noqa: BLE001
+        log.exception("admin_bot_notify.shutdown.flush_failed")
+    if getattr(self, "_digest_task", None) is not None:
+        self._digest_task.cancel()  # type: ignore[union-attr]
+        try:
+            await self._digest_task  # type: ignore[union-attr]
+        except (asyncio.CancelledError, AttributeError):
+            pass
+
+
+# Patch the loop methods onto the class. Keeps the format functions
+# at module scope (so tests can call them directly) without having to
+# turn them into staticmethods.
+AdminBotNotifier.run = _consume  # type: ignore[attr-defined]
+AdminBotNotifier.shutdown = _shutdown  # type: ignore[attr-defined]

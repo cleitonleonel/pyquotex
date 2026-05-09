@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import structlog
 from fastapi import FastAPI
@@ -241,6 +243,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
         admin_bot.set_message_hook(build_message_hook(admin_bot))
         admin_bot.set_callback_hook(build_callback_hook(admin_bot))
 
+    notifier_task: asyncio.Task[None] | None = None
+    notifier: Any | None = None
+    if admin_bot.status().state == "running":
+        from autotrader.services.admin_bot_notify import (  # noqa: PLC0415
+            AdminBotNotifier,
+        )
+        notifier = AdminBotNotifier(bot=admin_bot)
+        notifier_task = asyncio.create_task(notifier.run(event_bus))
+
+    # Re-attach the resolver to include the notifier (the earlier
+    # attach call from Task 9 didn't have it).
+    admin_bot_state.attach(
+        pipeline=pipeline,
+        quotex=manager,
+        admin_bot=admin_bot,
+        notifier=notifier,
+    )
+
     # Sweep ``pending`` trades from the previous process. In-memory
     # watchers don't survive restart, so without this every old
     # pending row stays pending forever — the concurrency cap then
@@ -276,6 +296,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
         log.info("autotrader.shutdown")
         await backup_scheduler.stop()
         telegram_manager.set_message_callback(None)
+        if notifier is not None:
+            await notifier.shutdown()
+        if notifier_task is not None:
+            notifier_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await notifier_task
         await admin_bot.stop()
         await executor.shutdown()
         await manager.disconnect()
