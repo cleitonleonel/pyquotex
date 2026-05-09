@@ -58,15 +58,28 @@ def _wire_iso8601(value: datetime | None) -> str | None:
     return aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
+def _attempt_to_payload(
+    attempt: TradeAttempt,
+    *,
+    parser_config: ParserConfig | None = None,
+    decision: RiskDecision | None = None,
+) -> dict[str, object]:
     """Mirror of ``TradeAttemptResponse`` for the event bus payload.
 
     The dashboard consumes ``trade.upserted`` events as drop-in
     replacements for rows fetched via ``GET /pipeline/trades``, so the
-    field set must match exactly. Datetimes go out as ISO 8601
-    strings so the payload is JSON-ready without a custom encoder.
+    base field set must match that response exactly. Datetimes go out
+    as ISO 8601 strings so the payload is JSON-ready without a custom
+    encoder.
+
+    Optional context (``parser_config`` / ``decision``) layers on
+    *additional* fields the admin Telegram bot uses to render a richer
+    PLACED message — parser name (which channel triggered this trade),
+    martingale step (where on the recovery ladder), and base stake (so
+    the formatter can compute the multiplier annotation). The frontend
+    ignores unknown fields, so adding them is non-breaking.
     """
-    return {
+    payload: dict[str, object] = {
         "id": attempt.id or 0,
         "chat_id": attempt.chat_id,
         "parser_config_id": attempt.parser_config_id,
@@ -85,6 +98,17 @@ def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
         "placed_at": attempt.placed_at.isoformat() if attempt.placed_at else None,
         "settled_at": attempt.settled_at.isoformat() if attempt.settled_at else None,
     }
+    if parser_config is not None:
+        # Use the human-readable parser name; fall back to the id when
+        # the operator hasn't set a name (rare, but the dashboard
+        # allows it).
+        payload["parser_name"] = (
+            parser_config.name or f"parser #{parser_config.id}"
+        )
+    if decision is not None:
+        payload["martingale_step"] = decision.martingale_step
+        payload["base_stake"] = decision.base_stake
+    return payload
 
 
 class TradeExecutor:
@@ -137,7 +161,10 @@ class TradeExecutor:
         async with AsyncSessionLocal() as session:
             attempt = await insert_attempt(session, attempt)
 
-        self._publish(attempt)
+        # Initial-insert publish. The bot notifier ignores this one
+        # (it gates PLACED on ``placed_at is not None``); the dashboard
+        # picks it up so the operator sees the row appear immediately.
+        self._publish(attempt, parser_config=parser_config, decision=decision)
 
         if not decision.allowed:
             log.info(
@@ -161,7 +188,7 @@ class TradeExecutor:
             return attempt
 
         # Attempt is in DB; place the trade.
-        return await self._place(attempt, signal, decision)
+        return await self._place(attempt, signal, decision, parser_config)
 
     async def shutdown(self) -> None:
         """Wait for in-flight result watchers to finish."""
@@ -232,17 +259,35 @@ class TradeExecutor:
         if updated is not None:
             self._publish(updated)
 
-    def _publish(self, attempt: TradeAttempt) -> None:
+    def _publish(
+        self,
+        attempt: TradeAttempt,
+        *,
+        parser_config: ParserConfig | None = None,
+        decision: RiskDecision | None = None,
+    ) -> None:
         """Fire-and-forget broadcast of a trade row to dashboard subscribers.
 
         The payload mirrors ``TradeAttemptResponse`` so the frontend can
         merge it into the existing list by ``id`` without re-fetching.
         Datetimes are ISO-8601 strings (the wire format the REST
         endpoint already uses).
+
+        ``parser_config`` and ``decision`` are optional — when they're
+        in scope (the ``submit`` → ``_place`` path), they layer on the
+        parser name and martingale ladder context the admin Telegram
+        bot uses for richer PLACED messages. Settlement-time and
+        reconcile-time publishes don't have them in scope and just emit
+        the base payload, which is fine: the formatter degrades cleanly.
         """
         if self._event_bus is None:
             return
-        self._event_bus.publish("trade.upserted", _attempt_to_payload(attempt))
+        self._event_bus.publish(
+            "trade.upserted",
+            _attempt_to_payload(
+                attempt, parser_config=parser_config, decision=decision,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Internals
@@ -274,6 +319,7 @@ class TradeExecutor:
         attempt: TradeAttempt,
         signal: ParsedSignal,
         decision: RiskDecision,
+        parser_config: ParserConfig,
     ) -> TradeAttempt:
         """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled)."""
         is_scheduled = decision.trade_mode == "scheduled"
@@ -328,7 +374,11 @@ class TradeExecutor:
         if updated is None:  # pragma: no cover - row was just inserted
             return attempt
         attempt = updated
-        self._publish(attempt)
+        # Broker-confirmed publish. ``placed_at`` is now set, which is
+        # what the bot notifier uses to dedupe PLACED messages — only
+        # this publish (not the initial-insert one) fires a Telegram
+        # notification.
+        self._publish(attempt, parser_config=parser_config, decision=decision)
 
         if ok and order_id:
             # Fire-and-forget result watcher. Live trades use the
@@ -485,7 +535,11 @@ class TradeExecutor:
                         reset_on_win=cfg.martingale_reset_on_win,
                     )
         if updated is not None:
-            self._publish(updated)
+            # Settled publish — pass ``cfg`` so the SETTLED notification
+            # also carries the parser name. ``decision`` is gone (and
+            # not relevant anymore — the actual stake on the attempt is
+            # what was placed, no need to re-derive it).
+            self._publish(updated, parser_config=cfg)
         log.info(
             "executor.settled",
             attempt_id=attempt_id,
@@ -555,6 +609,12 @@ class TradeExecutor:
             raw_text=f"[auto-recovery for trade #{original.id}]",
             parser_id=f"cfg-{cfg.id}-recovery-{streak}",
             asset_raw=original.asset_raw,
+            # Tells the risk gate to bypass the parser's
+            # ``trade_mode=scheduled`` pin — recoveries are always live
+            # because the original schedule is already past. Without
+            # this, the gate would refuse the signal for missing
+            # ``fire_at`` and the recovery would never reach the broker.
+            is_auto_recovery=True,
         )
         async with AsyncSessionLocal() as session:
             settings = await session.get(GlobalSettings, 1)

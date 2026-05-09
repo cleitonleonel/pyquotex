@@ -49,6 +49,12 @@ class ParsedSignal:
     # "no resolution metadata" (older parsers).
     asset_raw: str = ""
     asset_via: str = ""
+    # True when the executor has *synthesised* this signal as a
+    # martingale auto-recovery for a previously-lost trade. The risk
+    # gate uses this to bypass the parser's ``trade_mode=scheduled``
+    # pin: the original schedule is past, the recovery is meant to
+    # fire ASAP. Channel-emitted signals always leave this False.
+    is_auto_recovery: bool = False
 
 
 @dataclass(frozen=True, slots=True)

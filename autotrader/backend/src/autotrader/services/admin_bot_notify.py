@@ -216,6 +216,14 @@ class AdminBotNotifier:
 
 
 def format_trade_placed(payload: dict[str, Any]) -> str:
+    """Render a PLACED event for the admin Telegram bot.
+
+    Fields beyond the core (asset/direction/duration/stake/mode) are
+    optional and only render when present. Lets the same formatter
+    serve live trades (no fire_at, no martingale ladder) and scheduled
+    martingale recoveries (everything populated) without conditional
+    spaghetti at the call site.
+    """
     asset = payload.get("asset", "?")
     direction = (payload.get("direction") or "?").upper()
     duration = payload.get("duration_seconds", 0)
@@ -227,11 +235,70 @@ def format_trade_placed(payload: dict[str, Any]) -> str:
     if step > 0 and base > 0:
         ratio = stake / base
         step_note = f" (step {step}, x{ratio:.1f} from base)"
-    return (
-        f"PLACED  {asset} - {direction} - {duration}s\n"
-        f"stake : ${stake:.2f}{step_note}\n"
-        f"mode  : {mode}"
-    )
+
+    # Mode line — append the broker-side fire time for scheduled trades
+    # so the operator can see *when* the pending order will trigger
+    # without leaving Telegram. ``HH:MM:SS UTC`` is enough; the date is
+    # almost always today and would be clutter.
+    mode_line = f"mode  : {mode}"
+    fire_at_raw = payload.get("fire_at")
+    if mode == "scheduled" and fire_at_raw:
+        fire_at_str = _format_fire_at(fire_at_raw)
+        if fire_at_str:
+            mode_line = f"mode  : {mode} @ {fire_at_str}"
+
+    lines = [
+        f"PLACED  {asset} - {direction} - {duration}s",
+        f"stake : ${stake:.2f}{step_note}",
+        mode_line,
+    ]
+
+    # Parser context — which channel/config triggered the trade. Only
+    # rendered when the executor plumbed it through; live tests that
+    # publish hand-crafted payloads (no parser context) stay clean.
+    parser_name = payload.get("parser_name")
+    if parser_name:
+        lines.append(f"from  : {parser_name}")
+
+    # Broker ticket — useful for cross-referencing with the broker's
+    # own history ticker. Skipped when the broker hasn't returned an id
+    # yet (rare; either the ``buy`` or ``open_pending`` path always sets
+    # one on success).
+    ticket = payload.get("broker_order_id")
+    if ticket:
+        lines.append(f"ticket: {ticket}")
+
+    return "\n".join(lines)
+
+
+def _format_fire_at(value: Any) -> str:
+    """Best-effort ``HH:MM:SS UTC`` from an ISO-8601 string or datetime.
+
+    The wire payload ships ``fire_at`` as an ISO string (executor's
+    ``_attempt_to_payload``) but tests sometimes pass a ``datetime``
+    directly — accept both. Returns ``""`` when the value is unparseable
+    so the caller can fall back to the bare mode line.
+    """
+    from datetime import datetime  # noqa: PLC0415
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            # ``datetime.fromisoformat`` handles both ``+00:00`` and
+            # naive forms; the wire format from the executor uses the
+            # offset variant.
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+    else:
+        return ""
+    if dt.tzinfo is None:
+        # Treat naive as UTC — the executor only ever emits UTC.
+        from datetime import UTC  # noqa: PLC0415
+        dt = dt.replace(tzinfo=UTC)
+    from datetime import UTC  # noqa: PLC0415
+    return dt.astimezone(UTC).strftime("%H:%M:%S UTC")
 
 
 def format_trade_settled(payload: dict[str, Any]) -> str:
@@ -288,7 +355,17 @@ async def _consume(self: "AdminBotNotifier", bus: Any) -> None:
             try:
                 if event.type == "trade.upserted":
                     status = event.payload.get("status")
-                    if status == "pending":
+                    placed_at = event.payload.get("placed_at")
+                    # The executor publishes ``trade.upserted`` *twice*
+                    # for every successful trade — once after the row
+                    # is inserted (status=pending, placed_at=None) and
+                    # once after the broker confirms placement
+                    # (status=pending, placed_at=set). Filtering on
+                    # status alone fires PLACED twice for one trade —
+                    # an operator-visible duplicate. The broker-confirm
+                    # publish always carries a non-None placed_at, so
+                    # gate on that to dedupe.
+                    if status == "pending" and placed_at is not None:
                         await self.notify("placed", format_trade_placed(event.payload))
                     elif status in ("won", "lost", "refund"):
                         await self.notify("settled", format_trade_settled(event.payload))

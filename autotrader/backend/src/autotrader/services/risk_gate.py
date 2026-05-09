@@ -148,12 +148,24 @@ async def evaluate(  # noqa: PLR0911, PLR0912  (one branch per failure mode)
         "live", "scheduled", "auto",
     ) else "auto"
     effective_mode = cfg_mode
-    if cfg_mode == "scheduled" and signal.fire_at is None:
+
+    if signal.is_auto_recovery:
+        # Auto-recovery signals are synthesised by the executor right
+        # after a *settled-loss* — the original signal's schedule is
+        # already in the past and the channel's gale rule is "fire NOW
+        # at the multiplied stake" (e.g. *"IF LOSS TAKE 1 STEP MTG
+        # (Same Direction Double Amount)"*). Routing one through the
+        # parser's ``trade_mode=scheduled`` pin would refuse it for
+        # missing ``fire_at`` (it intentionally has none) and the
+        # recovery would never reach the broker. The pin gates
+        # *channel-emitted* signals; recoveries are always live.
+        effective_mode = "live"
+    elif cfg_mode == "scheduled" and signal.fire_at is None:
         return RiskDecision(
             outcome="block",
             reason="trade_mode=scheduled but signal has no fire_at",
         )
-    if cfg_mode == "live":
+    elif cfg_mode == "live":
         effective_mode = "live"
     elif cfg_mode == "auto":
         effective_mode = "scheduled" if signal.fire_at is not None else "live"
