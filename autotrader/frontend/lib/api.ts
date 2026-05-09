@@ -394,6 +394,39 @@ export interface PipelineStatus {
   watched_chat_count: number;
   enabled_parser_count: number;
   cached_parser_count: number;
+  /**
+   * ISO timestamp of the last Telegram message that ``_handle_incoming``
+   * accepted (text or sticker). ``null`` means "no message has flowed
+   * since the process started" — typically a fresh container that
+   * hasn't seen channel activity yet, not necessarily an error.
+   */
+  last_message_received_at: string | null;
+  /**
+   * Number of WatchedChannel rows that the live Pyrogram client
+   * successfully resolved during peer-cache priming. A mismatch with
+   * ``watched_chat_count`` means some channels won't deliver
+   * ``UpdateNewChannelMessage`` events and is worth flagging in the UI.
+   */
+  subscribed_chat_count: number;
+}
+
+export type ParserDecisionOutcome =
+  | "matched"
+  | "no_match"
+  | "build_failed"
+  | "no_configs"
+  | "pipeline_inactive";
+
+export interface ParserDecision {
+  ts: string;
+  chat_id: number;
+  parser_config_id: number | null;
+  parser_name: string | null;
+  parser_type: string | null;
+  outcome: ParserDecisionOutcome;
+  reasons: string[];
+  signals: number;
+  text_preview: string;
 }
 
 export interface TradeAttempt {
@@ -437,6 +470,9 @@ export const pipeline = {
     if (chatId !== undefined) params.set("chat_id", String(chatId));
     return api<TradeAttempt[]>(`/pipeline/trades?${params}`);
   },
+
+  decisions: (limit = 50) =>
+    api<ParserDecision[]>(`/pipeline/decisions?limit=${limit}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -542,4 +578,5 @@ export function feedUrl(token: string): string {
 
 export type FeedFrame =
   | { type: "feed.ready"; payload: Record<string, never> }
-  | { type: "trade.upserted"; payload: TradeAttempt };
+  | { type: "trade.upserted"; payload: TradeAttempt }
+  | { type: "pipeline.decision"; payload: ParserDecision };

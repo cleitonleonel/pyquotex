@@ -63,6 +63,19 @@ class ParserConfig(SQLModel, table=True):
     martingale_multiplier: float = Field(default=2.0, nullable=False)
     martingale_max_streak: int = Field(default=5, nullable=False)
     martingale_reset_on_win: bool = Field(default=True, nullable=False)
+    # When True, a *losing* trade triggers an auto-recovery trade with
+    # the same asset / direction / duration and a stake bumped by the
+    # martingale ladder (``base × multiplier^current_streak``). This
+    # mirrors how binary-options signal channels phrase their gale
+    # rules (e.g. *"IF LOSS TAKE 1 STEP MTG (Same Direction Double
+    # Amount)"*) — the channel doesn't repeat the signal, it expects
+    # the bot to fire the recovery itself.
+    #
+    # Defaults to False so the upstream "stake-multiplier on next
+    # channel signal" semantic stays the only thing existing configs
+    # see until an operator opts in. ``martingale_enabled`` must be
+    # True for this to do anything; both flags off = flat staking.
+    martingale_auto_recovery: bool = Field(default=False, nullable=False)
 
     enabled: bool = Field(default=True, nullable=False)
 

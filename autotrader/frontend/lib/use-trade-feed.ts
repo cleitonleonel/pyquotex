@@ -2,7 +2,17 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { type FeedFrame, type TradeAttempt, feedUrl, getToken } from "./api";
+import {
+  type FeedFrame,
+  type ParserDecision,
+  type TradeAttempt,
+  feedUrl,
+  getToken,
+} from "./api";
+
+// Mirror the backend ring buffer cap so the front-end deque doesn't
+// grow without bound either; older entries fall off the bottom.
+const DECISION_RING_SIZE = 200;
 
 /**
  * Live trade-feed hook. Opens a WebSocket to ``/feed/ws`` and merges
@@ -54,15 +64,33 @@ export function useTradeFeed(): FeedState {
         } catch {
           return;
         }
-        if (frame.type !== "trade.upserted") return;
-        const incoming = frame.payload;
-        qc.setQueryData<TradeAttempt[]>(["pipeline", "trades"], (current) =>
-          mergeTrade(current, incoming),
-        );
-        // Stats overview drives off the same ``trade_attempts`` rows
-        // — invalidate so the channel breakdown / latency tiles
-        // update without waiting for the next poll tick.
-        qc.invalidateQueries({ queryKey: ["stats"] });
+        if (frame.type === "trade.upserted") {
+          const incoming = frame.payload;
+          qc.setQueryData<TradeAttempt[]>(
+            ["pipeline", "trades"],
+            (current) => mergeTrade(current, incoming),
+          );
+          // Stats overview drives off the same ``trade_attempts`` rows
+          // — invalidate so the channel breakdown / latency tiles
+          // update without waiting for the next poll tick.
+          qc.invalidateQueries({ queryKey: ["stats"] });
+          return;
+        }
+        if (frame.type === "pipeline.decision") {
+          // Prepend onto the bounded decisions cache. Decisions aren't
+          // persisted server-side; the WS feed is the canonical source
+          // and the HTTP /decisions endpoint just backfills on load.
+          const incoming = frame.payload;
+          qc.setQueryData<ParserDecision[]>(
+            ["pipeline", "decisions"],
+            (current) => mergeDecision(current, incoming),
+          );
+          // ``last_message_received_at`` and the dispatch counts on
+          // the status payload move with each decision — refresh so
+          // the Telegram-pulse gauge ticks live.
+          qc.invalidateQueries({ queryKey: ["pipeline", "status"] });
+          return;
+        }
       };
 
       ws.onclose = () => {
@@ -101,5 +129,17 @@ function mergeTrade(
   if (idx === -1) return [incoming, ...current];
   const next = current.slice();
   next[idx] = incoming;
+  return next;
+}
+
+function mergeDecision(
+  current: ParserDecision[] | undefined,
+  incoming: ParserDecision,
+): ParserDecision[] {
+  // Decisions are append-only (no id, no in-place patch) — just
+  // prepend the freshest event and trim past the ring cap so a
+  // long-running tab doesn't accumulate hours of dispatch chatter.
+  const next = current ? [incoming, ...current] : [incoming];
+  if (next.length > DECISION_RING_SIZE) next.length = DECISION_RING_SIZE;
   return next;
 }

@@ -26,8 +26,17 @@ class Login(Browser):
         self.full_url: str = f"{self.https_base_url}/{api.lang}"
 
     async def get_token(self) -> str | None:
-        self.headers["Connection"] = "keep-alive"
-        self.headers["Accept-Encoding"] = "gzip, deflate, br"
+        # We deliberately do NOT set ``Sec-Ch-Ua*``, ``Sec-Fetch-*``,
+        # ``Upgrade-Insecure-Requests``, ``Connection`` or
+        # ``Accept-Encoding`` here. curl_cffi's ``impersonate="chrome120"``
+        # ships those values internally in lockstep with the JA3 / HTTP-2
+        # fingerprint it presents on the wire. Earlier revisions hand-
+        # crafted them to "Linux Chrome 120" shape, which contradicted
+        # the macOS-shaped fingerprint curl_cffi actually sends — and
+        # that header-vs-JA3 cross-check is exactly what Cloudflare's
+        # bot manager flags (HTTP 403, ``cf-mitigated: challenge``,
+        # "Just a moment..." interstitial). Trust curl_cffi for the
+        # browser-shape headers; only set application-level extras.
         self.headers["Accept-Language"] = (
             "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3"
         )
@@ -35,23 +44,31 @@ class Login(Browser):
             "text/html,application/xhtml+xml,application/xml;q=0.9,"
             "image/avif,image/webp,*/*;q=0.8"
         )
+
+        # Cloudflare's bot manager challenges sessions that hit the
+        # ``/<lang>/sign-in/modal/`` form partial cold (no
+        # ``laravel_session`` / ``_cfuvid`` in the jar). A real Chrome
+        # user always lands on ``/<lang>/sign-in`` first, where the
+        # edge hands those cookies out freely. We mimic that: warmup
+        # GET to ``/sign-in`` (treated as a fresh "typed URL" — no
+        # ``Referer``, ``Sec-Fetch-Site=none`` injected by curl_cffi),
+        # then the modal GET inherits the cookies via the shared
+        # ``AsyncSession``. Warmup errors are swallowed — a transient
+        # transport blip shouldn't pre-empt the modal GET, whose
+        # response is what actually decides the login outcome.
+        self.headers.pop("Referer", None)
+        try:
+            await self.send_request(
+                "GET",
+                f"{self.full_url}/sign-in"
+            )
+        except Exception:
+            pass
+
+        # Now we genuinely just visited ``/sign-in``, so claiming it
+        # as the Referer for the modal partial is honest — it matches
+        # the natural in-page click path a real user follows.
         self.headers["Referer"] = f"{self.full_url}/sign-in"
-        self.headers["Upgrade-Insecure-Requests"] = "1"
-        # Cloudflare cross-checks the Sec-Ch-Ua trio; sending only the
-        # ``-Mobile`` / ``-Platform`` suffixes without the parent
-        # ``Sec-Ch-Ua`` brands list is itself a bot tell, even with
-        # the Chrome JA3 fingerprint.
-        self.headers["Sec-Ch-Ua"] = (
-            '"Not_A Brand";v="8", "Chromium";v="120", '
-            '"Google Chrome";v="120"'
-        )
-        self.headers["Sec-Ch-Ua-Mobile"] = "?0"
-        self.headers["Sec-Ch-Ua-Platform"] = '"Linux"'
-        self.headers["Sec-Fetch-Site"] = "same-origin"
-        self.headers["Sec-Fetch-User"] = "?1"
-        self.headers["Sec-Fetch-Dest"] = "document"
-        self.headers["Sec-Fetch-Mode"] = "navigate"
-        self.headers["Dnt"] = "1"
         await self.send_request(
             "GET",
             f"{self.full_url}/sign-in/modal/"

@@ -90,19 +90,27 @@ class Browser:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    # Real Chrome 120 / Firefox 119 UA strings. The default is Firefox,
-    # but ``use_browser_tls`` flips to Chrome so the UA matches the JA3
-    # / HTTP-2 fingerprint curl_cffi presents — Cloudflare cross-checks
-    # the two and 403s on a mismatch. Sec-Ch-Ua hints in
-    # ``Login.get_token`` are Chrome-only, so the Chrome UA is also
-    # what makes those headers internally consistent.
+    # User-Agent strings selected to match the JA3 / HTTP-2 fingerprint
+    # curl_cffi presents on the wire when ``use_browser_tls=True`` —
+    # Cloudflare cross-checks the two and 403s on a mismatch.
+    #
+    # IMPORTANT: every curl_cffi v0.15 ``impersonate`` profile we use
+    # ships a *macOS* fingerprint (see
+    # ``curl_cffi.requests.impersonate``); its baked-in ``User-Agent``
+    # and ``Sec-Ch-Ua-Platform`` say macOS, not Linux. Earlier revisions
+    # used Linux UA strings here, which contradicted the wire-level
+    # fingerprint and is exactly the cross-check Cloudflare flags. Keep
+    # both strings in lockstep with whatever OS curl_cffi's chosen
+    # ``impersonate`` profile actually presents (run a probe against
+    # ``https://httpbin.org/headers`` with the profile to confirm).
     _UA_FIREFOX = (
-        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
-        "Gecko/20100101 Firefox/119.0"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) "
+        "Gecko/20100101 Firefox/144.0"
     )
     _UA_CHROME = (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
     )
 
     def get_headers(self) -> dict[str, str]:

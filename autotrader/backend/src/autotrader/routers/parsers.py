@@ -63,6 +63,11 @@ class MartingalePayload(BaseModel):
     multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
     max_streak: int = Field(default=5, ge=0, le=20)
     reset_on_win: bool = True
+    # When True, a losing trade triggers an immediate same-asset /
+    # same-direction recovery trade with the multiplied stake — see
+    # ``ParserConfig.martingale_auto_recovery``. Defaults to False so
+    # existing payloads remain valid; operators flip it on per parser.
+    auto_recovery: bool = False
 
 
 class ConfigPayload(BaseModel):
@@ -169,6 +174,7 @@ def _to_response(row: ParserConfig) -> ConfigResponse:
             multiplier=row.martingale_multiplier,
             max_streak=row.martingale_max_streak,
             reset_on_win=row.martingale_reset_on_win,
+            auto_recovery=row.martingale_auto_recovery,
         ),
         enabled=row.enabled,
         created_at=row.created_at,
@@ -195,6 +201,7 @@ def _payload_to_dict(p: ConfigPayload) -> dict[str, Any]:
         "martingale_multiplier": p.martingale.multiplier,
         "martingale_max_streak": p.martingale.max_streak,
         "martingale_reset_on_win": p.martingale.reset_on_win,
+        "martingale_auto_recovery": p.martingale.auto_recovery,
         "enabled": p.enabled,
     }
 

@@ -501,6 +501,72 @@ def test_status_reports_counts(app_client: TestClient) -> None:
     assert body["broker_connected"] is True
     assert body["watched_chat_count"] == 1
     assert body["enabled_parser_count"] == 1
+    # Telegram-pulse / subscription-health gauges added in Phase 7 of
+    # the dashboard. Both are nullable / zero on a fresh app where no
+    # message has flowed yet — what we're pinning here is the *shape*
+    # so a regression that drops the fields is caught immediately.
+    assert "last_message_received_at" in body
+    assert body["last_message_received_at"] is None
+    assert "subscribed_chat_count" in body
+    assert body["subscribed_chat_count"] == 0
+
+
+def test_decisions_endpoint_records_dispatch_outcomes(
+    app_client: TestClient,
+) -> None:
+    """Every dispatch decision lands in the in-memory ring buffer the
+    ``/pipeline/decisions`` endpoint serves. The dashboard's "Recent
+    parsing decisions" panel is the only consumer today; this test
+    pins the contract so a refactor of ``Pipeline._record_decision``
+    doesn't silently empty the panel."""
+    headers = _login(app_client)
+    _connect_broker(app_client, headers)
+    _add_watch(app_client, headers, -1001)
+    _create_parser(
+        app_client,
+        headers,
+        chat_id=-1001,
+        parser_type="template",
+        parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+    )
+    _activate(app_client, headers)
+
+    # Add a *second* watched chat with no parser bound — the
+    # "watched but no parsers" surface the panel exists to flag.
+    _add_watch(app_client, headers, -1002)
+
+    # Two dispatches against the parsered watch: one matches, one doesn't.
+    _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
+    _run(_dispatch(app_client, chat_id=-1001, text="this is not a signal"))
+    # One against the empty watched chat → ``no_configs`` surfaces.
+    _run(_dispatch(app_client, chat_id=-1002, text="parser-less message"))
+    # And one against a chat that's NOT watched at all — must be
+    # filtered upstream so noise from random DMs / unrelated groups
+    # never lands in the decisions panel.
+    _run(_dispatch(app_client, chat_id=-9999, text="unwatched noise"))
+
+    r = app_client.get("/pipeline/decisions", headers=headers)
+    assert r.status_code == 200
+    decisions = r.json()
+    assert len(decisions) >= 3, decisions
+    outcomes = [d["outcome"] for d in decisions]
+    # Newest-first: the empty-watched-chat orphan was last to record.
+    assert outcomes[0] == "no_configs"
+    assert "matched" in outcomes
+    assert "no_match" in outcomes
+    # The unwatched-chat dispatch must NOT appear — pipeline filters
+    # at the chat level and silently drops non-watched messages.
+    chat_ids_seen = {d["chat_id"] for d in decisions}
+    assert -9999 not in chat_ids_seen, (
+        f"non-watched chat -9999 leaked into decisions: {chat_ids_seen}"
+    )
+    # Each row carries the structured shape the UI renders against.
+    sample = decisions[0]
+    for key in (
+        "ts", "chat_id", "parser_config_id", "parser_name",
+        "parser_type", "outcome", "reasons", "signals", "text_preview",
+    ):
+        assert key in sample, f"missing {key} in {sample}"
 
 
 # ===========================================================================

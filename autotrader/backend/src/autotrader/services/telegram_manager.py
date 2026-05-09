@@ -151,6 +151,16 @@ class TelegramManager:
         self._on_message: MessageCallback | None = None
         self._handler_attached: bool = False
         self._prime_task: asyncio.Task[None] | None = None
+        # Live-update health gauges. ``last_message_at`` ticks every
+        # time ``_handle_incoming`` accepts a message — a stale value
+        # means Telegram has gone quiet. ``subscribed_chat_count``
+        # captures the number of WatchedChannels that the post-prime
+        # touch loop successfully resolved (see ``_prime_peer_cache``).
+        # Both surface in the pipeline-status payload so the dashboard
+        # can show a "Last channel msg / Channels subscribed" gauge
+        # without scraping logs.
+        self._last_message_at: datetime | None = None
+        self._subscribed_chat_count: int = 0
 
     # ------------------------------------------------------------------
     # Status
@@ -159,6 +169,14 @@ class TelegramManager:
     @property
     def logged_in(self) -> bool:
         return self._state == "logged_in" and self._client is not None
+
+    @property
+    def last_message_at(self) -> datetime | None:
+        return self._last_message_at
+
+    @property
+    def subscribed_chat_count(self) -> int:
+        return self._subscribed_chat_count
 
     def status(self) -> TelegramStatus:
         return TelegramStatus(
@@ -500,13 +518,57 @@ class TelegramManager:
         # Lazy imports — keeps the test path that monkeypatches
         # ``Client`` working even if pyrogram isn't fully importable.
         from pyrogram import handlers  # noqa: PLC0415
-        from pyrogram.handlers import MessageHandler  # noqa: PLC0415
+        from pyrogram.handlers import MessageHandler, RawUpdateHandler  # noqa: PLC0415
 
         async def _on_pyrogram_message(_client: Client, msg: Any) -> None:
             await self._handle_incoming(msg)
 
+        async def _on_raw_update(
+            _client: Client, update: Any, _users: Any, _chats: Any
+        ) -> None:
+            """Diagnostic-only: log the *type* of every raw update.
+            Channel posts arrive as ``UpdateNewChannelMessage`` and only
+            reach ``MessageHandler`` once the live client has resolved
+            the channel's peer + access_hash. When channel updates are
+            silently dropped (peer-cache miss, ``UpdateChannelTooLong``
+            without a ``getChannelDifference`` follow-up), this is the
+            only place we can see the raw event vs. the parsed message
+            never arriving."""
+            try:
+                kind = type(update).__name__
+                # Pull whatever peer ID is on the update so we can
+                # correlate with the watched-chat list. Different
+                # Telegram update types put the peer in different
+                # places: ``UpdateChannelMessageViews`` has a flat
+                # ``channel_id`` on the update itself, while
+                # ``UpdateNewChannelMessage`` carries a full Message
+                # whose ``peer_id`` is a PeerChannel/PeerUser/PeerChat.
+                channel_id = getattr(update, "channel_id", None)
+                msg = getattr(update, "message", None)
+                peer_id = getattr(msg, "peer_id", None)
+                if channel_id is None:
+                    channel_id = getattr(peer_id, "channel_id", None)
+                user_id = getattr(peer_id, "user_id", None)
+                chat_id = getattr(peer_id, "chat_id", None)
+                log.info(
+                    "telegram.raw_update",
+                    kind=kind,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                )
+            except Exception:  # pragma: no cover  (best-effort diagnostic)
+                log.exception("telegram.raw_update.log_failed")
+
         try:
             self._client.add_handler(MessageHandler(_on_pyrogram_message))
+            # The raw-update logger is only attached when explicitly
+            # opted into — it fires for every channel-view-count tick,
+            # which makes it noisy at scale. Toggle on when debugging
+            # "channel posts not reaching the handler" issues.
+            from autotrader.config import settings as _app_settings  # noqa: PLC0415
+            if _app_settings.debug_telegram_raw_updates:
+                self._client.add_handler(RawUpdateHandler(_on_raw_update))
         except Exception as exc:  # pragma: no cover  (handler API drift)
             log.warning("telegram.handler.attach_failed", error=str(exc))
             return
@@ -517,13 +579,24 @@ class TelegramManager:
 
     async def _prime_peer_cache(self, *, limit: int = 500) -> None:
         """Walk dialogs once so Pyrogram's session storage knows every
-        channel/group the user is a member of.
+        channel/group the user is a member of, then explicitly resolve
+        each watched channel so its update stream is subscribed.
 
-        Without this, update dispatch crashes with
-        ``ValueError: Peer id invalid: -100…`` the moment a message
-        arrives in a chat the in-memory session has never resolved.
-        Cheap one-shot — the payload comes back over the same socket
-        Pyrogram is already keeping warm.
+        Two reasons this can't just be a single ``get_dialogs`` walk:
+
+        1. Without *any* primer, update dispatch crashes with
+           ``ValueError: Peer id invalid: -100…`` the moment a message
+           arrives in a chat the in-memory session has never resolved.
+        2. With ``in_memory=True``, Pyrogram loses the per-channel
+           ``pts`` state on every restart. Pyrogram's update dispatcher
+           silently drops ``UpdateNewChannelMessage`` events for
+           channels it hasn't actively touched this session — even if
+           the channel appears in ``get_dialogs``. ``get_chat_history``
+           on each watched channel forces the resolve + ``getDifference``
+           handshake that subscribes the live update stream.
+
+        Cheap (the payload comes back over the same socket Pyrogram
+        keeps warm) and idempotent — re-running just no-ops.
         """
         if self._client is None:
             return
@@ -534,16 +607,70 @@ class TelegramManager:
             log.info("telegram.peer_cache.primed", dialogs=count)
         except Exception as exc:  # pragma: no cover - best-effort
             log.warning("telegram.peer_cache.failed", error=str(exc))
+            return
+
+        # Touch each watched channel/group so Pyrogram subscribes its
+        # update stream. We pull the list lazily (avoids a hard import
+        # cycle with the models package at module load) and ignore
+        # failures per chat — a single broken row shouldn't block
+        # subscription for the others.
+        try:
+            from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+            from autotrader.models.watched_channel import (  # noqa: PLC0415
+                list_watched,
+            )
+
+            async with AsyncSessionLocal() as session:
+                watched = await list_watched(session)
+            enabled = [w for w in watched if w.enabled]
+            subscribed = 0
+            for w in enabled:
+                try:
+                    # ``get_chat_history(limit=1)`` is the cheapest call
+                    # that forces a peer resolve AND touches the channel's
+                    # pts state — exactly what the live update dispatcher
+                    # needs to start routing posts to MessageHandler.
+                    async for _ in self._client.get_chat_history(
+                        w.chat_id, limit=1
+                    ):
+                        break
+                    subscribed += 1
+                except Exception as exc:
+                    log.warning(
+                        "telegram.peer_cache.subscribe_failed",
+                        chat_id=w.chat_id,
+                        title=w.title,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+            self._subscribed_chat_count = subscribed
+            log.info(
+                "telegram.peer_cache.subscribed",
+                watched=len(enabled),
+                subscribed=subscribed,
+            )
+        except Exception as exc:  # pragma: no cover - best-effort
+            log.warning("telegram.peer_cache.subscribe_pass_failed",
+                        error=f"{type(exc).__name__}: {exc}")
 
     async def _handle_incoming(self, msg: Any) -> None:
         """Convert a Pyrogram Message → IncomingMessage → callback."""
         if self._on_message is None:
             return
-        kind, text = _extract_message_text(msg)
-        if not text:
-            return
         chat = getattr(msg, "chat", None)
         chat_id = int(getattr(chat, "id", 0)) if chat is not None else 0
+        kind, text = _extract_message_text(msg)
+        # Observability: every Telegram update lands here. We log BEFORE
+        # the empty-text early return so users can tell apart "no
+        # messages arriving at all" (no log lines) from "stickers /
+        # uncaptioned media filtered out" (skip lines).
+        if not text:
+            log.info(
+                "telegram.message.skipped",
+                chat_id=chat_id,
+                kind=kind,
+                reason="empty_text",
+            )
+            return
         from_user = getattr(msg, "from_user", None)
         sender_chat = getattr(msg, "sender_chat", None)
         sender_id = int(
@@ -552,6 +679,19 @@ class TelegramManager:
             or 0,
         )
         date = getattr(msg, "date", None) or datetime.now(UTC)
+        # Update the dashboard health gauge — every accepted message
+        # ticks the "we're alive" timestamp. The dashboard renders this
+        # as "Last channel msg: <Xs ago>" so a Telegram-side hang is
+        # visible at a glance.
+        self._last_message_at = datetime.now(UTC)
+        log.info(
+            "telegram.message.received",
+            chat_id=chat_id,
+            sender_id=sender_id,
+            kind=kind,
+            text_len=len(text),
+            text_preview=text[:80],
+        )
 
         try:
             await self._on_message(

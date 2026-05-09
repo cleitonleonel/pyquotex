@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   ApiError,
+  type ParserDecision,
   type PipelineStatus,
   type RiskCaps,
   type RiskOverview,
@@ -55,6 +56,11 @@ export default function PipelinePage() {
         </p>
       </section>
 
+      {/* Sticky sub-nav so the page can be much shorter without
+          burying long lists below the fold. The nav stays at the top
+          while the user scrolls; clicking jumps to the section anchor. */}
+      <SectionNav />
+
       {status.isLoading && (
         <Card>
           <CardContent className="pt-6">
@@ -80,21 +86,213 @@ export default function PipelinePage() {
         </Card>
       )}
 
-      {status.data && <StatusCard status={status.data} />}
+      <div id="status" className="scroll-mt-24">
+        {status.data && <StatusCard status={status.data} />}
+      </div>
 
-      {status.data && <RiskOverviewCard />}
+      <div id="risk" className="scroll-mt-24">
+        {status.data && <RiskOverviewCard />}
+      </div>
 
-      {status.data && <StatsOverviewCard />}
+      <div id="stats" className="scroll-mt-24">
+        {status.data && <StatsOverviewCard />}
+      </div>
 
-      {status.data && (
-        <TradesTable
-          trades={trades.data ?? []}
-          loading={trades.isLoading}
-          feedState={feedState}
-        />
-      )}
+      <div id="decisions" className="scroll-mt-24">
+        {status.data && <ParserDecisionsCard feedState={feedState} />}
+      </div>
+
+      <div id="trades" className="scroll-mt-24">
+        {status.data && (
+          <TradesTable
+            trades={trades.data ?? []}
+            loading={trades.isLoading}
+            feedState={feedState}
+          />
+        )}
+      </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Section nav — sticky quick-jump links at the top of the page so the
+// long tables below the fold are one click away. Pure anchor links;
+// ``scroll-mt-24`` on each section accounts for the navbar height so
+// the heading isn't hidden under the sticky element on jump.
+// ---------------------------------------------------------------------------
+
+const SECTION_LINKS: { id: string; label: string }[] = [
+  { id: "status", label: "Status" },
+  { id: "risk", label: "Budget & caps" },
+  { id: "stats", label: "Latency & channels" },
+  { id: "decisions", label: "Decisions" },
+  { id: "trades", label: "Trades" },
+];
+
+function SectionNav() {
+  return (
+    <nav
+      className="sticky top-14 z-20 -mx-4 border-y border-border/50 bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/75"
+      aria-label="Pipeline sections"
+    >
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {SECTION_LINKS.map((link) => (
+          <li key={link.id}>
+            <a
+              href={`#${link.id}`}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {link.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Parser decisions — live no_match reasons + matched signals (Phase 7)
+// ---------------------------------------------------------------------------
+
+function ParserDecisionsCard({ feedState }: { feedState: FeedState }) {
+  // Backfill from HTTP on mount; the WS hook patches in fresh
+  // entries via setQueryData on the same key. ``staleTime: Infinity``
+  // tells React Query "trust the WS-driven cache; don't refetch on
+  // window-focus" — refetch is reserved for the explicit polling
+  // fallback below.
+  const decisions = useQuery<ParserDecision[]>({
+    queryKey: ["pipeline", "decisions"],
+    queryFn: () => pipeline.decisions(50),
+    refetchInterval: feedState === "live" ? false : 15_000,
+    staleTime: feedState === "live" ? Infinity : 0,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              Recent parsing decisions
+              <FeedIndicator state={feedState} />
+            </CardTitle>
+            <CardDescription>
+              Every dispatch — matched, rejected, or routed to a chat with
+              no parsers. Surfaces the same data the executor logs as
+              <code> pipeline.matched </code> / <code>pipeline.no_match</code>{" "}
+              so you can debug parser regressions without scraping logs.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {decisions.isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {!decisions.isLoading && (decisions.data ?? []).length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No parsing decisions yet. The next watched-chat message will
+            appear here as it&rsquo;s dispatched.
+          </p>
+        )}
+        {(decisions.data ?? []).length > 0 && (
+          // Bounded height so the page stays scannable: the live WS
+          // feed prepends rows continuously, and an unbounded list
+          // would push every other panel below the fold within an
+          // hour of channel chatter. ``max-h-[28rem]`` is ~12 rows;
+          // the user scrolls *inside* the table for older history
+          // and the page itself stays compact.
+          <div className="max-h-[28rem] overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-card">
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="px-2 py-1.5 font-medium">When</th>
+                  <th className="px-2 py-1.5 font-medium">Chat</th>
+                  <th className="px-2 py-1.5 font-medium">Parser</th>
+                  <th className="px-2 py-1.5 font-medium">Outcome</th>
+                  <th className="px-2 py-1.5 font-medium">Reason / preview</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(decisions.data ?? []).map((d, idx) => (
+                  <tr
+                    // ts+chat+parser is unique per dispatch; idx breaks
+                    // the tie if two events share a microsecond.
+                    key={`${d.ts}-${d.chat_id}-${d.parser_config_id ?? "none"}-${idx}`}
+                    className="border-b last:border-0 align-top"
+                  >
+                    <td className="whitespace-nowrap px-2 py-1.5 text-muted-foreground">
+                      {new Date(d.ts).toLocaleTimeString()}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 font-mono">
+                      {d.chat_id}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 font-mono">
+                      {d.parser_name ? (
+                        <>
+                          {d.parser_name}
+                          {d.parser_type && (
+                            <span className="ml-1 text-muted-foreground">
+                              ({d.parser_type})
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      <DecisionBadge outcome={d.outcome} signals={d.signals} />
+                    </td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {d.reasons.length > 0 ? (
+                        <span className="text-amber-300">
+                          {d.reasons.join("; ")}
+                        </span>
+                      ) : d.text_preview ? (
+                        <span className="text-muted-foreground">
+                          {d.text_preview}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DecisionBadge({
+  outcome,
+  signals,
+}: {
+  outcome: ParserDecision["outcome"];
+  signals: number;
+}) {
+  if (outcome === "matched") {
+    return <Badge variant="success">matched · {signals}</Badge>;
+  }
+  if (outcome === "no_match") {
+    return <Badge variant="outline">no match</Badge>;
+  }
+  if (outcome === "build_failed") {
+    return <Badge variant="destructive">build failed</Badge>;
+  }
+  if (outcome === "no_configs") {
+    return <Badge variant="secondary">no parsers</Badge>;
+  }
+  if (outcome === "pipeline_inactive") {
+    return <Badge variant="secondary">pipeline off</Badge>;
+  }
+  return <Badge variant="secondary">{outcome}</Badge>;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,9 +646,11 @@ function StreaksCard({ data }: { data: RiskOverview }) {
         <CardTitle>Martingale streaks</CardTitle>
         <CardDescription>
           One row per parser with martingale enabled. The next stake at
-          step <em>n</em> is{" "}
-          <code>base × multiplier^n</code>; a win resets to step 0
-          (when reset-on-win is on).
+          step <em>n</em> is <code>base × multiplier^n</code>;{" "}
+          <code>recovery=N</code> caps the ladder at N steps before
+          resetting to base — set it to match the channel directive
+          (&ldquo;TAKE 1 STEP MTG&rdquo; → <code>recovery=1</code>). A
+          win resets to step 0 when reset-on-win is on.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -467,7 +667,12 @@ function StreaksCard({ data }: { data: RiskOverview }) {
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="px-2 py-1.5 font-medium">Parser</th>
                   <th className="px-2 py-1.5 font-medium">Mult</th>
-                  <th className="px-2 py-1.5 font-medium">Max</th>
+                  <th
+                    className="px-2 py-1.5 font-medium"
+                    title="Maximum recovery steps before the ladder resets to base"
+                  >
+                    Recovery
+                  </th>
                   <th className="px-2 py-1.5 font-medium">Step</th>
                   <th className="px-2 py-1.5 font-medium">Last</th>
                   <th className="px-2 py-1.5 font-medium">Last stake</th>
@@ -651,17 +856,68 @@ function StatusCard({ status }: { status: PipelineStatus }) {
           />
           <Row label="Watched chats" value={String(status.watched_chat_count)} />
           <Row
+            label="Channels subscribed"
+            // Pyrogram delivers UpdateNewChannelMessage only for chats
+            // resolved in the current session. A mismatch with the
+            // watched count means some channels won't fire — so we
+            // colour the badge when they don't line up.
+            value={
+              <Badge
+                variant={
+                  status.subscribed_chat_count >= status.watched_chat_count
+                    ? "success"
+                    : "warning"
+                }
+              >
+                {status.subscribed_chat_count} / {status.watched_chat_count}
+              </Badge>
+            }
+          />
+          <Row
             label="Enabled parsers"
             value={String(status.enabled_parser_count)}
           />
           <Row
-            label="Cached parsers"
-            value={String(status.cached_parser_count)}
+            label="Last channel msg"
+            // ``cached_parser_count`` was here previously — implementation
+            // detail (lazy in-process cache) that wasn't actionable. The
+            // operator-grade gauge is "did Pyrogram actually deliver an
+            // update recently"; we render the staleness in seconds so a
+            // hung Telegram side becomes visible at a glance.
+            value={
+              <FreshnessBadge ts={status.last_message_received_at} />
+            }
           />
         </dl>
       </CardContent>
     </Card>
   );
+}
+
+function FreshnessBadge({ ts }: { ts: string | null }) {
+  // Re-render every second so "Xs ago" stays current even when the
+  // status query hasn't refetched. Avoids stale numbers like "5s ago"
+  // hanging there for a minute.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => (n + 1) % 1_000_000), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (ts === null) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const ageMs = Date.now() - Date.parse(ts);
+  const ageSec = Math.max(0, Math.floor(ageMs / 1_000));
+  const variant: "success" | "warning" | "destructive" =
+    ageSec < 60 ? "success" : ageSec < 600 ? "warning" : "destructive";
+  const label =
+    ageSec < 60
+      ? `${ageSec}s ago`
+      : ageSec < 3_600
+        ? `${Math.floor(ageSec / 60)}m ago`
+        : `${Math.floor(ageSec / 3_600)}h ago`;
+  return <Badge variant={variant}>{label}</Badge>;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,9 +961,13 @@ function TradesTable({
           </p>
         )}
         {trades.length > 0 && (
-          <div className="overflow-x-auto">
+          // Bounded scroll for the same reason as the decisions
+          // panel — the WS feed merges in fresh rows live, and after
+          // a busy session this list runs to hundreds. ``max-h-[36rem]``
+          // shows ~14 rows; older history is one scroll away.
+          <div className="max-h-[36rem] overflow-auto">
             <table className="w-full text-xs">
-              <thead>
+              <thead className="sticky top-0 bg-card">
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="px-2 py-1.5 font-medium">When</th>
                   <th className="px-2 py-1.5 font-medium">Asset</th>

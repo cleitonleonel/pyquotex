@@ -281,11 +281,21 @@ def test_credentials_then_connect(
     # Regression guard for the Cloudflare 403 fix. Without
     # ``use_browser_tls=True`` plain ``httpx`` is rejected at
     # ``qxbroker.com``'s sign-in modal — so the manager must always
-    # build the client with curl_cffi browser impersonation on.
+    # build the client with curl_cffi browser impersonation on, and
+    # the impersonate must name a real browser profile (Cloudflare's
+    # bot scoring rotates which family it currently trusts; we don't
+    # pin the exact value so ops can re-tune without a code change
+    # tripping this assertion).
     pcfg = FakeQuotex.last_instance.proxy_config
     assert pcfg is not None
     assert getattr(pcfg, "use_browser_tls", False) is True
-    assert getattr(pcfg, "impersonate", "") == "chrome120"
+    impersonate = getattr(pcfg, "impersonate", "")
+    assert impersonate and impersonate.split("_")[0].rstrip(
+        "0123456789"
+    ) in {"chrome", "firefox", "safari", "edge"}, (
+        f"impersonate must be a recognised browser profile, "
+        f"got: {impersonate!r}"
+    )
 
 
 def test_balance_when_connected(client: TestClient) -> None:

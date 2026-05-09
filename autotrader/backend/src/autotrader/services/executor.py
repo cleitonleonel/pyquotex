@@ -459,10 +459,12 @@ class TradeExecutor:
             # parser uses the right step. We re-fetch the parser
             # config because Phase 4 stored ``parser_config_id`` only —
             # the live ParserConfig may have been edited since.
+            new_state = None
+            cfg = None
             if updated is not None:
                 cfg = await get_config(session, updated.parser_config_id)
                 if cfg is not None and cfg.martingale_enabled:
-                    await record_outcome(
+                    new_state = await record_outcome(
                         session,
                         cfg.id or 0,
                         won=(status == "win"),
@@ -478,4 +480,95 @@ class TradeExecutor:
             order_id=order_id,
             status=status,
             profit=profit,
+        )
+
+        # Auto-recovery: when a trade *loses* and the parser is opted
+        # into auto-recovery, immediately fire a same-asset / same-
+        # direction trade with the multiplied stake. This mirrors how
+        # binary-options channels phrase their gale rule (e.g. *"IF
+        # LOSS TAKE 1 STEP MTG (Same Direction Double Amount)"*) — the
+        # channel doesn't repost the signal, it expects the bot to
+        # fire the recovery itself. We gate on ``current_streak > 0``
+        # so we don't fire when ``record_outcome`` just hit
+        # ``max_streak`` and reset the ladder (recovery exhausted).
+        if (
+            updated is not None
+            and status != "win"
+            and cfg is not None
+            and cfg.martingale_enabled
+            and cfg.martingale_auto_recovery
+            and new_state is not None
+            and new_state.current_streak > 0
+        ):
+            await self._fire_auto_recovery(
+                original=updated,
+                cfg=cfg,
+                streak=new_state.current_streak,
+            )
+
+    async def _fire_auto_recovery(
+        self,
+        *,
+        original: TradeAttempt,
+        cfg: ParserConfig,
+        streak: int,
+    ) -> None:
+        """Submit a recovery trade derived from the lost ``original``.
+
+        Goes through the full ``submit`` path so the same risk gate
+        guards (kill switch, daily loss cap, max-concurrent, REAL-mode
+        env flag) apply. Stake is left ``None`` on the synthesised
+        signal so the risk gate computes ``base × multiplier^streak``
+        from the freshly-incremented martingale state — a single
+        source of truth for "what's the stake right now".
+        """
+        from autotrader.services.parsers import ParsedSignal  # noqa: PLC0415
+
+        log.info(
+            "executor.auto_recovery.entered",
+            config_id=cfg.id,
+            original_attempt_id=original.id,
+            streak=streak,
+        )
+        # ``TradeAttempt`` carries ``asset_raw`` but not ``asset_via``
+        # (the latter is parser-only diagnostics). The recovery's
+        # ``asset`` is already a broker code, so the empty default
+        # for ``asset_via`` on ``ParsedSignal`` is fine.
+        signal = ParsedSignal(
+            asset=original.asset,
+            direction=original.direction,  # type: ignore[arg-type]
+            duration_seconds=original.duration_seconds,
+            stake=None,                          # risk gate computes
+            fire_at=None,                        # ASAP / live
+            raw_text=f"[auto-recovery for trade #{original.id}]",
+            parser_id=f"cfg-{cfg.id}-recovery-{streak}",
+            asset_raw=original.asset_raw,
+        )
+        async with AsyncSessionLocal() as session:
+            settings = await session.get(GlobalSettings, 1)
+            if settings is None:
+                settings = GlobalSettings(id=1)
+        try:
+            attempt = await self.submit(
+                signal=signal, parser_config=cfg, settings=settings,
+            )
+        except Exception as exc:  # pragma: no cover - belt + braces
+            log.exception(
+                "executor.auto_recovery.failed",
+                config_id=cfg.id,
+                original_attempt_id=original.id,
+                streak=streak,
+                error=str(exc),
+            )
+            return
+        log.info(
+            "executor.auto_recovery.fired",
+            config_id=cfg.id,
+            original_attempt_id=original.id,
+            streak=streak,
+            asset=original.asset,
+            direction=original.direction,
+            recovery_attempt_id=attempt.id,
+            recovery_status=attempt.status,
+            recovery_stake=attempt.stake,
         )

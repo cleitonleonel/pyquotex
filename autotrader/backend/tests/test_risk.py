@@ -288,7 +288,10 @@ async def test_martingale_doubles_stake_on_loss(
 async def test_martingale_caps_at_max_streak(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """After ``max_streak`` consecutive losses the ladder resets to base."""
+    """``max_streak=N`` allows N recovery steps before the ladder
+    resets to base. With ``max_streak=2`` we expect base, then the
+    1st recovery (×mult), then the 2nd recovery (×mult²), then a
+    reset back to base on the 4th loss in the streak."""
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
     await _add_watch(async_client, headers, -1001)
@@ -306,13 +309,142 @@ async def test_martingale_caps_at_max_streak(
     )
     await _activate()
 
-    for outcome in ("loss", "loss", "loss"):
+    for outcome in ("loss", "loss", "loss", "loss"):
         WatcherFakeQuotex.next_outcomes = [(outcome, -1.0)]
         await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
         await _settle_watchers(async_client)
 
     amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
-    assert amounts == [10.0, 20.0, 10.0]
+    # base, ×2 (recovery 1), ×4 (recovery 2), reset to base.
+    assert amounts == [10.0, 20.0, 40.0, 10.0]
+
+
+async def test_martingale_auto_recovery_fires_same_dir_after_loss(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """``auto_recovery=True`` makes a *losing* trade trigger an
+    immediate same-asset / same-direction trade with the multiplied
+    stake — without waiting for the channel to send another signal.
+
+    Channels phrase their guidance as *"IF LOSS TAKE 1 STEP MTG (Same
+    Direction Double Amount)"* — the channel does not repost the
+    signal, the bot is expected to fire the recovery itself. This
+    test pins that behaviour so a refactor of ``_settle_one`` can't
+    quietly drop the auto-recovery hook."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 2,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    # Original signal loses; auto-recovery wins on the next slot.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0), ("win", 18.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    # Drain the original watcher; the recovery's own watcher will be
+    # registered *during* settlement, so we settle a second time.
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    # Original $10 (base, step 0). After loss → recovery fires at $20.
+    assert amounts == [10.0, 20.0], amounts
+
+    # Sanity: every buy_call on the recovery uses the original's
+    # asset/direction shape — auto-recovery doesn't invent a new
+    # asset, it follows the lost trade's footprint.
+    assert WatcherFakeQuotex.buy_calls[0]["asset"] == \
+        WatcherFakeQuotex.buy_calls[1]["asset"]
+    assert WatcherFakeQuotex.buy_calls[0]["direction"] == \
+        WatcherFakeQuotex.buy_calls[1]["direction"]
+
+
+async def test_martingale_auto_recovery_off_falls_back_to_stake_mul_only(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """``auto_recovery=False`` (the default) preserves the legacy
+    "multiply the next *channel* signal's stake" behaviour. A loss
+    must NOT trigger an autonomous trade."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+    # Drain a second time in case auto-recovery was incorrectly
+    # wired — anything queued here would be the regression we guard.
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert amounts == [10.0], (
+        "auto_recovery=False must NOT fire a recovery trade — only "
+        "the next dispatched channel signal should see the multiplied "
+        f"stake. Got buy_calls: {amounts}"
+    )
+
+
+async def test_martingale_max_streak_one_takes_one_recovery_step(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Regression for the ``max_streak=1`` no-op bug. Channels phrase
+    their guidance as *"TAKE 1 STEP MTG"* and operators set
+    ``max_streak=1`` expecting one recovery trade after a loss. Earlier
+    revisions used a ``>=`` reset comparator, which incremented the
+    streak to 1 and reset it on the *same* settled-trade callback —
+    so the next trade always read ``current_streak=0`` and the
+    martingale never fired. This test pins the corrected ``>``
+    comparator."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 1,
+            "reset_on_win": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    for outcome in ("loss", "loss", "loss", "loss"):
+        WatcherFakeQuotex.next_outcomes = [(outcome, -1.0)]
+        await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+        await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    # base → 1 recovery (×2) → reset → base → 1 recovery (×2).
+    assert amounts == [10.0, 20.0, 10.0, 20.0]
 
 
 async def test_martingale_disabled_uses_flat_stake(

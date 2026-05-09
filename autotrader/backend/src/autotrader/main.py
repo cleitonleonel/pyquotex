@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915  (line
         live_trading_enabled_env=settings.live_trading_enabled,
         event_bus=event_bus,
     )
-    pipeline = Pipeline(manager=manager, executor=executor)
+    pipeline = Pipeline(manager=manager, executor=executor, event_bus=event_bus)
     app.state.pipeline = pipeline
     app.state.executor = executor
     telegram_manager.set_message_callback(pipeline.dispatch)

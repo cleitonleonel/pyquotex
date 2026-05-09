@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     sentry_environment: str = "production"
     sentry_traces_sample_rate: float = 0.0
 
+    # When true, ``TelegramManager`` attaches a ``RawUpdateHandler``
+    # that logs every Pyrogram update kind. Useful when channel posts
+    # fail to reach the live ``MessageHandler`` (peer-cache miss,
+    # missing channel-update subscription) — a wave of
+    # ``UpdateChannelMessageViews`` with no ``UpdateNewChannelMessage``
+    # tells you the channel update stream is alive but the post-
+    # delivery path is dropping. Off by default — high-cardinality.
+    debug_telegram_raw_updates: bool = False
+
     @cached_property
     def cors_origins_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":

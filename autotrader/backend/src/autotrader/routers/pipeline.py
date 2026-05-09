@@ -37,6 +37,38 @@ class PipelineStatus(BaseModel):
     watched_chat_count: int
     enabled_parser_count: int
     cached_parser_count: int
+    # Telegram-side health gauges. ``last_message_received_at`` is
+    # ``None`` when no message has flowed through ``_handle_incoming``
+    # since the process started; the dashboard treats that as "no
+    # signal yet" rather than an error. ``subscribed_chat_count`` is
+    # how many of the ``watched_chat_count`` channels survived the
+    # post-prime ``get_chat_history`` touch — a mismatch surfaces the
+    # subscription bug we fixed in ``_prime_peer_cache``.
+    last_message_received_at: datetime | None = None
+    subscribed_chat_count: int = 0
+
+
+class ParserDecisionResponse(BaseModel):
+    """One pipeline-dispatch decision exposed to the dashboard.
+
+    Mirrors the shape published on the WS bus as ``pipeline.decision``
+    payloads. ``parser_config_id`` / ``parser_name`` / ``parser_type``
+    are nullable for chat-level decisions (e.g. ``no_configs`` —
+    message arrived in a chat with no bound parser).
+    """
+
+    ts: datetime
+    chat_id: int
+    parser_config_id: int | None = None
+    parser_name: str | None = None
+    parser_type: str | None = None
+    outcome: Literal[
+        "matched", "no_match", "build_failed",
+        "no_configs", "pipeline_inactive",
+    ]
+    reasons: list[str] = []
+    signals: int = 0
+    text_preview: str = ""
 
 
 class ActivateRequest(BaseModel):
@@ -128,6 +160,8 @@ async def status_endpoint(
         watched_chat_count=sum(1 for w in watched if w.enabled),
         enabled_parser_count=sum(1 for c in configs if c.enabled),
         cached_parser_count=len(pipeline._parsers),
+        last_message_received_at=telegram.last_message_at,
+        subscribed_chat_count=telegram.subscribed_chat_count,
     )
 
 
@@ -196,3 +230,21 @@ async def trades_endpoint(
 ) -> list[TradeAttemptResponse]:
     rows = await list_recent(session, limit=limit, chat_id=chat_id)
     return [_to_response(r) for r in rows]
+
+
+@router.get("/decisions", response_model=list[ParserDecisionResponse])
+async def decisions_endpoint(
+    pipeline: PipelineDep,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[ParserDecisionResponse]:
+    """Most-recent parsing decisions (newest first), bounded to ``limit``.
+
+    Backed by an in-memory ring buffer on the live ``Pipeline``
+    instance — there's no persistence layer because dispatch decisions
+    aren't audit material, just a live observability feed. WebSocket
+    subscribers also receive each decision as a ``pipeline.decision``
+    frame as it happens; this HTTP endpoint exists so a late-loading
+    dashboard can backfill the table before the socket starts streaming.
+    """
+    snapshot = pipeline.recent_decisions[:limit]
+    return [ParserDecisionResponse(**d) for d in snapshot]

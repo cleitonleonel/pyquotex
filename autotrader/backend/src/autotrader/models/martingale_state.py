@@ -58,10 +58,23 @@ async def record_outcome(
     Args:
         won: True for win, False for loss.
         last_stake: the stake the executor actually placed.
-        max_streak: parser-config cap; ``0`` means uncapped.
+        max_streak: number of recovery steps the ladder is allowed to
+            climb before resetting to base. ``max_streak=1`` mirrors a
+            channel's *"TAKE 1 STEP MTG"* directive — one recovery
+            trade after a loss, then bail. ``max_streak=2`` allows two
+            recoveries (steps 1 and 2). ``0`` means uncapped.
         reset_on_win: when True, a win clears the streak (the usual
             behaviour); when False, the streak keeps climbing across
             wins (rare, but channels exist).
+
+    Implementation note: the reset condition is ``current_streak >
+    max_streak`` (strictly greater), not ``>=``. The streak is
+    incremented *before* the check, so if we used ``>=`` the very
+    first loss would push streak from 0→1 and then reset it to 0 on
+    the same call — making ``max_streak=1`` a no-op (zero recoveries).
+    With ``>`` the streak survives long enough to be read by the
+    *next* trade's stake calculation, then resets only when a further
+    loss pushes it past the cap.
     """
     row = await get_state(session, parser_config_id)
     row.last_stake = last_stake
@@ -71,11 +84,7 @@ async def record_outcome(
             row.current_streak = 0
     else:
         row.current_streak += 1
-        # ``max_streak`` is the *cap*; once we hit it we reset the
-        # ladder so the next trade goes back to base. This matches
-        # how channels say "max 3 step MTG" — they bail out of the
-        # recovery sequence after N losses.
-        if max_streak > 0 and row.current_streak >= max_streak:
+        if max_streak > 0 and row.current_streak > max_streak:
             row.current_streak = 0
     row.updated_at = utc_now()
     await session.commit()

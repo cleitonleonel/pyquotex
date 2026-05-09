@@ -78,6 +78,18 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
     cols = await conn.run_sync(_columns, "parser_configs")
     if cols and "id" not in cols:
         await conn.execute(text("DROP TABLE parser_configs"))
+        cols = set()  # treat as fresh after drop
+
+    # ``martingale_auto_recovery`` was added when auto-recovery on loss
+    # became opt-in. Existing rows default to 0 (off) so back-compat
+    # holds — operators flip it on per parser via the API or directly.
+    if cols and "martingale_auto_recovery" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE parser_configs ADD COLUMN "
+                "martingale_auto_recovery BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
 
     # global_settings gained columns over time. SQLite's ALTER TABLE
     # ADD COLUMN is safe for nullable / defaulted columns and we only

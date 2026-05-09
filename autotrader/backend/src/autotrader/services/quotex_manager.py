@@ -207,13 +207,24 @@ class QuotexManager:
                     on_otp_callback=self._on_otp_callback,
                     # Quotex's ``qxbroker.com`` login page is behind
                     # Cloudflare and 403s plain ``httpx`` because the
-                    # TLS / JA3 fingerprint isn't a real browser.
-                    # ``curl_cffi`` ships ``impersonate="chrome120"``
-                    # which clears the gate; pyquotex switches to it
-                    # automatically when ``use_browser_tls=True``.
+                    # TLS / JA3 fingerprint isn't a real browser. We
+                    # let ``curl_cffi`` impersonate a real browser via
+                    # ``use_browser_tls=True``; pyquotex flips to that
+                    # backend automatically.
+                    #
+                    # Profile choice: ``firefox144``. Cloudflare's bot
+                    # scoring rotates which JA3s it currently trusts;
+                    # as of May 2026 every Chrome variant curl_cffi 0.15
+                    # ships (chrome120…chrome146) is being challenged on
+                    # qxbroker.com, while Firefox 144 passes cleanly.
+                    # Firefox also avoids the ``Sec-Ch-Ua`` header trio
+                    # entirely (it's Chrome-only) — fewer cross-checks
+                    # to keep in lockstep with the wire fingerprint.
+                    # If this stops working, sweep impersonate profiles
+                    # against ``/en/sign-in`` and pick a passing one.
                     proxy_config=ProxyConfig(
                         use_browser_tls=True,
-                        impersonate="chrome120",
+                        impersonate="firefox144",
                     ),
                 )
                 client.set_account_mode(self._account_mode)
