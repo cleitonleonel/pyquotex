@@ -26,6 +26,7 @@ from autotrader.services.filters import (
     Direction,
     ResolvedFilter,
     TradeStatus,
+    compute_parser_streaks,
     parse_csv_int,
     parse_csv_str,
     resolve_range,
@@ -78,7 +79,12 @@ class BreakdownRow(BaseModel):
     # Per-dim extras attached as needed (DirectionSplit for asset,
     # streaks for parser).
     direction_split: DirectionSplit | None = None
-    streaks: list[dict] | None = None
+    # Streaks roll-up for dim=parser rows: a dict with keys
+    # ``longest_loss`` (int), ``histogram`` (dict[str, int] of
+    # closed-streak length -> count), ``recovered_count`` (int) and
+    # ``recovery_rate`` (float, 0 when no closed streaks). None for
+    # all other dims.
+    streaks: dict | None = None
 
 
 class DirectionSplit(BaseModel):
@@ -443,7 +449,7 @@ async def timeseries_endpoint(  # noqa: PLR0912, PLR0915
 
 
 @router.get("/breakdown", response_model=BreakdownResponse)
-async def breakdown_endpoint(  # noqa: PLR0912
+async def breakdown_endpoint(  # noqa: PLR0912, PLR0915
     session: SessionDep,
     dim: Dim = Query(...),  # noqa: B008
     range: str = Query("24h", alias="range"),
@@ -491,11 +497,20 @@ async def breakdown_endpoint(  # noqa: PLR0912
             grouped_p.setdefault(row.parser_config_id, []).append(row)
         out_p: list[BreakdownRow] = []
         for parser_id, attempts in grouped_p.items():
-            out_p.append(_build_breakdown_row(
+            base = _build_breakdown_row(
                 key=parser_id,
                 label=names.get(parser_id, f"parser {parser_id}"),
                 attempts=attempts,
-            ))
+            )
+            # Streaks need chronological order — the SQL query has no
+            # ORDER BY so attempts arrive in insertion order; sort
+            # explicitly so streak boundaries match wall-clock reality
+            # rather than DB-page layout.
+            ordered = sorted(attempts, key=lambda a: a.received_at)
+            base.streaks = compute_parser_streaks(
+                [a.status for a in ordered],
+            )
+            out_p.append(base)
         out_p.sort(key=lambda r: (r.total, r.win_rate or 0.0), reverse=True)
         return BreakdownResponse(
             dim="parser",

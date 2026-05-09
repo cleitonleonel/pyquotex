@@ -16,8 +16,6 @@ import pytest
 
 from tests.test_broker import FakeQuotex
 
-pytestmark = pytest.mark.asyncio
-
 
 @pytest.fixture(autouse=True)
 def _reset_fake_quotex_state() -> None:
@@ -103,6 +101,7 @@ async def _seed_attempts(rows: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_assets_endpoint_returns_sorted_distinct_symbols(
     async_client: httpx.AsyncClient,
 ) -> None:
@@ -128,6 +127,7 @@ async def test_assets_endpoint_returns_sorted_distinct_symbols(
     assert body == {"assets": ["audcad", "EURUSD"]}
 
 
+@pytest.mark.asyncio
 async def test_assets_endpoint_empty_window_returns_empty_list(
     async_client: httpx.AsyncClient,
 ) -> None:
@@ -139,3 +139,89 @@ async def test_assets_endpoint_empty_window_returns_empty_list(
 
     assert r.status_code == 200
     assert r.json() == {"assets": []}
+
+
+# ---------------------------------------------------------------------------
+# compute_parser_streaks helper — pure function, no DB required
+# ---------------------------------------------------------------------------
+
+
+def test_compute_parser_streaks_basic() -> None:
+    """L L L W L L W L (trailing losses excluded — no recovery yet)."""
+    from autotrader.services.filters import compute_parser_streaks  # noqa: PLC0415
+
+    outcomes = ["lost", "lost", "lost", "won", "lost", "lost", "won", "lost"]
+    result = compute_parser_streaks(outcomes)
+
+    assert result["longest_loss"] == 3
+    assert result["histogram"] == {"2": 1, "3": 1}
+    assert result["recovered_count"] == 2
+    assert result["recovery_rate"] == 1.0
+
+
+def test_compute_parser_streaks_no_losses() -> None:
+    from autotrader.services.filters import compute_parser_streaks  # noqa: PLC0415
+
+    result = compute_parser_streaks(["won", "won", "expired"])
+    assert result["longest_loss"] == 0
+    assert result["histogram"] == {}
+    assert result["recovered_count"] == 0
+    assert result["recovery_rate"] == 0.0
+
+
+def test_compute_parser_streaks_single_loss_recovered_by_non_won() -> None:
+    """Recovery only counts if the next outcome is exactly 'won' —
+    expired/rejected close the streak but don't count as recovery."""
+    from autotrader.services.filters import compute_parser_streaks  # noqa: PLC0415
+
+    result = compute_parser_streaks(["lost", "expired"])
+    assert result["longest_loss"] == 1
+    assert result["histogram"] == {"1": 1}
+    assert result["recovered_count"] == 0
+    assert result["recovery_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# /stats/v2/breakdown?dim=parser — streaks sub-stat plumbed in
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_breakdown_parser_includes_streaks(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """dim=parser response carries per-parser streak roll-up.
+
+    Three losses then a win = one closed streak of length 3, fully
+    recovered (next outcome is 'won').
+    """
+    headers = await _login(async_client)
+    now = datetime.now(UTC)
+    rows = []
+    for i, status in enumerate(["lost", "lost", "lost", "won"]):
+        rows.append(
+            {
+                "parser_config_id": 1,
+                "status": status,
+                "received_at": now - timedelta(minutes=10 - i),
+                # Realised P&L only matters for committed_stake / pnl
+                # rollups elsewhere; not asserted here.
+                "profit": 1.0 if status == "won" else -1.0,
+            },
+        )
+    await _seed_attempts(rows)
+
+    r = await async_client.get(
+        "/stats/v2/breakdown",
+        params={"dim": "parser", "range": "24h"},
+        headers=headers,
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["rows"]) == 1
+    streaks = body["rows"][0]["streaks"]
+    assert streaks["longest_loss"] == 3
+    assert streaks["histogram"] == {"3": 1}
+    assert streaks["recovered_count"] == 1
+    assert streaks["recovery_rate"] == 1.0
