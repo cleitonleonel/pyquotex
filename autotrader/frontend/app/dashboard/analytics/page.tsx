@@ -3,6 +3,10 @@
 import { Suspense } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilterBar } from "../_components/filter-bar";
+import { PanelAssetDirectionMatrix } from "../_components/panel-asset-direction-matrix";
+import { PanelChannelLeaderboard } from "../_components/panel-channel-leaderboard";
+import { PanelHourHeatmap } from "../_components/panel-hour-heatmap";
+import { PanelSignalFunnel } from "../_components/panel-signal-funnel";
 
 /**
  * Analytics page — 3 tabs (Performance / Execution / Risk).
@@ -52,12 +56,10 @@ function AnalyticsBody() {
         </TabsList>
 
         <TabsContent value="performance" className="space-y-4">
-          {/* Phase 2 panels: leaderboard + matrix. Phase 3 adds parser comparison. */}
           <PerformanceTab />
         </TabsContent>
 
         <TabsContent value="execution" className="space-y-4">
-          {/* Phase 2 panels: heatmap + funnel. Phase 3 adds latency drift. */}
           <ExecutionTab />
         </TabsContent>
 
@@ -71,22 +73,20 @@ function AnalyticsBody() {
 }
 
 function PerformanceTab() {
-  // PanelChannelLeaderboard + PanelAssetDirectionMatrix — both implemented in Bundle B.5.
-  // Until those land, render a one-line note so the tab isn't empty.
   return (
-    <p className="text-sm text-muted-foreground">
-      Channel leaderboard + asset×direction matrix render here once
-      Bundle B.5 lands.
-    </p>
+    <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      <PanelChannelLeaderboard />
+      <PanelAssetDirectionMatrix />
+    </div>
   );
 }
 
 function ExecutionTab() {
-  // PanelHourHeatmap + PanelSignalFunnel — Bundle B.5.
   return (
-    <p className="text-sm text-muted-foreground">
-      Hour-of-day heatmap + signal funnel render here once Bundle B.5 lands.
-    </p>
+    <div className="space-y-4">
+      <PanelHourHeatmap />
+      <PanelSignalFunnel />
+    </div>
   );
 }
 
