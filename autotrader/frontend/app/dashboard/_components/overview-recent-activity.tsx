@@ -21,9 +21,15 @@ import { StatusBadge } from "./trades-table";
  * hook — same query key as the full table, so they share data.
  */
 export function OverviewRecentActivity() {
-  // Mounting useTradeFeed here keeps the WS connection alive whenever
-  // the user is on Overview. The hook is idempotent across components
-  // (the singleton check is handled inside).
+  // Mounting useTradeFeed here keeps the WebSocket alive whenever
+  // the user is on Overview, so trade.upserted frames refresh the
+  // shared ["pipeline", "trades"] cache live. NOTE: the hook is NOT
+  // a singleton — each mount opens its own connection. During an
+  // Overview→Trades navigation transition there's a brief window
+  // with two open connections; both fire setQueryData on the same
+  // cache (last-write wins, same data) so it's safe but redundant.
+  // Phase 2 should lift this into a context provider mounted once
+  // by the dashboard layout.
   useTradeFeed();
 
   const trades = useQuery<TradeAttempt[]>({

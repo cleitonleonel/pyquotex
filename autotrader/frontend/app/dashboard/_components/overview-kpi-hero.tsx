@@ -119,7 +119,13 @@ export function OverviewKpiHero() {
           riskBudgetLeft === null ? "—" : `$${riskBudgetLeft.toFixed(2)}`
         }
         valueTone="neutral"
-        subtext={cap > 0 ? `of $${cap.toFixed(0)} daily loss cap` : "no cap set"}
+        subtext={
+          r.data === undefined
+            ? "loading…"
+            : cap > 0
+              ? `of $${cap.toFixed(0)} daily loss cap`
+              : "no cap set"
+        }
       />
     </div>
   );
