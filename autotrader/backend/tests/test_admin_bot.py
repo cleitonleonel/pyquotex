@@ -483,3 +483,110 @@ def test_streaks_lists_per_parser_state() -> None:
         assert "2" in text  # the streak number
     finally:
         asyncio.new_event_loop().run_until_complete(_cleanup())
+
+
+def _reset_global_settings_flags() -> None:
+    """Reset the kill-switch / pipeline-active flags so toggle tests
+    don't leak state into test_pipeline.py (which expects a fresh
+    pipeline_active=False default on its first run)."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    async def _do() -> None:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            if gs is not None:
+                gs.kill_switch_engaged = False
+                gs.pipeline_active = False
+                s.add(gs)
+                await s.commit()
+
+    asyncio.new_event_loop().run_until_complete(_do())
+
+
+def test_killswitch_on_persists_flag() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> bool:
+        await bot.start()
+        await fake.fire_message(555, "/killswitch on")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.kill_switch_engaged if gs else False
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) is True
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_pipeline_off_persists_flag() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _seed_and_toggle() -> bool:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.pipeline_active = True
+            s.add(gs)
+            await s.commit()
+        await bot.start()
+        await fake.fire_message(555, "/pipeline off")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.pipeline_active if gs else True
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_seed_and_toggle()) is False
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_panic_kills_both() -> None:
+    """`/panic` engages kill switch AND turns pipeline off in one shot."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+
+    async def _seed_and_panic() -> tuple[bool, bool]:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.pipeline_active = True
+            gs.kill_switch_engaged = False
+            s.add(gs)
+            await s.commit()
+        await bot.start()
+        await fake.fire_message(555, "/panic")
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            return gs.pipeline_active, gs.kill_switch_engaged
+
+    try:
+        pipe, kill = asyncio.new_event_loop().run_until_complete(_seed_and_panic())
+        assert pipe is False
+        assert kill is True
+    finally:
+        _reset_global_settings_flags()
+
+
+def test_mode_real_requires_confirm() -> None:
+    """`/mode real` first replies with a confirm keyboard — it does not
+    flip the broker until the operator clicks the inline 'Yes'."""
+    bot, fake = _make_bound_bot()
+
+    async def _run() -> tuple[str, object]:
+        await bot.start()
+        await fake.fire_message(555, "/mode real")
+        text = fake.sent_messages[-1][1]
+        markup = fake.sent_messages[-1][2]
+        return text, markup
+
+    text, markup = asyncio.new_event_loop().run_until_complete(_run())
+    assert "confirm" in text.lower() or "real" in text.lower()
+    assert markup is not None

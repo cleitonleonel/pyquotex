@@ -282,6 +282,105 @@ async def handle_streaks(_message: Any, _bot: Any) -> Reply:
 
 
 # --------------------------------------------------------------------------
+# Toggle helpers
+# --------------------------------------------------------------------------
+
+
+def _parse_on_off(text: str) -> bool | None:
+    """Parse ``on`` / ``off`` (case-insensitive) from the command body.
+    Returns None when neither token is found — caller replies with usage."""
+    parts = text.lower().split()
+    if len(parts) < 2:
+        return None
+    if parts[1] in ("on", "true", "1", "engage"):
+        return True
+    if parts[1] in ("off", "false", "0", "disengage"):
+        return False
+    return None
+
+
+async def _set_settings_flag(field: str, value: Any) -> GlobalSettings:
+    """Mutate one column on the GlobalSettings singleton row."""
+    async with AsyncSessionLocal() as session:
+        gs = await session.get(GlobalSettings, 1) or GlobalSettings(id=1)
+        setattr(gs, field, value)
+        gs.updated_at = utc_now()
+        session.add(gs)
+        await session.commit()
+        await session.refresh(gs)
+        return gs
+
+
+async def handle_killswitch(message: Any, _bot: Any) -> Reply:
+    state = _parse_on_off(message.text)
+    if state is None:
+        return Reply(text="Usage: /killswitch on | off")
+    await _set_settings_flag("kill_switch_engaged", state)
+    return Reply(text=f"Kill switch is now *{'ENGAGED' if state else 'off'}*.")
+
+
+async def handle_pipeline(message: Any, _bot: Any) -> Reply:
+    state = _parse_on_off(message.text)
+    if state is None:
+        return Reply(text="Usage: /pipeline on | off")
+    await _set_settings_flag("pipeline_active", state)
+    return Reply(text=f"Pipeline is now *{'ON' if state else 'OFF'}*.")
+
+
+async def handle_panic(_message: Any, _bot: Any) -> Reply:
+    """Sets kill_switch=True AND pipeline_active=False in one transaction."""
+    async with AsyncSessionLocal() as session:
+        gs = await session.get(GlobalSettings, 1) or GlobalSettings(id=1)
+        gs.kill_switch_engaged = True
+        gs.pipeline_active = False
+        gs.updated_at = utc_now()
+        session.add(gs)
+        await session.commit()
+    log.warning("admin_bot.panic.engaged")
+    return Reply(text="PANIC: kill switch engaged and pipeline turned OFF.")
+
+
+# --------------------------------------------------------------------------
+# /mode demo|real — REAL requires inline-keyboard confirm
+# --------------------------------------------------------------------------
+
+
+def _confirm_keyboard(action: str) -> Any:
+    """Build a 2-button inline keyboard. Lazy-imports pyrogram.types
+    so unit tests with FakePyrogramBot don't need pyrogram installed."""
+    from pyrogram.types import (  # noqa: PLC0415
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+    )
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Yes, do it",
+                                 callback_data=f"confirm:{action}"),
+            InlineKeyboardButton("Cancel", callback_data="cancel"),
+        ],
+    ])
+
+
+async def handle_mode(message: Any, _bot: Any) -> Reply:
+    parts = message.text.lower().split()
+    if len(parts) < 2 or parts[1] not in ("demo", "real", "practice"):
+        return Reply(text="Usage: /mode demo | real")
+    target = "REAL" if parts[1] == "real" else "PRACTICE"
+    if target == "REAL":
+        return Reply(
+            text="Switch broker to *REAL* money?",
+            markup=_confirm_keyboard("mode:real"),
+        )
+    # Demo flips immediately — no confirmation needed.
+    from autotrader.services.admin_bot_state import get_quotex  # noqa: PLC0415
+    qx = get_quotex()
+    if qx is None:
+        return Reply(text="Broker manager not attached.")
+    await qx.set_account_mode("PRACTICE")
+    return Reply(text="Broker mode set to *PRACTICE*.")
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -295,6 +394,10 @@ COMMANDS: dict[str, Handler] = {
     "/trades": handle_trades,
     "/decisions": handle_decisions,
     "/streaks": handle_streaks,
+    "/killswitch": handle_killswitch,
+    "/pipeline": handle_pipeline,
+    "/panic": handle_panic,
+    "/mode": handle_mode,
 }
 
 
