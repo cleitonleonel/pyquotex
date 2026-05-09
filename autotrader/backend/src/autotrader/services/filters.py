@@ -32,6 +32,12 @@ def resolve_range(
     Unknown labels silently fall back to 24h so a stale URL doesn't
     blow up. ``custom`` requires both bounds; missing bounds also
     fall back to 24h to keep the behaviour predictable.
+
+    All datetime arguments must be timezone-aware (UTC). Mixing
+    aware and naive datetimes will raise TypeError downstream when
+    the resulting (since, until) pair is compared in SQL queries.
+    For ``custom`` with ``from > to`` we silently pass through;
+    the resulting query returns zero rows but is well-formed.
     """
     if label == "all":
         return datetime(1970, 1, 1, tzinfo=UTC), now
@@ -71,8 +77,7 @@ def parse_csv_int(raw: str | None) -> list[int]:
     if not raw:
         return []
     out: list[int] = []
-    for part in raw.split(","):
-        part = part.strip()
+    for part in (p.strip() for p in raw.split(",")):
         if not part:
             continue
         try:

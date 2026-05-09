@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+from autotrader.services.filters import (
+    parse_csv_int,
+    parse_csv_str,
+    resolve_range,
+)
 
 
 @pytest.mark.asyncio
@@ -26,16 +33,15 @@ async def test_phase2_indices_present_after_init() -> None:
 
     db_url = os.environ["AUTOTRADER_DB_URL"]
     engine = create_async_engine(db_url, future=True)
-    SessionLocal = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
     try:
         async with engine.begin() as conn:
             await _migrate_in_place(conn)
             await conn.run_sync(SQLModel.metadata.create_all)
             await _create_indices(conn)
 
-        async with SessionLocal() as s:
+        async with async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False,
+        )() as s:
             rows = (
                 await s.exec(
                     text(
@@ -50,15 +56,6 @@ async def test_phase2_indices_present_after_init() -> None:
     names = {r[0] for r in rows}
     assert "ix_trade_attempts_received_chat" in names
     assert "ix_trade_attempts_received_parser" in names
-
-
-from datetime import UTC, datetime, timedelta
-
-from autotrader.services.filters import (
-    parse_csv_int,
-    parse_csv_str,
-    resolve_range,
-)
 
 
 @pytest.mark.parametrize(
