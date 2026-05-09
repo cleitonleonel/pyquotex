@@ -29,6 +29,7 @@ from autotrader.models.telegram_session import (
     load_session as load_telegram_session,
 )
 from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, telegram
+from autotrader.routers import admin_bot as admin_bot_router
 from autotrader.routers import pipeline as pipeline_router
 from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
@@ -290,6 +291,7 @@ app.include_router(pipeline_router.router)
 app.include_router(risk.router)
 app.include_router(stats.router)
 app.include_router(feed.router)
+app.include_router(admin_bot_router.router)
 
 
 # Quiet uvicorn's per-request access logs in production; structlog handles

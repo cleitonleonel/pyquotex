@@ -175,3 +175,58 @@ def test_admin_bot_attached_to_app_state(monkeypatch: pytest.MonkeyPatch) -> Non
         bot = app.state.admin_bot
         # No token -> disabled, but the instance is still attached.
         assert bot.status().state == "disabled"
+
+
+def test_admin_bot_router_reports_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from tests.test_broker import FakeQuotex  # noqa: PLC0415
+    from tests.test_pipeline import _login  # noqa: PLC0415
+
+    monkeypatch.setattr("autotrader.services.quotex_manager.Quotex", FakeQuotex)
+
+    from autotrader.main import app  # noqa: PLC0415
+    with TestClient(app) as c:
+        headers = _login(c)
+        r = c.get("/admin-bot/status", headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["state"] == "disabled"
+        assert body["bound_user_id"] is None
+
+
+def test_admin_bot_unbind_clears_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+    from tests.test_broker import FakeQuotex  # noqa: PLC0415
+    from tests.test_pipeline import _login  # noqa: PLC0415
+
+    monkeypatch.setattr("autotrader.services.quotex_manager.Quotex", FakeQuotex)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    async def _seed_bound_admin() -> None:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            if gs is None:
+                gs = GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 12345
+            s.add(gs)
+            await s.commit()
+
+    asyncio.new_event_loop().run_until_complete(_seed_bound_admin())
+
+    with TestClient(app) as c:
+        headers = _login(c)
+        r = c.post("/admin-bot/unbind", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["bound_user_id"] is None
+
+        # The persisted row must reflect the unbind.
+        async def _read() -> int | None:
+            async with AsyncSessionLocal() as s:
+                gs = await s.get(GlobalSettings, 1)
+                return gs.admin_telegram_user_id if gs else None
+        assert asyncio.new_event_loop().run_until_complete(_read()) is None
