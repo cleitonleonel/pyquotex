@@ -1,19 +1,11 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { getToken, logout } from "@/lib/api";
-
-const NAV = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/dashboard/broker", label: "Broker" },
-  { href: "/dashboard/telegram", label: "Telegram" },
-  { href: "/dashboard/parsers", label: "Parsers" },
-  { href: "/dashboard/pipeline", label: "Pipeline" },
-] as const;
+import { useRouter } from "next/navigation";
+import { AppSidebar } from "@/components/app-sidebar";
+import { AppTopbar } from "@/components/app-topbar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { getToken } from "@/lib/api";
 
 export default function DashboardLayout({
   children,
@@ -21,7 +13,6 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
   const [authed, setAuthed] = useState(false);
 
   useEffect(() => {
@@ -35,46 +26,15 @@ export default function DashboardLayout({
   if (!authed) return null;
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-4">
-          <div className="flex items-center gap-6">
-            <h1 className="text-lg font-semibold tracking-tight">Autotrader</h1>
-            <nav className="flex items-center gap-1">
-              {NAV.map((item) => {
-                const active =
-                  pathname === item.href ||
-                  (item.href !== "/dashboard" && pathname.startsWith(item.href));
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                      active
-                        ? "bg-secondary text-secondary-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </nav>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              logout();
-              router.replace("/login");
-            }}
-          >
-            Sign out
-          </Button>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
-    </div>
+    // ``defaultOpen`` = true keeps the rail expanded on first visit;
+    // shadcn persists the user's collapsed/expanded preference to a
+    // cookie automatically.
+    <SidebarProvider defaultOpen>
+      <AppSidebar />
+      <SidebarInset>
+        <AppTopbar />
+        <main className="mx-auto w-full max-w-7xl px-6 py-8">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
