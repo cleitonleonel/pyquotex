@@ -19,6 +19,10 @@ services:
       AUTOTRADER_FERNET_KEY: "${AUTOTRADER_FERNET_KEY:?AUTOTRADER_FERNET_KEY is required}"
       TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
       TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      # @BotFather token for the *admin* bot (separate from the userbot
+      # MTProto creds above). Empty / unset = the bot starts in
+      # state="disabled" (a no-op); see services/admin_bot.py.
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       AUTOTRADER_LIVE_TRADING_ENABLED: "${AUTOTRADER_LIVE_TRADING_ENABLED:-false}"
       AUTOTRADER_DB_URL: "sqlite+aiosqlite:////data/autotrader.db"
       AUTOTRADER_LOG_LEVEL: "${AUTOTRADER_LOG_LEVEL:-INFO}"

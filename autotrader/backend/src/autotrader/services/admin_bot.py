@@ -51,10 +51,34 @@ CallbackHook = Callable[[Any, Any], Awaitable[None]]
 
 
 def _default_client_factory(token: str) -> Any:
-    """Production factory — imported lazily so tests don't need pyrogram."""
+    """Production factory — imported lazily so tests don't need pyrogram.
+
+    Pyrogram's bot-mode ``Client`` requires ``api_id`` + ``api_hash``
+    even when authenticating with a bot token (the MTProto authorization
+    handshake is the same for user and bot accounts; only the final
+    ``auth.importBotAuthorization`` step differs). We reuse the same
+    pair the userbot uses — they're tied to the my.telegram.org
+    account that registered the API, NOT to a particular login. Without
+    them, Pyrogram fails startup with "The API key is required for new
+    authorizations".
+    """
     from pyrogram import Client  # noqa: PLC0415
+
+    from autotrader.config import telegram_settings  # noqa: PLC0415
+
+    api_id = telegram_settings.api_id
+    api_hash_secret = telegram_settings.api_hash
+    if api_id is None or api_hash_secret is None:
+        raise RuntimeError(
+            "TELEGRAM_API_ID and TELEGRAM_API_HASH must be set "
+            "(the same credentials the userbot uses) to start the "
+            "admin bot — Pyrogram bot-mode requires both even with "
+            "a bot_token.",
+        )
     return Client(
         name="autotrader_admin_bot",
+        api_id=api_id,
+        api_hash=api_hash_secret.get_secret_value(),
         bot_token=token,
         # In-memory session: the bot token *is* the credential, no
         # session string to persist. Restarts re-auth instantly.
