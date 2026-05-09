@@ -897,3 +897,152 @@ def test_unbind_requires_confirm_then_clears() -> None:
     persisted, in_memory = asyncio.new_event_loop().run_until_complete(_run())
     assert persisted is None
     assert in_memory is None
+
+
+# ---------------------------------------------------------------------------
+# Task 14: AdminBotNotifier — token-bucket + send wrapper
+# ---------------------------------------------------------------------------
+
+
+def _reset_notifier_settings() -> None:
+    """Like ``_reset_global_settings_flags`` but ALSO clears
+    ``admin_telegram_user_id`` back to None — the notifier tests seed
+    it to 555 and we don't want that bleeding into ``test_pipeline.py``.
+    """
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+
+    async def _do() -> None:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1)
+            if gs is not None:
+                gs.kill_switch_engaged = False
+                gs.pipeline_active = False
+                gs.daily_max_loss = 0.0
+                gs.daily_max_stake = 0.0
+                gs.max_concurrent_trades = 0
+                gs.default_stake = 1.0
+                gs.admin_notify_placed = True
+                gs.admin_notify_settled = True
+                gs.admin_notify_risk_rejected = True
+                gs.admin_notify_system_error = True
+                gs.admin_telegram_user_id = None
+                s.add(gs)
+                await s.commit()
+
+    asyncio.new_event_loop().run_until_complete(_do())
+
+
+def test_notifier_sends_when_class_enabled() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+    notifier = AdminBotNotifier(bot=bot)
+
+    async def _seed_then_notify() -> list[tuple[int, str, object]]:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            gs.admin_notify_placed = True
+            s.add(gs); await s.commit()
+        await bot.start()
+        await notifier.notify("placed", "PLACED test")
+        return list(fake.sent_messages)
+
+    try:
+        sent = asyncio.new_event_loop().run_until_complete(_seed_then_notify())
+        assert sent == [(555, "PLACED test", None)]
+    finally:
+        _reset_notifier_settings()
+
+
+def test_notifier_skips_when_class_disabled() -> None:
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+    notifier = AdminBotNotifier(bot=bot)
+
+    async def _seed_then_notify() -> list[tuple[int, str, object]]:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            gs.admin_notify_settled = False  # muted
+            s.add(gs); await s.commit()
+        await bot.start()
+        await notifier.notify("settled", "WIN test")
+        return list(fake.sent_messages)
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_seed_then_notify()) == []
+    finally:
+        _reset_notifier_settings()
+
+
+def test_notifier_skips_when_no_admin_bound() -> None:
+    """No-op when ``admin_telegram_user_id`` is None — DM has nowhere
+    to land."""
+    bot, fake = _make_bound_bot()
+    bot.set_bound_user_id(None)
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+
+    notifier = AdminBotNotifier(bot=bot)
+
+    async def _run() -> list:
+        from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+        from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = None
+            s.add(gs); await s.commit()
+        await bot.start()
+        await notifier.notify("placed", "test")
+        return list(fake.sent_messages)
+
+    try:
+        assert asyncio.new_event_loop().run_until_complete(_run()) == []
+    finally:
+        _reset_notifier_settings()
+
+
+def test_notifier_rate_limit_coalesces_burst() -> None:
+    """After the bucket empties, additional notifications of the same
+    class are suppressed until the digest window passes; one digest
+    message is sent at the end of the window."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+    # Tiny bucket + tiny window so the test runs in <1s.
+    notifier = AdminBotNotifier(
+        bot=bot, bucket_capacity=2, refill_seconds=10, digest_window=0.1,
+    )
+
+    async def _run() -> list[str]:
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            gs.admin_notify_placed = True
+            s.add(gs); await s.commit()
+        await bot.start()
+        # Fire 5 notifications back-to-back. Bucket starts at 2 -> 2 send
+        # through, then 3 are suppressed.
+        for i in range(5):
+            await notifier.notify("placed", f"#{i}")
+        # Wait past the digest window so the suppressed-count message
+        # gets emitted.
+        await asyncio.sleep(0.15)
+        await notifier.flush_digests()
+        return [t for _, t, _ in fake.sent_messages]
+
+    try:
+        sent = asyncio.new_event_loop().run_until_complete(_run())
+        # First two real messages, then one digest.
+        assert len([s for s in sent if s.startswith("#")]) == 2
+        assert any("suppressed" in s for s in sent), sent
+    finally:
+        _reset_notifier_settings()
