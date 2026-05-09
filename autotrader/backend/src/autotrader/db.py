@@ -123,6 +123,47 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
                 "max_concurrent_trades INTEGER NOT NULL DEFAULT 0",
             ),
         )
+    if cols and "admin_telegram_user_id" not in cols:
+        # Phase 8 admin bot: persisted on the singleton settings row so
+        # there's no separate table to manage. Nullable INTEGER —
+        # ``None`` means unbound, the first /start fills it.
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "admin_telegram_user_id INTEGER NULL",
+            ),
+        )
+    # Per-class notification toggles. Default ON so a freshly bound
+    # admin sees the full firehose; operators mute via ``/notify`` from
+    # the bot or via the dashboard.
+    if cols and "admin_notify_placed" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "admin_notify_placed BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
+    if cols and "admin_notify_settled" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "admin_notify_settled BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
+    if cols and "admin_notify_risk_rejected" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "admin_notify_risk_rejected BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
+    if cols and "admin_notify_system_error" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE global_settings ADD COLUMN "
+                "admin_notify_system_error BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
 
 
 async def close_db() -> None:
