@@ -363,6 +363,11 @@ async def update_config_endpoint(
     # catch most edits but explicit invalidation is cheap insurance
     # and clears the cached row even when the signature didn't drift.
     pipeline.invalidate(config_id)
+    # invalidate() and prebuild() are both synchronous dict-mutation
+    # ops with no `await` between them, so a concurrent dispatch on
+    # the same event loop cannot interleave between them. If either
+    # gains an await in the future, wrap the pair in the per-chat
+    # lock to keep the cache consistent.
     if row.enabled:
         pipeline.prebuild(row)
     return _to_response(row)

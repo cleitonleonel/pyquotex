@@ -839,9 +839,8 @@ def test_save_parser_immediately_caches_it(
             f"{r.json()['cached_parser_count']}"
         )
 
-        # Toggle enabled=False → cache count drops.
-        cfg_id = r.json().get("id")  # may be None on /pipeline/status
-        # (re-fetch via /parsers/configs to get the id)
+        # Toggle enabled=False → cache count drops. /pipeline/status
+        # doesn't expose the parser id, so re-fetch via /parsers/configs.
         r = client.get("/parsers/configs", headers=headers)
         cfg_id = r.json()[0]["id"]
         r = client.put(
