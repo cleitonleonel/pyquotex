@@ -1383,3 +1383,102 @@ def test_config_endpoints_require_auth(client: TestClient) -> None:
     assert r.status_code == 401
     r = client.post("/parsers/test", json={"config": {}, "messages": [{"text": "x"}]})
     assert r.status_code == 401
+
+
+# ===========================================================================
+# parser_type round-trip — regression for the _safe_parser_type bug
+# ===========================================================================
+
+
+def test_parser_type_round_trips_for_prep_trigger(client: TestClient) -> None:
+    """Regression: ``_safe_parser_type`` used to whitelist only
+    ``"template"`` and ``"regex"``, silently downgrading ``"prep_trigger"``
+    and ``"batch"`` rows to ``"template"`` on every API read. Operators
+    saw the wrong pill highlighted in the dashboard editor and an
+    empty template field — the row in DB was correct, but reading via
+    the API made it look broken. The dispatch path was unaffected
+    because it reads ``cfg.parser_type`` from the SQLModel row, not
+    the response.
+    """
+    headers = _login(client)
+    body = _new_config_body(
+        name="prep+trigger",
+        parser_type="prep_trigger",
+        parser_config={
+            "prep_kind": "regex",
+            "prep": r"PAIR\s*:\s*(?P<asset>[A-Z][A-Z\s/_-]*[A-Z])",
+            "trigger_kind": "template",
+            "trigger": "{DIRECTION}",
+        },
+    )
+    r = client.post("/parsers/configs", headers=headers, json=body)
+    assert r.status_code == 201, r.text
+    cfg_id = r.json()["id"]
+
+    r = client.get(f"/parsers/configs/{cfg_id}", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["parser_type"] == "prep_trigger", (
+        f"prep_trigger must round-trip; got {r.json()['parser_type']!r}"
+    )
+
+    r = client.get("/parsers/configs", headers=headers)
+    assert r.status_code == 200
+    matching = [c for c in r.json() if c["id"] == cfg_id]
+    assert matching and matching[0]["parser_type"] == "prep_trigger", (
+        "prep_trigger must round-trip via /parsers/configs (list) too"
+    )
+
+
+def test_parser_type_round_trips_for_batch(client: TestClient) -> None:
+    """Same regression as the prep_trigger case but for ``batch``."""
+    headers = _login(client)
+    body = _new_config_body(
+        name="batch",
+        parser_type="batch",
+        parser_config={
+            "row_kind": "regex",
+            "row": r"^(?P<time>\d{1,2}:\d{2})\s+(?P<asset>\S+)\s+(?P<direction>CALL|PUT)\s*$",
+        },
+    )
+    r = client.post("/parsers/configs", headers=headers, json=body)
+    assert r.status_code == 201, r.text
+    cfg_id = r.json()["id"]
+
+    r = client.get(f"/parsers/configs/{cfg_id}", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["parser_type"] == "batch"
+
+
+def test_parser_type_unknown_value_falls_back_to_template(client: TestClient) -> None:
+    """A row with an unrecognised parser_type (e.g. written by a future
+    revision and rolled back, or set directly in SQL) must not crash
+    the API — fall back to ``"template"`` so the dashboard renders
+    something instead of a 500."""
+    headers = _login(client)
+    body = _new_config_body()
+    r = client.post("/parsers/configs", headers=headers, json=body)
+    assert r.status_code == 201
+    cfg_id = r.json()["id"]
+
+    # Sneak an unknown parser_type into the row directly. The API
+    # contract is that reads are still safe.
+    import asyncio  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+
+    async def _corrupt() -> None:
+        async with AsyncSessionLocal() as s:
+            row = await s.get(ParserConfig, cfg_id)
+            assert row is not None
+            row.parser_type = "experimental_v3"
+            s.add(row)
+            await s.commit()
+
+    asyncio.new_event_loop().run_until_complete(_corrupt())
+
+    r = client.get(f"/parsers/configs/{cfg_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["parser_type"] == "template", (
+        "unknown parser_type must coerce to 'template' in the API response"
+    )

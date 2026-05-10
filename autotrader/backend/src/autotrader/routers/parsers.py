@@ -147,7 +147,21 @@ class OkResponse(BaseModel):
 
 
 def _safe_parser_type(value: str) -> ParserType:
-    return value if value in ("template", "regex") else "template"
+    """Coerce the DB-stored ``parser_type`` to the response Literal.
+
+    The DB column is plain text so a row written by an older revision
+    (or directly via SQL) could in theory carry an unknown value;
+    falling back to ``"template"`` keeps the API contract honoured.
+    Critically, **prep_trigger** and **batch** are valid types — an
+    earlier version of this function whitelisted only template/regex
+    and silently downgraded the other two, which made the dashboard
+    editor show the wrong pill as active and render an empty template
+    field for prep_trigger / batch rows. The dispatch path was
+    unaffected (it reads ``cfg.parser_type`` from the SQLModel row,
+    not the API response) but operators reading or re-saving via the
+    dashboard saw a corrupted view.
+    """
+    return value if value in ("template", "regex", "prep_trigger", "batch") else "template"  # type: ignore[return-value]
 
 
 def _safe_trade_mode(value: str) -> TradeMode:
