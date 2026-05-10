@@ -121,6 +121,40 @@ prep:    PAIR: {ASSET} TIME: {DURATION} Minute
 trigger: {DIRECTION}            ← the placeholder matches 👍 / 👎
 ```
 
+### Template vs regex for the prep — emoji separators bite
+
+Real signal channels often decorate the prep with emoji *between*
+fields, like ``🌐 PAIR: USD NGN OTC\n⏱ TIME: 01 Minute``. The
+template's `\s+` separator only matches whitespace, so it can't
+bridge a non-whitespace ``⏱`` between the asset and the time
+fields — the prep silently fails to match and trades never fire.
+This is the **single most common reason** an operator wires up
+Elite-style channels and sees nothing happen.
+
+Two fixes:
+
+- **Switch the prep to ``regex`` mode** with a pattern that allows
+  arbitrary characters between the captures. A robust default that
+  handles most Elite-style layouts:
+
+  ```text
+  PAIR\s*:\s*(?P<asset>[A-Z][A-Z\s/_-]*[A-Z])
+  ```
+
+  Capture only the asset on the ``PAIR:`` line; the parser scans
+  the rest of the message body for ``N minute(s)`` to fill duration
+  via the documented fallback path. ``\s*`` after ``PAIR`` is
+  forgiving about the colon's spacing.
+
+- **Or strip the decoration from the channel's posts in your head
+  and write a template against the cleaned form.** Works for fixed
+  layouts; fragile when the channel changes its prefix emoji.
+
+The Live tester in the editor lets you paste real channel messages
+and click *Test* — if the matched-groups badge shows the wrong asset
+or the prep silently fails, that's the canary. ``regex`` mode is
+the right reach for any prep with emoji decorators.
+
 ### Restart caveat
 
 In-memory pending preps don't survive an API restart — half-built
@@ -290,7 +324,11 @@ top-to-bottom:
 6. **Live tester** — paste a real channel message into
    `/dashboard/parsers/<chat>/<parser>` and click Test. If the
    tester says "no match" but `/decisions` shows the message
-   arriving, your regex/template needs work.
+   arriving, your regex/template needs work. The most common
+   silent failure is a **template-mode prep_trigger** parser
+   against a channel that puts emoji decorators (`⏱`, `🌐`)
+   between fields — switch the prep to `regex` mode (see the
+   "Template vs regex for the prep" section above).
 7. **Trade-mode mismatch** — `trade_mode=scheduled` rejects
    signals without a `fire_at`; `trade_mode=live` strips any
    `fire_at` extracted. Check the parser's pin matches the
