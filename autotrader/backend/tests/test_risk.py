@@ -1135,3 +1135,50 @@ async def test_reset_streak_clears_both_ladders(
     assert row["current_win_streak"] == 0
     assert row["last_payout"] == 0.0
     assert row["last_stake"] == 0.0
+
+
+async def test_reset_streak_no_op_for_untraded_parser(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """POST /risk/streaks/{id}/reset on a parser that has never traded
+    must return 200 and produce no DB row. The endpoint must not
+    upsert a MartingaleState row just because the operator clicked
+    Reset on a never-traded parser — that would surface a phantom
+    row in /risk/overview's join.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    # Note: do NOT activate or dispatch — parser has never traded.
+
+    r = await async_client.post(
+        f"/risk/streaks/{cfg_id}/reset", headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    # Confirm the row in /risk/overview shows zero state (defaults from
+    # the StreakRow ternaries — there's no MartingaleState row to read).
+    r = await async_client.get("/risk/overview", headers=headers)
+    row = next(
+        s for s in r.json()["streaks"] if s["parser_config_id"] == cfg_id
+    )
+    assert row["current_streak"] == 0
+    assert row["current_win_streak"] == 0
+    assert row["last_payout"] == 0.0
+    assert row["last_stake"] == 0.0
+    assert row["last_outcome"] == ""
