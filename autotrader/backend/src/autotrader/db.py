@@ -76,7 +76,7 @@ async def _create_indices(conn) -> None:  # type: ignore[no-untyped-def]
     )
 
 
-async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
+async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]  # noqa: PLR0912
     """One-off in-place migrations.
 
     SQLModel ``create_all`` only creates missing tables — it never
@@ -113,6 +113,20 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
             text(
                 "ALTER TABLE parser_configs ADD COLUMN "
                 "martingale_auto_recovery BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "winning_streak_enabled" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE parser_configs ADD COLUMN "
+                "winning_streak_enabled BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "winning_streak_max_level" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE parser_configs ADD COLUMN "
+                "winning_streak_max_level INTEGER NOT NULL DEFAULT 2",
             ),
         )
 
@@ -187,6 +201,25 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
             text(
                 "ALTER TABLE global_settings ADD COLUMN "
                 "admin_notify_system_error BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
+
+    # martingale_states gained winning-streak columns when Paroli
+    # sizing landed. Existing rows default to ``0`` for both, which
+    # is the same as having no streak in progress.
+    cols = await conn.run_sync(_columns, "martingale_states")
+    if cols and "current_win_streak" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE martingale_states ADD COLUMN "
+                "current_win_streak INTEGER NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "last_payout" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE martingale_states ADD COLUMN "
+                "last_payout REAL NOT NULL DEFAULT 0",
             ),
         )
 

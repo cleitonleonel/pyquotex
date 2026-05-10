@@ -29,6 +29,16 @@ class MartingaleState(SQLModel, table=True):
     current_streak: int = Field(default=0, nullable=False)
     last_stake: float = Field(default=0.0, nullable=False)
     last_outcome: str = Field(default="", nullable=False)  # "" | "won" | "lost"
+    # Winning-streak (Paroli) state. ``current_win_streak`` ticks up
+    # on each winning settle; ``last_payout`` records ``stake +
+    # profit`` of that winning trade so the next channel signal can
+    # size at ``ceil(last_payout)``. Both reset to 0 on a loss or
+    # when ``current_win_streak >= winning_streak_max_level`` after
+    # a win. At runtime the two ladders are mutually exclusive
+    # (loss resets win_streak; win resets current_streak with
+    # reset_on_win), so ``current_streak > 0 ⇔ current_win_streak == 0``.
+    current_win_streak: int = Field(default=0, nullable=False)
+    last_payout: float = Field(default=0.0, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)
 
 
