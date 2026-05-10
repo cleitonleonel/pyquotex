@@ -4,10 +4,14 @@ Decision engine sitting between the parser pipeline and the trade
 executor. Phase 5 expanded the bare-minimum sanity checks from
 Phase 4 with:
 
-* Martingale runtime — the stake is computed as
-  ``base * multiplier ** current_streak``, with the streak read from
-  :class:`MartingaleState`. The gate is the only place that decides
-  the executable stake; the executor never overrides it.
+* Martingale runtime — the recovery stake is computed as
+  ``last_stake * multiplier`` (``last_stake`` being the trade that
+  just lost) so a loss on a win-streak-elevated trade recovers
+  relative to that elevated amount, not back to base. ``last_stake``
+  is read from :class:`MartingaleState`, falling back to
+  ``base_stake`` only on a never-settled parser. The gate is the
+  only place that decides the executable stake; the executor never
+  overrides it.
 * Winning-streak (Paroli) runtime — when ``winning_streak_enabled``,
   the stake advances to ``ceil(state.last_payout)`` after each win
   for the next channel signal, giving the Paroli compounding effect.

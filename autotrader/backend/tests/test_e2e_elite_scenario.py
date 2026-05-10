@@ -801,8 +801,8 @@ async def test_full_coexistence_walkthrough_from_spec(
     # T7: bot recovery at $20. Win → mart resets, recovery wins
     # advance the streak to 1, last_payout = 20+17 = $37.
     WatcherFakeQuotex.next_outcomes = [("win", 17.0)]
-    await _settle_watchers(async_client)  # drain T6's loss-then-recovery
-    await _settle_watchers(async_client)  # recovery's own watcher
+    await _settle_watchers(async_client)  # settle T6 loss; auto-recovery spawns as side-effect
+    await _settle_watchers(async_client)  # settle T7 recovery watcher
     assert WatcherFakeQuotex.buy_calls[6]["amount"] == 20
 
     # T8: streak step 1 → next $37 (ceil(37.0)).
