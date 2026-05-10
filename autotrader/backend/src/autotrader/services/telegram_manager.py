@@ -672,6 +672,45 @@ class TelegramManager:
             log.warning("telegram.peer_cache.subscribe_pass_failed",
                         error=f"{type(exc).__name__}: {exc}")
 
+    async def subscribe_chat(self, chat_id: int) -> None:
+        """Resolve + subscribe a single chat with the live update stream.
+
+        Mirrors what ``_prime_peer_cache`` does per chat at login: a
+        ``get_chat_history(limit=1)`` round-trip forces Pyrogram to
+        resolve the peer and run the ``getDifference`` handshake that
+        registers ``UpdateNewChannelMessage`` events for this channel.
+
+        Without this, a chat added via ``/telegram/watch`` after login
+        sits silently in the database — the row is correct but the
+        live client never delivers messages for it until the next
+        process restart re-runs ``_prime_peer_cache``.
+
+        Idempotent. Returns silently when not logged in (the watch
+        endpoint may be saving a draft row before the operator finishes
+        the Telegram login).
+        """
+        if not self.logged_in or self._client is None:
+            return
+        try:
+            async for _ in self._client.get_chat_history(chat_id, limit=1):
+                break
+        except Exception as exc:  # pragma: no cover - Pyrogram surfaces vary
+            self._emit_system_error(
+                kind="subscribe_failed",
+                detail=f"chat_id={chat_id}: {type(exc).__name__}: {exc}",
+            )
+            log.warning(
+                "telegram.subscribe.failed",
+                chat_id=chat_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise TelegramManagerError(
+                f"subscribe failed for chat {chat_id}: {exc}",
+            ) from exc
+
+        self._subscribed_chat_count += 1
+        log.info("telegram.subscribe.ok", chat_id=chat_id)
+
     async def _handle_incoming(self, msg: Any) -> None:
         """Convert a Pyrogram Message → IncomingMessage → callback."""
         if self._on_message is None:

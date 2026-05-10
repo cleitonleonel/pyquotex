@@ -598,3 +598,85 @@ def test_pyrogram_min_channel_id_patched_for_64bit_channels() -> None:
     for channel_id in (-1002218147270, -1002475564994):
         # Should not raise.
         assert pyrogram.utils.get_peer_type(channel_id) == "channel"
+
+
+# ---------------------------------------------------------------------------
+# subscribe_chat — per-chat live-stream subscription primitive
+# ---------------------------------------------------------------------------
+
+
+def test_subscribe_chat_calls_get_chat_history(client: TestClient) -> None:
+    """``subscribe_chat`` should run a single ``get_chat_history``
+    touch, mirroring what ``_prime_peer_cache`` does per chat. This
+    is the call that registers the channel with the live update
+    stream so ``UpdateNewChannelMessage`` events stop being silently
+    dropped.
+    """
+    # Log into Telegram so the manager has a live client.
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    # Seed history for chat -1003 so we can prove subscribe_chat
+    # actually walks it (and isn't just a no-op).
+    FakeTelegramClient.history[-1003] = [
+        _FakeMessage(901, text="probe", sender_id=200),
+    ]
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.telegram_manager
+    initial_subscribed = manager.subscribed_chat_count
+
+    asyncio.new_event_loop().run_until_complete(
+        manager.subscribe_chat(-1003)
+    )
+
+    # The gauge ticks up by one and the fake client's get_chat_history
+    # was actually called for the new chat.
+    assert manager.subscribed_chat_count == initial_subscribed + 1
+
+
+def test_subscribe_chat_idempotent_when_logged_out(client: TestClient) -> None:
+    """``subscribe_chat`` returns silently when the manager isn't
+    logged in. Avoids forcing the watch endpoint to know about the
+    login state.
+    """
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.telegram_manager
+    # Not logged in — the call is a no-op, not a raise.
+    asyncio.new_event_loop().run_until_complete(
+        manager.subscribe_chat(-1004)
+    )
+    assert manager.subscribed_chat_count == 0
+
+
+def test_subscribe_chat_raises_on_pyrogram_failure(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Pyrogram exception bubbles as ``TelegramManagerError`` so
+    the route can map it to 502 — caller knows the watch row was
+    saved but the subscribe step failed."""
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.services.telegram_manager import TelegramManagerError  # noqa: PLC0415
+
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    manager = app.state.telegram_manager
+    client_obj = manager._client
+    assert client_obj is not None
+
+    async def _broken_history(*_: object, **__: object) -> object:
+        raise RuntimeError("flood-wait")
+        yield  # pragma: no cover  (unreachable; satisfies async-gen typing)
+
+    monkeypatch.setattr(client_obj, "get_chat_history", _broken_history)
+
+    with pytest.raises(TelegramManagerError):
+        asyncio.new_event_loop().run_until_complete(
+            manager.subscribe_chat(-1005)
+        )
