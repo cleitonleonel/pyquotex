@@ -625,6 +625,7 @@ async def _insert_pending(
     *,
     broker_order_id: str | None,
     placed_at: datetime | None = None,
+    placed_at_none: bool = False,
     fire_at: datetime | None = None,
     trade_mode: str = "scheduled",
     duration_seconds: int = 60,
@@ -632,6 +633,9 @@ async def _insert_pending(
     from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
     from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
 
+    resolved_placed_at = (
+        None if placed_at_none else (placed_at or datetime.now(UTC))
+    )
     row = TradeAttempt(
         chat_id=-1001,
         parser_config_id=1,
@@ -644,7 +648,7 @@ async def _insert_pending(
         fire_at=fire_at,
         status="pending",
         broker_order_id=broker_order_id,
-        placed_at=placed_at or datetime.now(UTC),
+        placed_at=resolved_placed_at,
     )
     async with AsyncSessionLocal() as s:
         s.add(row)
@@ -653,28 +657,37 @@ async def _insert_pending(
     return row.id or 0
 
 
-async def test_reconcile_expires_all_pending_rows(
+async def test_reconcile_buckets_pending_rows_three_ways(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """Every pending row at startup gets expired with a clear note.
+    """Pending rows at startup land in one of three buckets.
 
-    Background: pyquotex resets ``_active_pending`` on each connect, so
-    even a real ticket from the previous process can't be tied back to
-    its close event. The honest behaviour is to expire every pending
-    row on restart so the concurrency cap doesn't silently lock the
-    pipeline.
+    * ``placed_at is None`` -> expire immediately (broker never got
+      the order); legacy "watcher lost on restart" note.
+    * ``placed_at + duration + slack <= now`` -> expire immediately
+      with the clearer "settle window passed" note.
+    * ``placed_at + duration + slack > now`` -> stay pending; a
+      deferred task will mark it expired once the natural window
+      closes.
     """
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
-    bad_id = await _insert_pending(broker_order_id="True")
+    # Bucket 1: placed_at None — broker never accepted.
+    never_placed_id = await _insert_pending(
+        broker_order_id=None,
+        placed_at_none=True,
+    )
+    # Bucket 2: settle window long past.
     past_id = await _insert_pending(
         broker_order_id="real-ticket-1",
         placed_at=datetime.now(UTC) - timedelta(hours=1),
         trade_mode="live",
     )
+    # Bucket 3: still in flight (placed just now, 60s window + 60s slack).
     inflight_id = await _insert_pending(
         broker_order_id="real-ticket-2",
+        placed_at=datetime.now(UTC),
         fire_at=datetime.now(UTC) + timedelta(minutes=10),
     )
 
@@ -684,10 +697,20 @@ async def test_reconcile_expires_all_pending_rows(
 
     rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
     by_id = {r["id"]: r for r in rows}
-    for attempt_id in (bad_id, past_id, inflight_id):
-        row = by_id[attempt_id]
-        assert row["status"] == "expired"
-        assert "watcher lost on restart" in (row["error"] or "").lower()
+
+    never_row = by_id[never_placed_id]
+    assert never_row["status"] == "expired"
+    assert "watcher lost on restart" in (never_row["error"] or "").lower()
+
+    past_row = by_id[past_id]
+    assert past_row["status"] == "expired"
+    assert "settle window passed" in (past_row["error"] or "").lower()
+
+    inflight_row = by_id[inflight_id]
+    assert inflight_row["status"] == "pending", (
+        f"in-flight row must stay pending; got "
+        f"status={inflight_row['status']!r}, error={inflight_row['error']!r}"
+    )
 
 
 async def test_reconcile_is_idempotent(
@@ -697,7 +720,12 @@ async def test_reconcile_is_idempotent(
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
-    attempt_id = await _insert_pending(broker_order_id="True")
+    # Use a placed_at in the past so the row falls into the immediate-
+    # expire bucket — keeps the assertion deterministic.
+    attempt_id = await _insert_pending(
+        broker_order_id="True",
+        placed_at=datetime.now(UTC) - timedelta(hours=1),
+    )
 
     from autotrader.main import app  # noqa: PLC0415
 

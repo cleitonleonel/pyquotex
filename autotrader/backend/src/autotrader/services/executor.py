@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -40,6 +40,12 @@ from autotrader.services.quotex_manager import (
 from autotrader.services.risk_gate import RiskDecision, evaluate
 
 log = structlog.get_logger(__name__)
+
+# Extra grace before a pending row whose nominal settle window has
+# passed gets marked ``expired`` with the clearer note. The 60s
+# slack covers broker-side processing jitter — pyquotex sometimes
+# emits ``order_closed`` a beat after the natural expiry.
+_RECONCILE_SLACK_SECONDS = 60
 
 
 def _wire_iso8601(value: datetime | None) -> str | None:
@@ -164,46 +170,117 @@ class TradeExecutor:
         return await self._place(attempt, signal, decision)
 
     async def shutdown(self) -> None:
-        """Wait for in-flight result watchers to finish."""
+        """Cancel and await in-flight watchers so the lifespan exits cleanly.
+
+        Result-watchers (``_watch_result``) and deferred-reconcile
+        runners are both tracked in ``_watchers``. Deferred runners
+        sleep on a binary-options settle window — without an explicit
+        cancel they would block shutdown for the remaining
+        ``placed_at + duration + slack`` seconds.
+        """
         if not self._watchers:
             return
+        for task in self._watchers:
+            task.cancel()
         with contextlib.suppress(Exception):
             await asyncio.gather(*self._watchers, return_exceptions=True)
         self._watchers.clear()
 
     async def reconcile_pending(self) -> None:
-        """Sweep ``pending`` rows after a restart.
+        """Reclassify ``pending`` rows after a restart.
 
-        In-memory watchers don't survive a restart, and pyquotex
-        doesn't persist its ``_active_pending`` map either — once the
-        WS reconnects, even a real ticket from the previous run no
-        longer triggers ``order_closed_{ticket}`` events. So
-        "respawning a watcher" looks like recovery on paper but in
-        practice always times out: the broker still settles the trade
-        but pyquotex can't link the close back to our id.
+        Three buckets:
 
-        Honest call: mark every pending row ``expired`` with a clear
-        note. The broker's own books are unaffected, but the user is
-        warned that any in-flight trades aren't tracked end-to-end and
-        the martingale ladder may need a manual reset if they want a
-        clean recovery sequence.
+        * ``placed_at is None`` — broker never accepted the order.
+          Mark ``expired`` immediately with the historic
+          "watcher lost on restart" note.
+        * ``placed_at + duration_seconds + slack > utcnow()`` — the
+          broker is still inside the binary-options window. Leave
+          the row ``pending`` and spawn a deferred task that sleeps
+          until ``placed_at + duration + slack`` and then marks
+          ``expired`` with the clearer note.
+        * ``placed_at + duration_seconds + slack <= utcnow()`` — the
+          broker has already settled. Mark ``expired`` immediately
+          with the clearer note.
 
-        Idempotent: calling twice on the same DB does no harm.
+        In every "settled but unrecoverable" case the martingale
+        ladder is **not** ticked — we don't know the outcome and
+        guessing would silently corrupt recovery sequences.
         """
         async with AsyncSessionLocal() as session:
             rows = await list_pending(session)
         if not rows:
             return
 
-        note = (
+        legacy_note = (
             "watcher lost on restart — pyquotex doesn't track tickets "
             "across reconnects, so the outcome can't be tied back. "
             "Check broker history if needed; reset the martingale "
             "ladder if the recovery sequence got out of sync"
         )
+        clearer_note = (
+            "settle window passed; broker likely settled this trade "
+            "but pyquotex couldn't tie the result back across the "
+            "restart. Check broker history if the outcome matters; "
+            "the martingale ladder is left untouched"
+        )
+
+        now = datetime.now(UTC)
+        deferred = 0
+        immediate = 0
         for row in rows:
-            await self._mark_reconciled(row.id or 0, note)
-        log.info("executor.reconcile", expired=len(rows))
+            placed = row.placed_at
+            if placed is None:
+                await self._mark_reconciled(row.id or 0, legacy_note)
+                immediate += 1
+                continue
+
+            placed_aware = (
+                placed if placed.tzinfo is not None
+                else placed.replace(tzinfo=UTC)
+            )
+            settle_at = placed_aware + timedelta(
+                seconds=row.duration_seconds + _RECONCILE_SLACK_SECONDS,
+            )
+            wait_seconds = (settle_at - now).total_seconds()
+            if wait_seconds <= 0:
+                await self._mark_reconciled(row.id or 0, clearer_note)
+                immediate += 1
+            else:
+                self._spawn_deferred_reconcile(
+                    attempt_id=row.id or 0,
+                    wait_seconds=wait_seconds,
+                    note=clearer_note,
+                )
+                deferred += 1
+
+        log.info(
+            "executor.reconcile",
+            immediate_expired=immediate,
+            deferred=deferred,
+        )
+
+    def _spawn_deferred_reconcile(
+        self,
+        *,
+        attempt_id: int,
+        wait_seconds: float,
+        note: str,
+    ) -> None:
+        """Schedule a delayed mark-expired so in-flight trades aren't
+        nuked the moment the API restarts mid-window. Tracked in the
+        same ``_watchers`` set as result-watchers so ``shutdown()``
+        awaits cancellation cleanly."""
+        async def _runner() -> None:
+            try:
+                await asyncio.sleep(wait_seconds)
+            except asyncio.CancelledError:
+                return
+            await self._mark_reconciled(attempt_id, note)
+
+        task = asyncio.create_task(_runner())
+        self._watchers.add(task)
+        task.add_done_callback(self._watchers.discard)
 
     def _spawn_watcher(
         self,
