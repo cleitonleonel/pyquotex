@@ -1482,3 +1482,31 @@ def test_parser_type_unknown_value_falls_back_to_template(client: TestClient) ->
     assert r.json()["parser_type"] == "template", (
         "unknown parser_type must coerce to 'template' in the API response"
     )
+
+
+def test_winning_streak_fields_round_trip_in_martingale_payload(
+    client: TestClient,
+) -> None:
+    """POST a parser with winning_streak_enabled + winning_streak_max_level
+    → GET it back → both fields preserved."""
+    headers = _login(client)
+    body = _new_config_body(
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+    )
+    r = client.post("/parsers/configs", headers=headers, json=body)
+    assert r.status_code == 201, r.text
+    cfg_id = r.json()["id"]
+
+    r = client.get(f"/parsers/configs/{cfg_id}", headers=headers)
+    assert r.status_code == 200
+    saved = r.json()
+    assert saved["martingale"]["winning_streak_enabled"] is True
+    assert saved["martingale"]["winning_streak_max_level"] == 3

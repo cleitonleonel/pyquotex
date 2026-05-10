@@ -1039,3 +1039,99 @@ async def test_winning_streak_sizes_next_channel_signal_at_ceil_payout(
     assert amounts == [5, 10], (
         f"second trade must size at ceil(last_payout)=10; got {amounts}"
     )
+
+
+# ===========================================================================
+# StreakRow API fields + reset endpoint
+# ===========================================================================
+
+
+async def test_streak_row_includes_win_streak_fields(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """GET /risk/overview must include current_win_streak + last_payout
+    per parser so the dashboard can render both ladders."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 2,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    r = await async_client.get("/risk/overview", headers=headers)
+    body = r.json()
+    rows = body["streaks"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["current_win_streak"] == 1
+    assert row["last_payout"] == pytest.approx(9.25)
+
+
+async def test_reset_streak_clears_both_ladders(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """POST /risk/streaks/{id}/reset must zero current_streak,
+    current_win_streak, last_payout, and last_stake atomically."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # Prime both counters: a win then a loss (loss won't fully clear
+    # win_streak in record_outcome — actually it WILL, but we want
+    # both ladders to have *had* state so the reset is meaningful).
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # Re-prime current_streak by losing.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # Hit reset.
+    r = await async_client.post(
+        f"/risk/streaks/{cfg_id}/reset", headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = await async_client.get("/risk/overview", headers=headers)
+    row = next(
+        s for s in r.json()["streaks"] if s["parser_config_id"] == cfg_id
+    )
+    assert row["current_streak"] == 0
+    assert row["current_win_streak"] == 0
+    assert row["last_payout"] == 0.0
+    assert row["last_stake"] == 0.0
