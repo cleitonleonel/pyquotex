@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -64,15 +65,21 @@ def _wire_iso8601(value: datetime | None) -> str | None:
     return aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
-    """Mirror of ``TradeAttemptResponse`` for the event bus payload.
+def _attempt_to_payload(
+    attempt: TradeAttempt,
+    *,
+    state: object | None = None,
+    cfg: object | None = None,
+) -> dict[str, object]:
+    """Mirror of TradeAttemptResponse for the event bus.
 
-    The dashboard consumes ``trade.upserted`` events as drop-in
-    replacements for rows fetched via ``GET /pipeline/trades``, so the
-    field set must match exactly. Datetimes go out as ISO 8601
-    strings so the payload is JSON-ready without a custom encoder.
+    Optional ``state`` (MartingaleState) + ``cfg`` (ParserConfig) embed
+    a ``ladder`` snapshot so admin-bot notifications + frontend rows
+    can render streak progress without a re-fetch. Both default to
+    ``None`` for callers that don't have the state in hand (e.g.
+    on insert, before the watcher has settled).
     """
-    return {
+    payload: dict[str, object] = {
         "id": attempt.id or 0,
         "chat_id": attempt.chat_id,
         "parser_config_id": attempt.parser_config_id,
@@ -91,6 +98,33 @@ def _attempt_to_payload(attempt: TradeAttempt) -> dict[str, object]:
         "placed_at": attempt.placed_at.isoformat() if attempt.placed_at else None,
         "settled_at": attempt.settled_at.isoformat() if attempt.settled_at else None,
     }
+    if state is not None and cfg is not None:
+        # Compute the next-stake hint the same way risk_gate would on
+        # the next signal: streak first, martingale second, base last.
+        cur_win = getattr(state, "current_win_streak", 0)
+        last_payout = getattr(state, "last_payout", 0.0)
+        cur_loss = getattr(state, "current_streak", 0)
+        if (
+            getattr(cfg, "winning_streak_enabled", False)
+            and cur_win > 0
+            and last_payout > 0
+        ):
+            next_hint = math.ceil(last_payout)
+        elif getattr(cfg, "martingale_enabled", False) and cur_loss > 0:
+            next_hint = math.ceil(
+                getattr(cfg, "default_stake", 0)
+                * (getattr(cfg, "martingale_multiplier", 2.0) ** cur_loss),
+            )
+        else:
+            next_hint = math.ceil(getattr(cfg, "default_stake", 0))
+        payload["ladder"] = {
+            "current_streak": cur_loss,
+            "max_streak": getattr(cfg, "martingale_max_streak", 0),
+            "current_win_streak": cur_win,
+            "max_win_streak": getattr(cfg, "winning_streak_max_level", 0),
+            "next_stake_hint": int(next_hint),
+        }
+    return payload
 
 
 class TradeExecutor:
@@ -309,7 +343,13 @@ class TradeExecutor:
         if updated is not None:
             self._publish(updated)
 
-    def _publish(self, attempt: TradeAttempt) -> None:
+    def _publish(
+        self,
+        attempt: TradeAttempt,
+        *,
+        state: object | None = None,
+        cfg: object | None = None,
+    ) -> None:
         """Fire-and-forget broadcast of a trade row to dashboard subscribers.
 
         The payload mirrors ``TradeAttemptResponse`` so the frontend can
@@ -319,7 +359,9 @@ class TradeExecutor:
         """
         if self._event_bus is None:
             return
-        self._event_bus.publish("trade.upserted", _attempt_to_payload(attempt))
+        self._event_bus.publish(
+            "trade.upserted", _attempt_to_payload(attempt, state=state, cfg=cfg),
+        )
 
     # ------------------------------------------------------------------
     # Internals
@@ -565,7 +607,9 @@ class TradeExecutor:
                         winning_streak_max_level=cfg.winning_streak_max_level,
                     )
         if updated is not None:
-            self._publish(updated)
+            # Pass state+cfg so the admin-bot notification has ladder
+            # context. Both came from the same session above.
+            self._publish(updated, state=new_state, cfg=cfg)
         log.info(
             "executor.settled",
             attempt_id=attempt_id,

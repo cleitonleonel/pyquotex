@@ -1105,8 +1105,8 @@ def test_notifier_subscribes_and_renders_trade_upserted() -> None:
 
     try:
         sent = asyncio.new_event_loop().run_until_complete(_run())
-        assert any("PLACED" in s for s in sent), sent
-        assert any("WIN" in s for s in sent), sent
+        assert any("EURUSD_otc" in s for s in sent), sent  # placed notification
+        assert any("WON" in s for s in sent), sent  # settled notification
     finally:
         _reset_notifier_settings()
 
@@ -1296,3 +1296,88 @@ def test_quotex_manager_publishes_system_error_on_disconnect_failure(
     asyncio.new_event_loop().run_until_complete(_run())
     assert any("disconnect" in p.get("kind", "").lower() for p in seen), seen
     assert any(p.get("component") == "broker" for p in seen), seen
+
+
+def test_format_trade_settled_includes_win_streak_when_active() -> None:
+    """A settled win on a streak-enabled parser must surface the
+    streak progress + next-stake hint in the bot DM."""
+    from autotrader.services.admin_bot_notify import format_trade_settled  # noqa: PLC0415
+
+    payload = {
+        "id": 1,
+        "asset": "EURUSD",
+        "direction": "call",
+        "duration_seconds": 60,
+        "stake": 5.0,
+        "trade_mode": "live",
+        "status": "won",
+        "profit": 4.25,
+        "settled_at": "2026-05-10T05:00:00Z",
+        "ladder": {
+            "current_streak": 0,
+            "max_streak": 5,
+            "current_win_streak": 1,
+            "max_win_streak": 2,
+            "next_stake_hint": 10,
+        },
+    }
+    msg = format_trade_settled(payload)
+    assert "win streak" in msg.lower()
+    assert "1/2" in msg or "1 / 2" in msg
+    assert "10" in msg  # next_stake_hint surfaces somewhere
+
+
+def test_format_trade_settled_notes_martingale_recovery_on_loss() -> None:
+    """A settled loss with martingale auto_recovery active must
+    surface the next-recovery-stake hint."""
+    from autotrader.services.admin_bot_notify import format_trade_settled  # noqa: PLC0415
+
+    payload = {
+        "id": 1,
+        "asset": "EURUSD",
+        "direction": "call",
+        "duration_seconds": 60,
+        "stake": 5.0,
+        "trade_mode": "live",
+        "status": "lost",
+        "profit": -5.0,
+        "settled_at": "2026-05-10T05:00:00Z",
+        "ladder": {
+            "current_streak": 1,
+            "max_streak": 2,
+            "current_win_streak": 0,
+            "max_win_streak": 0,
+            "next_stake_hint": 10,
+        },
+    }
+    msg = format_trade_settled(payload)
+    assert "recovery" in msg.lower() or "martingale" in msg.lower()
+    assert "10" in msg  # next stake
+
+
+def test_format_trade_settled_no_ladder_lines_when_at_base() -> None:
+    """When neither ladder is in progress (both counters at 0), the
+    settled message is the unchanged one-liner — no extra noise."""
+    from autotrader.services.admin_bot_notify import format_trade_settled  # noqa: PLC0415
+
+    payload = {
+        "id": 1,
+        "asset": "EURUSD",
+        "direction": "call",
+        "duration_seconds": 60,
+        "stake": 5.0,
+        "trade_mode": "live",
+        "status": "won",
+        "profit": 4.25,
+        "settled_at": "2026-05-10T05:00:00Z",
+        "ladder": {
+            "current_streak": 0,
+            "max_streak": 5,
+            "current_win_streak": 0,
+            "max_win_streak": 2,
+            "next_stake_hint": 5,
+        },
+    }
+    msg = format_trade_settled(payload)
+    assert "win streak" not in msg.lower()
+    assert "recovery" not in msg.lower()

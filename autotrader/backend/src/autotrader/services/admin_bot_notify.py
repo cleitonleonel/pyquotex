@@ -216,40 +216,61 @@ class AdminBotNotifier:
 
 
 def format_trade_placed(payload: dict[str, Any]) -> str:
-    asset = payload.get("asset", "?")
-    direction = (payload.get("direction") or "?").upper()
+    asset = payload.get("asset", "")
+    direction = payload.get("direction", "")
     duration = payload.get("duration_seconds", 0)
-    stake = float(payload.get("stake") or 0.0)
-    base = float(payload.get("base_stake") or stake)
-    step = int(payload.get("martingale_step") or 0)
-    mode = payload.get("trade_mode") or "auto"
-    step_note = ""
-    if step > 0 and base > 0:
-        ratio = stake / base
-        step_note = f" (step {step}, x{ratio:.1f} from base)"
-    return (
-        f"PLACED  {asset} - {direction} - {duration}s\n"
-        f"stake : ${stake:.2f}{step_note}\n"
-        f"mode  : {mode}"
+    stake = payload.get("stake", 0)
+    head = (
+        f"🎯 {direction.upper()} {asset} {duration}s · ${stake}"
     )
+    ladder_line = _ladder_line(payload)
+    if ladder_line:
+        return f"{head}\n   {ladder_line}"
+    return head
 
 
 def format_trade_settled(payload: dict[str, Any]) -> str:
-    asset = payload.get("asset", "?")
-    direction = (payload.get("direction") or "?").upper()
-    duration = payload.get("duration_seconds", 0)
-    profit = payload.get("profit")
-    status = payload.get("status", "?")
+    """Format a settled-trade notification, optionally appending
+    a ladder progress line when one of the parsers' ladders is
+    active.
+    """
+    status = payload.get("status", "")
+    asset = payload.get("asset", "")
+    direction = payload.get("direction", "")
+    stake = payload.get("stake", 0)
+    profit = payload.get("profit", 0)
+
     if status == "won":
-        prefix = "WIN"
+        head = f"✅ WON +${profit:.2f} {asset} {direction.upper()} ${stake}"
     elif status == "lost":
-        prefix = "LOSS"
-    elif status == "refund":
-        prefix = "REFUND"
+        head = f"❌ LOST ${profit:.2f} {asset} {direction.upper()} ${stake}"
     else:
-        prefix = status.upper()
-    pnl = f"{profit:+.2f}" if isinstance(profit, (int, float)) else "—"
-    return f"{prefix}   {asset} - {direction} - {duration}s   {pnl}"
+        head = f"⚠️ {status.upper()} {asset} {direction.upper()} ${stake}"
+
+    ladder_line = _ladder_line(payload)
+    if ladder_line:
+        return f"{head}\n   {ladder_line}"
+    return head
+
+
+def _ladder_line(payload: dict[str, Any]) -> str:
+    """Return a one-line ladder hint, or empty string when neither
+    ladder is in progress."""
+    ladder = payload.get("ladder")
+    if not isinstance(ladder, dict):
+        return ""
+    cur_win = ladder.get("current_win_streak", 0) or 0
+    max_win = ladder.get("max_win_streak", 0) or 0
+    cur_loss = ladder.get("current_streak", 0) or 0
+    max_loss = ladder.get("max_streak", 0) or 0
+    next_hint = ladder.get("next_stake_hint", 0) or 0
+    if cur_win > 0:
+        if max_win > 0 and cur_win >= max_win:
+            return f"📈 win streak {cur_win}/{max_win} (max hit, reset) → next ${next_hint}"
+        return f"📈 win streak {cur_win}/{max_win} → next ${next_hint}"
+    if cur_loss > 0:
+        return f"📉 next: martingale recovery ${next_hint} (step {cur_loss}/{max_loss})"
+    return ""
 
 
 def format_risk_rejected(payload: dict[str, Any]) -> str:
