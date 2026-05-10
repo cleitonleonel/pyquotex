@@ -68,6 +68,11 @@ class MartingalePayload(BaseModel):
     # ``ParserConfig.martingale_auto_recovery``. Defaults to False so
     # existing payloads remain valid; operators flip it on per parser.
     auto_recovery: bool = False
+    # Winning-streak (Paroli) fields. Defaults keep existing payloads
+    # valid; operators opt in per parser. Task 1 added the DB columns;
+    # Task 3 wires them through the API and the executor.
+    winning_streak_enabled: bool = False
+    winning_streak_max_level: int = Field(default=2, ge=0, le=20)
 
 
 class ConfigPayload(BaseModel):
@@ -189,6 +194,8 @@ def _to_response(row: ParserConfig) -> ConfigResponse:
             max_streak=row.martingale_max_streak,
             reset_on_win=row.martingale_reset_on_win,
             auto_recovery=row.martingale_auto_recovery,
+            winning_streak_enabled=row.winning_streak_enabled,
+            winning_streak_max_level=row.winning_streak_max_level,
         ),
         enabled=row.enabled,
         created_at=row.created_at,
@@ -216,6 +223,8 @@ def _payload_to_dict(p: ConfigPayload) -> dict[str, Any]:
         "martingale_max_streak": p.martingale.max_streak,
         "martingale_reset_on_win": p.martingale.reset_on_win,
         "martingale_auto_recovery": p.martingale.auto_recovery,
+        "winning_streak_enabled": p.martingale.winning_streak_enabled,
+        "winning_streak_max_level": p.martingale.winning_streak_max_level,
         "enabled": p.enabled,
     }
 

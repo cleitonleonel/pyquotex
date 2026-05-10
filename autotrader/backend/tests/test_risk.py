@@ -891,3 +891,105 @@ async def test_martingale_auto_recovery_skips_when_parser_disabled_mid_streak(
         "rejected TradeAttempt is written for the recovery; "
         f"got {rejected_count} rejected rows"
     )
+
+
+# ===========================================================================
+# Winning-streak (Paroli) runtime
+# ===========================================================================
+
+
+async def test_winning_streak_advances_on_win_and_resets_on_loss(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """When winning_streak is enabled, a win advances current_win_streak
+    and records last_payout (= stake + profit). A loss resets both."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # T1: win — streak ticks to 1, last_payout = stake + profit.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async def _read() -> tuple[int, float]:
+        async with AsyncSessionLocal() as s:
+            row = await s.get(MartingaleState, 1)
+            assert row is not None
+            return row.current_win_streak, row.last_payout
+
+    win, payout = await _read()
+    assert win == 1
+    assert payout == pytest.approx(9.25)  # 5.0 stake + 4.25 profit
+
+    # T2: loss — streak resets, last_payout cleared.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    win, payout = await _read()
+    assert win == 0
+    assert payout == 0.0
+
+
+async def test_winning_streak_resets_at_max_level(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """current_win_streak >= max_level after a win triggers reset to 0
+    and clears last_payout — next channel signal goes back to base."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 2,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # Two wins in a row hit max=2 → reset.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    WatcherFakeQuotex.next_outcomes = [("win", 8.50)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        row = await s.get(MartingaleState, 1)
+        assert row is not None
+        assert row.current_win_streak == 0, "max hit → reset"
+        assert row.last_payout == 0.0

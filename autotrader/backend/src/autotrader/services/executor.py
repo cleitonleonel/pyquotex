@@ -552,14 +552,17 @@ class TradeExecutor:
             cfg = None
             if updated is not None:
                 cfg = await get_config(session, updated.parser_config_id)
-                if cfg is not None and cfg.martingale_enabled:
+                if cfg is not None and (cfg.martingale_enabled or cfg.winning_streak_enabled):
                     new_state = await record_outcome(
                         session,
                         cfg.id or 0,
                         won=(status == "win"),
                         last_stake=updated.stake,
+                        last_profit=float(profit),
                         max_streak=cfg.martingale_max_streak,
                         reset_on_win=cfg.martingale_reset_on_win,
+                        winning_streak_enabled=cfg.winning_streak_enabled,
+                        winning_streak_max_level=cfg.winning_streak_max_level,
                     )
         if updated is not None:
             self._publish(updated)
