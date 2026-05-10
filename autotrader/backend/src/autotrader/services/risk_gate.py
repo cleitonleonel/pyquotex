@@ -8,6 +8,10 @@ Phase 4 with:
   ``base * multiplier ** current_streak``, with the streak read from
   :class:`MartingaleState`. The gate is the only place that decides
   the executable stake; the executor never overrides it.
+* Winning-streak (Paroli) runtime — when ``winning_streak_enabled``,
+  the stake advances to ``ceil(state.last_payout)`` after each win
+  for the next channel signal, giving the Paroli compounding effect.
+  The two ladders are mutually exclusive at runtime.
 * Daily-loss circuit breaker — refuses new trades when realised P&L
   has already lost more than ``daily_max_loss`` today (UTC).
 * Daily-stake cap — refuses when the *committed* stake today
@@ -189,12 +193,13 @@ async def evaluate(  # noqa: PLR0911, PLR0912  (one branch per failure mode)
     win_step = 0
     stake: float = base_stake
 
+    parser_id = parser_config.id
     needs_state = (
         parser_config.martingale_enabled
         or parser_config.winning_streak_enabled
-    ) and parser_config.id is not None
-    if needs_state:
-        state = await get_state(session, parser_config.id)
+    ) and parser_id is not None
+    if needs_state and parser_id is not None:
+        state = await get_state(session, parser_id)
         martingale_step = state.current_streak
         win_step = state.current_win_streak
 
