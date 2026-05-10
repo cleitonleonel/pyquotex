@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import SessionDep, TelegramDep
+from autotrader.dependencies import PipelineDep, SessionDep, TelegramDep
 from autotrader.models.telegram_session import (
     delete_session,
     upsert_session,
@@ -303,8 +303,14 @@ async def watch_endpoint(
 async def unwatch_endpoint(
     chat_id: int,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> OkResponse:
     await remove_watch(session, chat_id)
+    # Drop cached parsers for this chat. Dispatch already filters
+    # via ``WatchedChannel.enabled`` so behaviour was correct
+    # without this — but cached parsers leaked memory until a
+    # signature-drift rebuild.
+    pipeline.invalidate_for_chat(chat_id)
     return OkResponse()
 
 

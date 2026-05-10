@@ -149,6 +149,22 @@ class Pipeline:
     def invalidate_all(self) -> None:
         self._parsers.clear()
 
+    def invalidate_for_chat(self, chat_id: int) -> None:
+        """Drop every cached parser whose config row's chat_id matches.
+
+        Called by the unwatch endpoint so cached parsers belonging to
+        a no-longer-watched chat don't occupy memory until the next
+        signature-drift rebuild. Dispatch already filters out
+        unwatched chats via ``WatchedChannel.enabled``, so this is
+        memory-only hygiene; behaviour is unchanged either way.
+        """
+        for cfg_id in [
+            cfg_id
+            for cfg_id, cached in self._parsers.items()
+            if cached.config_row.chat_id == chat_id
+        ]:
+            self._parsers.pop(cfg_id, None)
+
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------

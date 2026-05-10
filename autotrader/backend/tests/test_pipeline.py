@@ -651,3 +651,56 @@ def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> Non
     r = app_client.delete(f"/parsers/configs/{config_id}", headers=headers)
     assert r.status_code == 200
     assert config_id not in pipeline._parsers
+
+
+def test_pipeline_invalidate_for_chat_drops_only_matching_caches() -> None:
+    """``invalidate_for_chat(X)`` removes every cached parser whose
+    ``config_row.chat_id == X``, leaving caches for other chats
+    intact. Called from the unwatch endpoint so cached parsers for
+    a deleted watch row don't sit in memory until a signature drift
+    rebuilds them.
+    """
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from autotrader.services.parsers import build_parser  # noqa: PLC0415
+    from autotrader.services.pipeline import Pipeline, _CachedParser  # noqa: PLC0415
+
+    class _StubManager:
+        assets: tuple[str, ...] = ()
+
+    class _StubExecutor:
+        async def submit(self, **kwargs: object) -> None:
+            return None
+
+    pipe = Pipeline(manager=_StubManager(), executor=_StubExecutor())
+
+    def _seed(cfg_id: int, chat_id: int) -> None:
+        cfg = ParserConfig(
+            id=cfg_id,
+            chat_id=chat_id,
+            parser_type="template",
+            parser_config_json='{"template": "{DIRECTION} {ASSET} {DURATION}"}',
+        )
+        parser = build_parser(
+            parser_type="template",
+            parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+        )
+        pipe._parsers[cfg_id] = _CachedParser(
+            config_revision=("template", "{}", "0", "{}", "60", "0"),
+            parser_type="template",
+            parser=parser,
+            aggregator=None,
+            config_row=cfg,
+        )
+
+    _seed(cfg_id=10, chat_id=-1001)
+    _seed(cfg_id=11, chat_id=-1001)
+    _seed(cfg_id=20, chat_id=-1002)
+
+    pipe.invalidate_for_chat(-1001)
+
+    assert 10 not in pipe._parsers
+    assert 11 not in pipe._parsers
+    assert 20 in pipe._parsers, (
+        "invalidate_for_chat must only drop caches matching the chat_id; "
+        "parsers on other chats stay cached"
+    )

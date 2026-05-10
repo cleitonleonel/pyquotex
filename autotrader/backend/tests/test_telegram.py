@@ -801,3 +801,44 @@ def test_watch_returns_502_when_subscribe_fails(
 
     r = client.get("/telegram/watched", headers=headers)
     assert any(d["chat_id"] == -1011 for d in r.json())
+
+
+def test_unwatch_invalidates_pipeline_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DELETE /telegram/watch/{chat_id} should call
+    Pipeline.invalidate_for_chat so cached parsers for a no-longer-
+    watched chat don't sit in memory."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1012,
+            "title": "Trash",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": True,
+        },
+    )
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.pipeline),
+        "invalidate_for_chat",
+        _spy,
+    )
+
+    r = client.delete("/telegram/watch/-1012", headers=headers)
+    assert r.status_code == 200, r.text
+    assert calls == [-1012], f"expected invalidate_for_chat(-1012); got {calls}"
