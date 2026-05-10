@@ -680,3 +680,124 @@ def test_subscribe_chat_raises_on_pyrogram_failure(
         asyncio.new_event_loop().run_until_complete(
             manager.subscribe_chat(-1005)
         )
+
+
+def test_watch_subscribes_chat_when_enabled(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /telegram/watch with enabled=True must call
+    TelegramManager.subscribe_chat exactly once with the new chat_id.
+    """
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    async def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _spy,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1009,
+            "title": "Elite",
+            "chat_type": "channel",
+            "username": "elite",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert calls == [-1009], (
+        "watch endpoint must call subscribe_chat with the new chat_id; "
+        f"got calls={calls}"
+    )
+
+
+def test_watch_disabled_does_not_subscribe(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled watch row is a draft — don't pay the Pyrogram
+    round-trip."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    async def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _spy,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1010,
+            "title": "Draft",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert calls == [], "subscribe_chat must not run for enabled=False"
+
+
+def test_watch_returns_502_when_subscribe_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When subscribe_chat raises, the watch row IS still saved (so
+    a retry is just another POST), but the route returns 502 with
+    the error detail surfaced."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.services.telegram_manager import TelegramManagerError  # noqa: PLC0415
+
+    async def _boom(self: object, chat_id: int) -> None:
+        raise TelegramManagerError(f"flood-wait on {chat_id}")
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _boom,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1011,
+            "title": "Floody",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 502, r.text
+    assert "flood-wait" in r.text
+
+    r = client.get("/telegram/watched", headers=headers)
+    assert any(d["chat_id"] == -1011 for d in r.json())

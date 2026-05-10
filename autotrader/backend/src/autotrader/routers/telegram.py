@@ -267,6 +267,7 @@ async def watched_endpoint(session: SessionDep) -> list[DialogResponse]:
 async def watch_endpoint(
     body: WatchRequest,
     session: SessionDep,
+    manager: TelegramDep,
 ) -> OkResponse:
     await upsert_watch(
         session,
@@ -276,6 +277,25 @@ async def watch_endpoint(
         username=body.username,
         enabled=body.enabled,
     )
+    # Force the live Pyrogram client to subscribe the new chat's
+    # update stream. Without this, ``UpdateNewChannelMessage`` events
+    # for chats added after login are silently dropped until the next
+    # process restart re-runs ``_prime_peer_cache`` — i.e. trades from
+    # the new channel never fire even though the row is correct.
+    #
+    # Subscribing AFTER ``upsert_watch`` so when Pyrogram's catch-up
+    # ``getDifference`` runs the WatchedChannel row is already there
+    # for ``Pipeline._dispatch_locked`` to find. We only subscribe
+    # when ``enabled=True`` so an operator can save a draft disabled
+    # watch row without paying the MTProto round-trip.
+    if body.enabled:
+        try:
+            await manager.subscribe_chat(body.chat_id)
+        except TelegramManagerError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"chat saved but subscribe failed: {exc}",
+            ) from exc
     return OkResponse()
 
 
