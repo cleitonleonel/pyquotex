@@ -210,6 +210,10 @@ A couple of subtleties worth knowing:
   `buy` immediately. `live` strips the schedule, `scheduled` requires
   one.
 
+**Writing parsers:** see [`docs/PARSERS.md`](docs/PARSERS.md) for the
+template / regex / prep+trigger / batch reference, the direction-token
+table, and the "why isn't my parser firing?" troubleshooting checklist.
+
 ## Project layout
 
 ```

@@ -152,12 +152,23 @@ export default function ParserEditor() {
               {channel?.username ? ` · @${channel.username}` : ""}
             </p>
           </div>
-          <Link
-            href={`/dashboard/parsers/${chatId}`}
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            ← Channel parsers
-          </Link>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <a
+              href="https://github.com/iahmedani/pyquotex/blob/master/autotrader/docs/PARSERS.md"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-foreground"
+              title="Parser writing guide + troubleshooting"
+            >
+              📖 Parser guide
+            </a>
+            <Link
+              href={`/dashboard/parsers/${chatId}`}
+              className="hover:text-foreground"
+            >
+              ← Channel parsers
+            </Link>
+          </div>
         </div>
       </section>
 
