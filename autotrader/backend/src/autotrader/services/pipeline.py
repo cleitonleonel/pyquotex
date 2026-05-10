@@ -200,7 +200,7 @@ class Pipeline:
             self._get_or_build(cfg)
         except ParserBuildError as exc:
             log.error(
-                "pipeline.prebuild_failed",
+                "pipeline.parser_build_failed",
                 config_id=cfg.id,
                 name=cfg.name,
                 error=str(exc),
@@ -318,6 +318,7 @@ class Pipeline:
                 log.error(
                     "pipeline.parser_build_failed",
                     config_id=cfg.id,
+                    name=cfg.name,
                     error=str(exc),
                 )
                 self._record_decision(

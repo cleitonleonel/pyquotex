@@ -212,7 +212,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     pipeline = Pipeline(manager=manager, executor=executor, event_bus=event_bus)
     app.state.pipeline = pipeline
     app.state.executor = executor
-    telegram_manager.set_message_callback(pipeline.dispatch)
+    # Note: telegram_manager.set_message_callback(pipeline.dispatch) is
+    # deliberately NOT called here. We attach the handler only after
+    # warm_up() has populated the parser cache, so the very first
+    # inbound message can't race with cache materialisation. See
+    # below, after the warm_up block.
 
     # Admin Telegram bot (Phase 8). The token is *optional* — when
     # unset, the bot is constructed in ``state="disabled"`` and ``start()``
@@ -282,6 +286,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
         await pipeline.warm_up()
     except Exception as exc:  # pragma: no cover - belt + braces
         log.warning("pipeline.warm_up.failed", error=str(exc))
+
+    # Now that the parser cache is hot (warm_up done) it is safe to
+    # attach the Pyrogram MessageHandler — see the deferred comment
+    # near the Pipeline construction. _attach_handler_if_pending
+    # actually wires the handler the first time _on_message is set,
+    # so this call is the moment messages begin flowing.
+    telegram_manager.set_message_callback(pipeline.dispatch)
 
     # Optional online-backup scheduler. ``backup_interval_seconds=0``
     # (the default) keeps the loop quiescent; operators opt in by
