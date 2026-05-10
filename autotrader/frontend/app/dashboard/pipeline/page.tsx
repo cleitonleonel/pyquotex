@@ -453,6 +453,8 @@ function StreaksCard({ data }: { data: RiskOverview }) {
                   <th className="px-2 py-1.5 font-medium">Step</th>
                   <th className="px-2 py-1.5 font-medium">Last</th>
                   <th className="px-2 py-1.5 font-medium">Last stake</th>
+                  <th className="px-2 py-1.5 font-medium">Win step</th>
+                  <th className="px-2 py-1.5 font-medium">Last payout</th>
                   <th className="px-2 py-1.5 font-medium">Updated</th>
                   <th className="px-2 py-1.5 font-medium" />
                 </tr>
@@ -485,6 +487,14 @@ function StreaksCard({ data }: { data: RiskOverview }) {
                     </td>
                     <td className="px-2 py-1.5 font-mono">
                       {s.last_stake > 0 ? s.last_stake.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono">
+                      {s.current_win_streak === 0
+                        ? "0"
+                        : `${s.current_win_streak} / ${s.winning_streak_max_level}`}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono">
+                      {s.last_payout > 0 ? `$${s.last_payout.toFixed(2)}` : "—"}
                     </td>
                     <td className="px-2 py-1.5 text-xs text-muted-foreground">
                       {s.updated_at
