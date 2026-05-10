@@ -726,3 +726,90 @@ async def test_auto_recovery_overrides_scheduled_trade_mode(
     # invariant must continue to hold even with the new override.
     rejected_rows = [t for t in trades if t["status"] == "rejected"]
     assert rejected_rows == [], f"no rejected rows allowed; got {rejected_rows}"
+
+
+async def test_full_coexistence_walkthrough_from_spec(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """End-to-end pin of the spec's Section-1 walkthrough.
+
+    Both ladders enabled; mart_max=1, win_max=2, base=$5.
+    The full sequence:
+      T1 channel BUY  $5  LOSS → mart=1
+      T2 bot recovery $10 LOSS → mart=2 (max), reset
+      T3 channel SELL $5  WIN  → win=1, last_payout=$9.25
+      T4 channel BUY  $10 WIN  → win=2 (max), reset
+      T5 channel BUY  $5  WIN  → win=1, last_payout=$9.25
+      T6 channel SELL $10 LOSS → mart=1, win reset
+      T7 bot recovery $20 WIN  → mart=0, win=1, last_payout=$37
+      T8 channel BUY  $37 (don't settle; just verify the stake)
+
+    Mirrors the design spec line-for-line so any future refactor
+    that drifts from the documented behaviour fails this test.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 1,
+            "reset_on_win": True,
+            "auto_recovery": True,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 2,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # T1 + T2: loss → mart recovery → loss → cap → reset.
+    WatcherFakeQuotex.next_outcomes = [("loss", -5.0), ("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+    assert [c["amount"] for c in WatcherFakeQuotex.buy_calls] == [5, 10]
+
+    # T3: clean win, base $5, win streak ticks to 1, last_payout=$9.25.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="SELL GBPJPY 1m")
+    await _settle_watchers(async_client)
+    assert WatcherFakeQuotex.buy_calls[2]["amount"] == 5
+
+    # T4: streak step 1 → next $10 (ceil(9.25)). Win at $10, hit max=2, reset.
+    WatcherFakeQuotex.next_outcomes = [("win", 8.5)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY USDCAD 1m")
+    await _settle_watchers(async_client)
+    assert WatcherFakeQuotex.buy_calls[3]["amount"] == 10
+
+    # T5: reset → base $5 again. Win → win streak=1.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURJPY 1m")
+    await _settle_watchers(async_client)
+    assert WatcherFakeQuotex.buy_calls[4]["amount"] == 5
+
+    # T6: streak step 1 → next $10. Lose at $10 → win resets, mart=1.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="SELL CHFJPY 1m")
+    await _settle_watchers(async_client)
+    assert WatcherFakeQuotex.buy_calls[5]["amount"] == 10
+
+    # T7: bot recovery at $20. Win → mart resets, recovery wins
+    # advance the streak to 1, last_payout = 20+17 = $37.
+    WatcherFakeQuotex.next_outcomes = [("win", 17.0)]
+    await _settle_watchers(async_client)  # drain T6's loss-then-recovery
+    await _settle_watchers(async_client)  # recovery's own watcher
+    assert WatcherFakeQuotex.buy_calls[6]["amount"] == 20
+
+    # T8: streak step 1 → next $37 (ceil(37.0)).
+    WatcherFakeQuotex.next_outcomes = [("win", 31.45)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+    assert WatcherFakeQuotex.buy_calls[7]["amount"] == 37, (
+        f"T8 must size at ceil(last_payout=37.0); got "
+        f"{WatcherFakeQuotex.buy_calls[7]['amount']}"
+    )

@@ -210,9 +210,13 @@ async def evaluate(  # noqa: PLR0911, PLR0912  (one branch per failure mode)
         ):
             stake = float(_round_stake(state.last_payout))
         elif parser_config.martingale_enabled and martingale_step > 0:
-            stake = base_stake * (
-                parser_config.martingale_multiplier ** martingale_step
-            )
+            # Use the previously-placed stake as the doubling base so
+            # that a loss on a win-streak-elevated trade (e.g. $10 when
+            # base=$5) recovers at $20 rather than falling back to
+            # base*mult^1=$10.  When last_stake is 0 (degenerate state),
+            # fall back to base*multiplier.
+            ladder_base = state.last_stake if state.last_stake > 0 else base_stake
+            stake = ladder_base * parser_config.martingale_multiplier
 
     # Final round-up: even when stake = base_stake, Quotex needs an
     # integer. Operators typically configure base as an integer
