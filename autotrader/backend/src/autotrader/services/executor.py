@@ -604,6 +604,11 @@ class TradeExecutor:
     ) -> None:
         """Submit a recovery trade derived from the lost ``original``.
 
+        Refetches the parser config inside this method so an operator
+        who disables the parser mid-loss-streak doesn't get an extra
+        recovery trade. The cached ``cfg`` from the calling settle
+        path may be stale by the time we reach here.
+
         Goes through the full ``submit`` path so the same risk gate
         guards (kill switch, daily loss cap, max-concurrent, REAL-mode
         env flag) apply. Stake is left ``None`` on the synthesised
@@ -619,10 +624,41 @@ class TradeExecutor:
             original_attempt_id=original.id,
             streak=streak,
         )
-        # ``TradeAttempt`` carries ``asset_raw`` but not ``asset_via``
-        # (the latter is parser-only diagnostics). The recovery's
-        # ``asset`` is already a broker code, so the empty default
-        # for ``asset_via`` on ``ParsedSignal`` is fine.
+        async with AsyncSessionLocal() as session:
+            fresh_cfg = (
+                await get_config(session, cfg.id or 0)
+                if cfg.id is not None
+                else None
+            )
+            settings_row = await session.get(GlobalSettings, 1)
+            if settings_row is None:
+                settings_row = GlobalSettings(id=1)
+
+        if fresh_cfg is None:
+            log.info(
+                "executor.auto_recovery.skipped",
+                config_id=cfg.id,
+                original_attempt_id=original.id,
+                reason="parser_config deleted",
+            )
+            return
+        if not fresh_cfg.enabled:
+            log.info(
+                "executor.auto_recovery.skipped",
+                config_id=cfg.id,
+                original_attempt_id=original.id,
+                reason="parser_config disabled",
+            )
+            return
+        if not fresh_cfg.martingale_enabled or not fresh_cfg.martingale_auto_recovery:
+            log.info(
+                "executor.auto_recovery.skipped",
+                config_id=cfg.id,
+                original_attempt_id=original.id,
+                reason="martingale toggles flipped off mid-streak",
+            )
+            return
+
         signal = ParsedSignal(
             asset=original.asset,
             direction=original.direction,  # type: ignore[arg-type]
@@ -630,21 +666,19 @@ class TradeExecutor:
             stake=None,                          # risk gate computes
             fire_at=None,                        # ASAP / live
             raw_text=f"[auto-recovery for trade #{original.id}]",
-            parser_id=f"cfg-{cfg.id}-recovery-{streak}",
+            parser_id=f"cfg-{fresh_cfg.id}-recovery-{streak}",
             asset_raw=original.asset_raw,
         )
-        async with AsyncSessionLocal() as session:
-            settings = await session.get(GlobalSettings, 1)
-            if settings is None:
-                settings = GlobalSettings(id=1)
         try:
             attempt = await self.submit(
-                signal=signal, parser_config=cfg, settings=settings,
+                signal=signal,
+                parser_config=fresh_cfg,
+                settings=settings_row,
             )
         except Exception as exc:  # pragma: no cover - belt + braces
             log.exception(
                 "executor.auto_recovery.failed",
-                config_id=cfg.id,
+                config_id=fresh_cfg.id,
                 original_attempt_id=original.id,
                 streak=streak,
                 error=str(exc),
@@ -652,7 +686,7 @@ class TradeExecutor:
             return
         log.info(
             "executor.auto_recovery.fired",
-            config_id=cfg.id,
+            config_id=fresh_cfg.id,
             original_attempt_id=original.id,
             streak=streak,
             asset=original.asset,

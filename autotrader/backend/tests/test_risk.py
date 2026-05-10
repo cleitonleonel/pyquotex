@@ -187,6 +187,33 @@ async def _create_parser(
     return r.json()["id"]
 
 
+def _disable_parser_payload(cfg_id: int) -> dict[str, object]:
+    """Minimal PUT body to flip enabled=False without changing other
+    fields. Mirrors the ConfigPayload shape from routers/parsers.py."""
+    _ = cfg_id
+    return {
+        "name": "p",
+        "priority": 100,
+        "parser_type": "template",
+        "parser_config": {"template": "{DIRECTION} {ASSET}"},
+        "timezone": "UTC",
+        "timezone_offset_minutes": 0,
+        "asset_aliases": {},
+        "aggregate_window_seconds": 0,
+        "default_stake": 10.0,
+        "default_duration_seconds": 60,
+        "trade_mode": "live",
+        "martingale": {
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 3,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        "enabled": False,
+    }
+
+
 async def _activate() -> None:
     from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
     from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
@@ -760,3 +787,82 @@ async def test_watcher_marks_expired_when_broker_disconnected(
     row = next(r for r in rows if r["id"] == attempt_id)
     assert row["status"] == "expired"
     assert "broker disconnected" in (row["error"] or "").lower()
+
+
+async def test_martingale_auto_recovery_skips_when_parser_disabled_mid_streak(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """If the operator disables the parser between the loss settle
+    and the recovery dispatch, the recovery must NOT fire — the
+    user has explicitly told the bot to stop trading on this parser.
+    Today the recovery path uses a stale ``cfg`` snapshot captured
+    at submit time and never refetches; this test pins the fix that
+    re-reads the row inside ``_fire_auto_recovery`` and bails on
+    ``enabled=False``."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 3,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    # Original signal loses; before the recovery fires, disable the
+    # parser. The settle path runs synchronously inside _settle_watchers
+    # so we disable BEFORE that drain.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+
+    # Disable the parser. The original trade is still pending in
+    # WatcherFakeQuotex's queue — its settle will then attempt to
+    # fire a recovery that should now be blocked.
+    r = await async_client.put(
+        f"/parsers/configs/{cfg_id}",
+        headers=headers,
+        json=_disable_parser_payload(cfg_id),
+    )
+    assert r.status_code == 200, r.text
+
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert amounts == [10.0], (
+        "auto_recovery must skip when the parser was disabled mid-streak; "
+        f"got buy_calls={amounts}"
+    )
+
+    # The refactor short-circuits BEFORE risk_gate.evaluate runs,
+    # so no phantom 'rejected' TradeAttempt row should exist for
+    # the recovery. Without the refactor, _fire_auto_recovery would
+    # have entered submit() and written a rejected row before
+    # risk_gate blocked. With the refactor, it bails BEFORE submit()
+    # so the only row in the DB is the original (settled lost).
+    from sqlmodel import select  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+
+    async def _count_rejected() -> int:
+        async with AsyncSessionLocal() as s:
+            result = await s.exec(
+                select(TradeAttempt).where(TradeAttempt.status == "rejected"),
+            )
+            return len(list(result.all()))
+
+    rejected_count = await _count_rejected()
+    assert rejected_count == 0, (
+        "_fire_auto_recovery must short-circuit BEFORE submit() so no "
+        "rejected TradeAttempt is written for the recovery; "
+        f"got {rejected_count} rejected rows"
+    )
