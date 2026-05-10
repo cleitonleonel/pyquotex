@@ -1381,3 +1381,48 @@ def test_format_trade_settled_no_ladder_lines_when_at_base() -> None:
     msg = format_trade_settled(payload)
     assert "win streak" not in msg.lower()
     assert "recovery" not in msg.lower()
+
+
+def test_format_trade_settled_tolerates_none_profit_and_direction() -> None:
+    """``TradeAttempt.profit`` and ``.direction`` are both ``None``-able
+    in the model. The formatter must not crash if a payload carries
+    them as ``None`` — old code guarded explicitly; regression-pin
+    that the rewrite kept the guards.
+    """
+    from autotrader.services.admin_bot_notify import format_trade_settled  # noqa: PLC0415
+
+    payload = {
+        "id": 1,
+        "asset": "EURUSD",
+        "direction": None,
+        "duration_seconds": 60,
+        "stake": 5.0,
+        "trade_mode": "live",
+        "status": "won",
+        "profit": None,
+        "settled_at": "2026-05-10T05:00:00Z",
+    }
+    msg = format_trade_settled(payload)
+    assert "WON" in msg
+    # Defaulted profit renders as +$0.00, defaulted direction as "?".
+    assert "+$0.00" in msg
+    assert "?" in msg
+
+
+def test_format_trade_placed_tolerates_none_direction() -> None:
+    """``format_trade_placed`` should also survive a ``None`` direction
+    (same defensive shape as ``format_trade_settled``).
+    """
+    from autotrader.services.admin_bot_notify import format_trade_placed  # noqa: PLC0415
+
+    payload = {
+        "id": 1,
+        "asset": "EURUSD",
+        "direction": None,
+        "duration_seconds": 60,
+        "stake": 5.0,
+        "trade_mode": "live",
+    }
+    msg = format_trade_placed(payload)
+    assert "EURUSD" in msg
+    assert "?" in msg

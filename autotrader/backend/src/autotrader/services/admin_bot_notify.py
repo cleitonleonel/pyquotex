@@ -216,13 +216,11 @@ class AdminBotNotifier:
 
 
 def format_trade_placed(payload: dict[str, Any]) -> str:
-    asset = payload.get("asset", "")
-    direction = payload.get("direction", "")
+    asset = payload.get("asset") or "?"
+    direction = (payload.get("direction") or "?").upper()
     duration = payload.get("duration_seconds", 0)
     stake = payload.get("stake", 0)
-    head = (
-        f"🎯 {direction.upper()} {asset} {duration}s · ${stake}"
-    )
+    head = f"🎯 {direction} {asset} {duration}s · ${stake}"
     ladder_line = _ladder_line(payload)
     if ladder_line:
         return f"{head}\n   {ladder_line}"
@@ -233,19 +231,25 @@ def format_trade_settled(payload: dict[str, Any]) -> str:
     """Format a settled-trade notification, optionally appending
     a ladder progress line when one of the parsers' ladders is
     active.
+
+    Defensively coerces ``profit`` and ``direction`` because the
+    payload may carry ``None`` for either field — TradeAttempt
+    declares both as optional and a manually-constructed event
+    bus payload could too.
     """
     status = payload.get("status", "")
-    asset = payload.get("asset", "")
-    direction = payload.get("direction", "")
+    asset = payload.get("asset") or "?"
+    direction = (payload.get("direction") or "?").upper()
     stake = payload.get("stake", 0)
-    profit = payload.get("profit", 0)
+    profit_raw = payload.get("profit")
+    profit = float(profit_raw) if isinstance(profit_raw, (int, float)) else 0.0
 
     if status == "won":
-        head = f"✅ WON +${profit:.2f} {asset} {direction.upper()} ${stake}"
+        head = f"✅ WON +${profit:.2f} {asset} {direction} ${stake}"
     elif status == "lost":
-        head = f"❌ LOST ${profit:.2f} {asset} {direction.upper()} ${stake}"
+        head = f"❌ LOST ${profit:.2f} {asset} {direction} ${stake}"
     else:
-        head = f"⚠️ {status.upper()} {asset} {direction.upper()} ${stake}"
+        head = f"⚠️ {status.upper()} {asset} {direction} ${stake}"
 
     ladder_line = _ladder_line(payload)
     if ladder_line:
