@@ -197,10 +197,14 @@ TradeExecutor
 
 A couple of subtleties worth knowing:
 
-- **Reconciler.** On every restart, every `pending` trade row gets
-  expired with a clear note. pyquotex doesn't track tickets across
-  reconnects, so respawning a watcher always times out. Honest call
-  beats false recovery.
+- **Reconciler.** On every restart, pending trade rows are bucketed.
+  Rows whose broker order never landed (`placed_at=None`) expire
+  immediately. Rows past their settle window
+  (`placed_at + duration + 60s`) expire immediately with a "settle
+  window passed; check broker history" note. Rows still inside their
+  window stay `pending` and a deferred task expires them when the
+  window closes. The martingale ladder is never ticked from this path
+  — we don't know the outcome, so we don't guess.
 - **Asset resolution.** Trailing `OTC` token is detected first
   (`USD NGN OTC` → `USDNGN_otc`), then exact match against the
   broker's catalogue, then `_otc` cross-probe, then fallback. Manual
