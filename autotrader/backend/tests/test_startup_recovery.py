@@ -332,3 +332,248 @@ def test_reconcile_pending_does_not_tick_martingale(
 
     streak = asyncio.new_event_loop().run_until_complete(_read_state())
     assert streak == 2, f"reconcile must not touch martingale ladder; streak={streak}"
+
+
+def _table_columns(table: str) -> dict[str, dict[str, object]]:
+    """Return ``{col_name: {dflt_value, notnull, type}}`` from PRAGMA table_info."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from autotrader.db import engine  # noqa: PLC0415
+
+    async def _do() -> dict[str, dict[str, object]]:
+        async with engine.begin() as conn:
+            rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
+        # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        return {
+            r[1]: {"type": r[2], "notnull": r[3], "dflt_value": r[4]}
+            for r in rows
+        }
+
+    return asyncio.new_event_loop().run_until_complete(_do())
+
+
+def test_migration_adds_winning_streak_columns_to_legacy_parser_configs(
+    fake_quotex: None,
+) -> None:
+    """A pre-existing ``parser_configs`` table missing the
+    ``winning_streak_*`` columns gets ALTERed in place when ``init_db``
+    re-runs — no data loss, no operator action.
+
+    Repro: enter the lifespan once (creates the current-shape table),
+    seed a parser_configs row, ``DROP COLUMN`` the two new columns to
+    fake a pre-Task-1 install, then re-enter the lifespan and assert
+    the new columns are back with the right defaults applied to the
+    seeded row.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal, engine  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.parser_config import create_config  # noqa: PLC0415
+
+    # Step A: bootstrap fresh schema + seed a row.
+    async def _seed() -> int:
+        async with AsyncSessionLocal() as s:
+            cfg = await create_config(
+                s,
+                chat_id=-1001,
+                payload={
+                    "name": "p",
+                    "priority": 100,
+                    "parser_type": "template",
+                    "parser_config": {"template": "{DIRECTION} {ASSET}"},
+                    "default_stake": 1.0,
+                    "default_duration_seconds": 60,
+                    "trade_mode": "live",
+                    "martingale_enabled": False,
+                    "martingale_multiplier": 2.0,
+                    "martingale_max_streak": 0,
+                    "martingale_reset_on_win": True,
+                    "martingale_auto_recovery": False,
+                    "enabled": True,
+                    "asset_aliases": {},
+                    "aggregate_window_seconds": 0,
+                    "timezone": "UTC",
+                    "timezone_offset_minutes": 0,
+                },
+            )
+            return int(cfg.id or 0)
+
+    with TestClient(app):
+        cfg_id = asyncio.new_event_loop().run_until_complete(_seed())
+
+    # Step B: drop the new columns to simulate a legacy DB.
+    async def _drop_cols() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("ALTER TABLE parser_configs DROP COLUMN winning_streak_enabled"),
+            )
+            await conn.execute(
+                text("ALTER TABLE parser_configs DROP COLUMN winning_streak_max_level"),
+            )
+
+    asyncio.new_event_loop().run_until_complete(_drop_cols())
+
+    # Sanity: confirm the drop took effect before we re-run init_db.
+    pre = _table_columns("parser_configs")
+    assert "winning_streak_enabled" not in pre
+    assert "winning_streak_max_level" not in pre
+
+    # Step C: re-enter the lifespan; this fires _migrate_in_place.
+    with TestClient(app):
+        pass
+
+    # Step D: assert the columns are back with the right defaults, and
+    # the existing row was backfilled to those defaults.
+    post = _table_columns("parser_configs")
+    assert "winning_streak_enabled" in post, (
+        "migration must re-add winning_streak_enabled"
+    )
+    assert "winning_streak_max_level" in post, (
+        "migration must re-add winning_streak_max_level"
+    )
+
+    async def _read_row() -> tuple[int, int]:
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT winning_streak_enabled, winning_streak_max_level "
+                        "FROM parser_configs WHERE id = :id",
+                    ),
+                    {"id": cfg_id},
+                )
+            ).one()
+        return int(row[0]), int(row[1])
+
+    enabled, max_level = asyncio.new_event_loop().run_until_complete(_read_row())
+    # SQLite stores BOOLEAN as INTEGER; default 0 == False.
+    assert enabled == 0, (
+        f"winning_streak_enabled must default to 0/False on legacy rows; got {enabled}"
+    )
+    assert max_level == 2, (
+        f"winning_streak_max_level must default to 2 on legacy rows; got {max_level}"
+    )
+
+
+def test_migration_adds_winning_streak_columns_to_legacy_martingale_states(
+    fake_quotex: None,
+) -> None:
+    """A pre-existing ``martingale_states`` table missing
+    ``current_win_streak`` / ``last_payout`` gets ALTERed in place — the
+    Paroli ladder runtime columns Task 1 added must materialise on
+    upgrade without losing the existing losing-streak counters.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal, engine  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+    from autotrader.models.parser_config import create_config  # noqa: PLC0415
+
+    # Step A: bootstrap + seed a parser_configs row + a martingale_states row.
+    async def _seed() -> int:
+        async with AsyncSessionLocal() as s:
+            cfg = await create_config(
+                s,
+                chat_id=-1001,
+                payload={
+                    "name": "p",
+                    "priority": 100,
+                    "parser_type": "template",
+                    "parser_config": {"template": "{DIRECTION} {ASSET}"},
+                    "default_stake": 1.0,
+                    "default_duration_seconds": 60,
+                    "trade_mode": "live",
+                    "martingale_enabled": True,
+                    "martingale_multiplier": 2.0,
+                    "martingale_max_streak": 3,
+                    "martingale_reset_on_win": True,
+                    "martingale_auto_recovery": False,
+                    "enabled": True,
+                    "asset_aliases": {},
+                    "aggregate_window_seconds": 0,
+                    "timezone": "UTC",
+                    "timezone_offset_minutes": 0,
+                },
+            )
+            cfg_id = int(cfg.id or 0)
+            row = MartingaleState(
+                parser_config_id=cfg_id,
+                current_streak=2,
+                last_stake=4.0,
+                last_outcome="lost",
+            )
+            s.add(row)
+            await s.commit()
+            return cfg_id
+
+    with TestClient(app):
+        cfg_id = asyncio.new_event_loop().run_until_complete(_seed())
+
+    # Step B: drop the new columns to simulate a legacy DB.
+    async def _drop_cols() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("ALTER TABLE martingale_states DROP COLUMN current_win_streak"),
+            )
+            await conn.execute(
+                text("ALTER TABLE martingale_states DROP COLUMN last_payout"),
+            )
+
+    asyncio.new_event_loop().run_until_complete(_drop_cols())
+
+    pre = _table_columns("martingale_states")
+    assert "current_win_streak" not in pre
+    assert "last_payout" not in pre
+
+    # Step C: re-enter the lifespan; this fires _migrate_in_place.
+    with TestClient(app):
+        pass
+
+    # Step D: assert the columns are back; the legacy row's existing
+    # losing-streak counters survive; the new columns default to 0.
+    post = _table_columns("martingale_states")
+    assert "current_win_streak" in post, (
+        "migration must re-add current_win_streak"
+    )
+    assert "last_payout" in post, "migration must re-add last_payout"
+
+    async def _read_row() -> tuple[int, int, float, int, float]:
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT current_streak, current_win_streak, last_payout, "
+                        "       last_stake, last_stake "
+                        "FROM martingale_states WHERE parser_config_id = :id",
+                    ),
+                    {"id": cfg_id},
+                )
+            ).one()
+        return (
+            int(row[0]),
+            int(row[1]),
+            float(row[2]),
+            int(row[3]),
+            float(row[4]),
+        )
+
+    (
+        current_streak,
+        current_win_streak,
+        last_payout,
+        _,
+        _,
+    ) = asyncio.new_event_loop().run_until_complete(_read_row())
+    # Existing data preserved.
+    assert current_streak == 2, (
+        f"legacy current_streak must survive migration; got {current_streak}"
+    )
+    # New columns default to 0 / 0.0.
+    assert current_win_streak == 0, (
+        f"current_win_streak must default to 0 on legacy rows; got {current_win_streak}"
+    )
+    assert last_payout == 0.0, (
+        f"last_payout must default to 0.0 on legacy rows; got {last_payout}"
+    )
