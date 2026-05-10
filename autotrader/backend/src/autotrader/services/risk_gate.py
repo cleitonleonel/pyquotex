@@ -21,6 +21,7 @@ the dashboard can show why a trade didn't fire.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import Literal
@@ -42,6 +43,16 @@ Outcome = Literal["allow", "block"]
 # parser config or martingale ladder.
 _MIN_STAKE = 0.01
 _MAX_STAKE = 1000.0
+
+
+def _round_stake(value: float) -> int:
+    """Quotex requires integer stakes. Always round UP so the
+    operator never under-stakes their intended risk profile —
+    base $5 with 85% payout produces $9.25 next-step which we
+    must size as $10 (not $9). Mirrors how the dashboard label
+    'next $10' would show.
+    """
+    return math.ceil(value)
 
 
 @dataclass(frozen=True, slots=True)

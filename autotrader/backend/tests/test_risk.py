@@ -18,6 +18,31 @@ import pytest
 
 from tests.test_broker import FakeQuotex
 
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (5.0, 5),
+        (5.5, 6),
+        (9.25, 10),       # base $5 + 85% payout
+        (10.0, 10),
+        (18.50, 19),      # $10 base + 85%
+        (37.0, 37),
+        (37.01, 38),      # ceiling, never round-down
+        (0.0, 0),
+        (0.99, 1),
+    ],
+)
+def test_round_stake_ceils_to_int_for_quotex(value: float, expected: int) -> None:
+    """Quotex's stake field is integer-only; rounding-up is the
+    correct safety direction (never under-stake the operator's
+    intended risk). Helper test stays pure / synchronous so it runs
+    fast and shows up high in the pytest report."""
+    from autotrader.services.risk_gate import _round_stake  # noqa: PLC0415
+
+    assert _round_stake(value) == expected
+
+
 # ---------------------------------------------------------------------------
 # A FakeQuotex that lets tests dial the next ``wait_for_order_close``
 # outcome explicitly so the martingale watcher gets predictable input.
