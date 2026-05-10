@@ -170,20 +170,49 @@ async def evaluate(  # noqa: PLR0911, PLR0912  (one branch per failure mode)
         effective_mode = "scheduled" if signal.fire_at is not None else "live"
 
     # ------------------------------------------------------------------
-    # Stake — base from signal/config, then martingale-multiplied.
+    # Stake — base from signal/config, then ladder-shaped.
+    #
+    # Three priority order:
+    #   1. winning_streak active (current_win_streak > 0)
+    #          → ceil(state.last_payout)
+    #   2. martingale active (current_streak > 0 + martingale_enabled)
+    #          → base * multiplier^step
+    #   3. otherwise → base
+    # The two ladders are mutually exclusive at runtime (record_outcome
+    # resets the opposite counter on every settle), so this if/elif
+    # tree is total.
     # ------------------------------------------------------------------
     base_stake = (
         signal.stake if signal.stake is not None else parser_config.default_stake
     )
     martingale_step = 0
-    stake = base_stake
+    win_step = 0
+    stake: float = base_stake
 
-    if parser_config.martingale_enabled and parser_config.id is not None:
+    needs_state = (
+        parser_config.martingale_enabled
+        or parser_config.winning_streak_enabled
+    ) and parser_config.id is not None
+    if needs_state:
         state = await get_state(session, parser_config.id)
         martingale_step = state.current_streak
-        # Ladder: base * multiplier^step. Step 0 is base; step 1 is
-        # the first recovery trade after one loss; etc.
-        stake = base_stake * (parser_config.martingale_multiplier ** martingale_step)
+        win_step = state.current_win_streak
+
+        if (
+            parser_config.winning_streak_enabled
+            and win_step > 0
+            and state.last_payout > 0
+        ):
+            stake = float(_round_stake(state.last_payout))
+        elif parser_config.martingale_enabled and martingale_step > 0:
+            stake = base_stake * (
+                parser_config.martingale_multiplier ** martingale_step
+            )
+
+    # Final round-up: even when stake = base_stake, Quotex needs an
+    # integer. Operators typically configure base as an integer
+    # already; this is belt-and-braces.
+    stake = float(_round_stake(stake))
 
     if stake < _MIN_STAKE:
         return RiskDecision(

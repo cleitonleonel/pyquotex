@@ -505,15 +505,19 @@ async def test_martingale_disabled_uses_flat_stake(
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
     await _add_watch(async_client, headers, -1001)
-    await _create_parser(async_client, headers, chat_id=-1001, default_stake=7.5)
+    # Use an integer-valued base stake. _round_stake() is now applied on
+    # every path (Quotex requires integer stakes); a non-integer base
+    # would be ceiled at evaluation time, so this test uses 8.0 to keep
+    # the assertion straightforward.
+    await _create_parser(async_client, headers, chat_id=-1001, default_stake=8.0)
     await _activate()
 
     for _ in range(3):
-        WatcherFakeQuotex.next_outcomes = [("loss", -7.5)]
+        WatcherFakeQuotex.next_outcomes = [("loss", -8.0)]
         await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
         await _settle_watchers(async_client)
 
-    assert all(c["amount"] == 7.5 for c in WatcherFakeQuotex.buy_calls)
+    assert all(c["amount"] == 8.0 for c in WatcherFakeQuotex.buy_calls)
 
 
 # ===========================================================================
@@ -993,3 +997,45 @@ async def test_winning_streak_resets_at_max_level(
         assert row is not None
         assert row.current_win_streak == 0, "max hit → reset"
         assert row.last_payout == 0.0
+
+
+async def test_winning_streak_sizes_next_channel_signal_at_ceil_payout(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """After a winning trade, the NEXT channel signal must stake at
+    ceil(last_payout) instead of base. Quotex integer constraint —
+    9.25 → 10."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # T1 wins — primes last_payout = 5 + 4.25 = 9.25.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # T2 channel signal — must stake at ceil(9.25) = 10, not base 5.
+    WatcherFakeQuotex.next_outcomes = [("win", 8.50)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert amounts == [5, 10], (
+        f"second trade must size at ceil(last_payout)=10; got {amounts}"
+    )
