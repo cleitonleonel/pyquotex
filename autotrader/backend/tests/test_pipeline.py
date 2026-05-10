@@ -628,7 +628,12 @@ def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> Non
         },
     )
     assert r.status_code == 200, r.text
-    assert config_id not in pipeline._parsers
+    # invalidate() drops the stale cached instance; prebuild() (added in
+    # Task 7) immediately re-inserts a fresh one because enabled=True.
+    # The invariant is that the cache holds the *new* config shape — not
+    # that the slot is empty. Verify the rebuilt row carries the new name.
+    assert config_id in pipeline._parsers
+    assert pipeline._parsers[config_id].config_row.name == "renamed"
 
 
 def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> None:

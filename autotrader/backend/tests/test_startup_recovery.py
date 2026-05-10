@@ -765,3 +765,115 @@ def test_lifespan_warm_up_tolerates_invalid_parser(
         build_failures = [d for d in decisions if d["outcome"] == "build_failed"]
         assert len(build_failures) >= 1
         assert build_failures[0]["parser_name"] == "broken"
+
+
+def test_save_parser_immediately_caches_it(
+    fake_quotex: None,
+) -> None:
+    """POST /parsers/configs with enabled=True must materialise the
+    parser into the cache before the response returns — no waiting
+    for first message arrival."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async def _seed() -> None:
+        async with AsyncSessionLocal() as s:
+            s.add(
+                WatchedChannel(
+                    chat_id=-1001, title="A", chat_type="channel",
+                    username="a", enabled=True,
+                ),
+            )
+            await s.commit()
+
+    # Bootstrap the schema first, then seed.
+    with TestClient(app):
+        asyncio.new_event_loop().run_until_complete(_seed())
+
+    with TestClient(app) as client:
+        r = client.post("/auth/login", json={"passcode": "test-passcode"})
+        token = r.json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # No parsers yet → cache empty.
+        r = client.get("/pipeline/status", headers=headers)
+        assert r.json()["cached_parser_count"] == 0
+
+        # Save a parser → cache count ticks up.
+        r = client.post(
+            "/parsers/configs",
+            headers=headers,
+            json={
+                "chat_id": -1001,
+                "name": "live",
+                "priority": 100,
+                "parser_type": "template",
+                "parser_config": {"template": "{DIRECTION} {ASSET}"},
+                "timezone": "UTC",
+                "timezone_offset_minutes": 0,
+                "asset_aliases": {},
+                "default_stake": 1.0,
+                "default_duration_seconds": 60,
+                "trade_mode": "live",
+                "aggregate_window_seconds": 0,
+                "martingale": {
+                    "enabled": False,
+                    "multiplier": 2.0,
+                    "max_streak": 5,
+                    "reset_on_win": True,
+                    "auto_recovery": False,
+                    "winning_streak_enabled": False,
+                    "winning_streak_max_level": 2,
+                },
+                "enabled": True,
+            },
+        )
+        assert r.status_code == 201, r.text
+
+        r = client.get("/pipeline/status", headers=headers)
+        assert r.json()["cached_parser_count"] == 1, (
+            "save must prebuild the parser; got "
+            f"{r.json()['cached_parser_count']}"
+        )
+
+        # Toggle enabled=False → cache count drops.
+        cfg_id = r.json().get("id")  # may be None on /pipeline/status
+        # (re-fetch via /parsers/configs to get the id)
+        r = client.get("/parsers/configs", headers=headers)
+        cfg_id = r.json()[0]["id"]
+        r = client.put(
+            f"/parsers/configs/{cfg_id}",
+            headers=headers,
+            json={
+                "name": "live",
+                "priority": 100,
+                "parser_type": "template",
+                "parser_config": {"template": "{DIRECTION} {ASSET}"},
+                "timezone": "UTC",
+                "timezone_offset_minutes": 0,
+                "asset_aliases": {},
+                "default_stake": 1.0,
+                "default_duration_seconds": 60,
+                "trade_mode": "live",
+                "aggregate_window_seconds": 0,
+                "martingale": {
+                    "enabled": False,
+                    "multiplier": 2.0,
+                    "max_streak": 5,
+                    "reset_on_win": True,
+                    "auto_recovery": False,
+                    "winning_streak_enabled": False,
+                    "winning_streak_max_level": 2,
+                },
+                "enabled": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        r = client.get("/pipeline/status", headers=headers)
+        assert r.json()["cached_parser_count"] == 0, (
+            "disabling a parser must drop it from the cache"
+        )

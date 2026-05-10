@@ -319,6 +319,7 @@ async def get_config_endpoint(
 async def create_config_endpoint(
     body: CreateConfigRequest,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> ConfigResponse:
     _validate_compiles(body)
     payload = _payload_to_dict(body)
@@ -331,6 +332,10 @@ async def create_config_endpoint(
         chat_id=body.chat_id,
         payload=payload,
     )
+    # Eagerly materialise the parser so the cache reflects the save
+    # immediately — no waiting for first message arrival.
+    if row.enabled:
+        pipeline.prebuild(row)
     return _to_response(row)
 
 
@@ -358,6 +363,8 @@ async def update_config_endpoint(
     # catch most edits but explicit invalidation is cheap insurance
     # and clears the cached row even when the signature didn't drift.
     pipeline.invalidate(config_id)
+    if row.enabled:
+        pipeline.prebuild(row)
     return _to_response(row)
 
 

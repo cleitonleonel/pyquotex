@@ -268,6 +268,7 @@ async def watch_endpoint(
     body: WatchRequest,
     session: SessionDep,
     manager: TelegramDep,
+    pipeline: PipelineDep,
 ) -> OkResponse:
     await upsert_watch(
         session,
@@ -296,6 +297,16 @@ async def watch_endpoint(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"chat saved but subscribe failed: {exc}",
             ) from exc
+        # Prebuild any parsers already configured for this chat so
+        # the first signal that arrives via the freshly-subscribed
+        # update stream lands in the cache without a build round-trip.
+        from autotrader.models.parser_config import (  # noqa: PLC0415
+            list_configs as _list_chat_configs,
+        )
+        chat_configs = await _list_chat_configs(session, chat_id=body.chat_id)
+        for cfg in chat_configs:
+            if cfg.enabled:
+                pipeline.prebuild(cfg)
     return OkResponse()
 
 
