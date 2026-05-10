@@ -274,6 +274,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     except Exception as exc:  # pragma: no cover - best-effort startup task
         log.warning("executor.reconcile.failed", error=str(exc))
 
+    # Eagerly materialise every enabled parser. Without this, the
+    # ``cached_parser_count`` gauge sits at 0 until each chat
+    # receives its first message — operators can't tell whether
+    # their configs compile cleanly until traffic arrives.
+    try:
+        await pipeline.warm_up()
+    except Exception as exc:  # pragma: no cover - belt + braces
+        log.warning("pipeline.warm_up.failed", error=str(exc))
+
     # Optional online-backup scheduler. ``backup_interval_seconds=0``
     # (the default) keeps the loop quiescent; operators opt in by
     # setting the env var. We use ``<db_dir>/backups/`` unless the

@@ -59,6 +59,7 @@ def _wipe_after_each_test() -> Iterator[None]:
             TelegramSession,
         )
         from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+        from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
 
         async with AsyncSessionLocal() as s:
             for model in (
@@ -67,6 +68,7 @@ def _wipe_after_each_test() -> Iterator[None]:
                 ParserConfig,
                 BrokerCredentials,
                 TelegramSession,
+                WatchedChannel,
             ):
                 await s.exec(delete(model))  # type: ignore[call-overload]
             await s.commit()
@@ -577,3 +579,189 @@ def test_migration_adds_winning_streak_columns_to_legacy_martingale_states(
     assert last_payout == 0.0, (
         f"last_payout must default to 0.0 on legacy rows; got {last_payout}"
     )
+
+
+def test_lifespan_warm_up_caches_all_enabled_parsers(
+    fake_quotex: None,
+) -> None:
+    """After lifespan startup, cached_parser_count must equal
+    enabled_parser_count (minus any build failures). Today's lazy
+    cache leaves it at 0 until first message."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.parser_config import create_config  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    # Seed 3 enabled parsers across 2 chats + 1 disabled parser.
+    async def _seed() -> None:
+        async with AsyncSessionLocal() as s:
+            s.add(
+                WatchedChannel(
+                    chat_id=-1001, title="A", chat_type="channel",
+                    username="a", enabled=True,
+                ),
+            )
+            s.add(
+                WatchedChannel(
+                    chat_id=-1002, title="B", chat_type="channel",
+                    username="b", enabled=True,
+                ),
+            )
+            await s.commit()
+
+            for chat_id, name, enabled in [
+                (-1001, "A1", True),
+                (-1001, "A2", True),
+                (-1002, "B1", True),
+                (-1002, "Bdisabled", False),
+            ]:
+                await create_config(
+                    s,
+                    chat_id=chat_id,
+                    payload={
+                        "name": name,
+                        "priority": 100,
+                        "parser_type": "template",
+                        "parser_config": {
+                            "template": "{DIRECTION} {ASSET} {DURATION}",
+                        },
+                        "default_stake": 1.0,
+                        "default_duration_seconds": 60,
+                        "trade_mode": "live",
+                        "enabled": enabled,
+                        "martingale_enabled": False,
+                        "martingale_multiplier": 2.0,
+                        "martingale_max_streak": 5,
+                        "martingale_reset_on_win": True,
+                        "martingale_auto_recovery": False,
+                        "winning_streak_enabled": False,
+                        "winning_streak_max_level": 2,
+                        "asset_aliases": {},
+                        "aggregate_window_seconds": 0,
+                        "timezone": "UTC",
+                        "timezone_offset_minutes": 0,
+                    },
+                )
+
+    # Bootstrap the schema then seed inside first lifespan pass.
+    with TestClient(app):
+        asyncio.new_event_loop().run_until_complete(_seed())
+
+    # Re-enter the lifespan; warm_up runs and populates the cache.
+    with TestClient(app) as client:
+        r = client.post("/auth/login", json={"passcode": "test-passcode"})
+        token = r.json()["token"]
+        r = client.get(
+            "/pipeline/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        body = r.json()
+        assert body["enabled_parser_count"] == 3
+        assert body["cached_parser_count"] == 3, (
+            f"warm_up must materialise all 3 enabled parsers; got {body}"
+        )
+
+
+def test_lifespan_warm_up_tolerates_invalid_parser(
+    fake_quotex: None,
+) -> None:
+    """A parser with a bad regex must not crash startup — warm_up
+    records a build_failed decision and the remaining parsers cache
+    fine."""
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.models.parser_config import create_config  # noqa: PLC0415
+    from autotrader.models.watched_channel import WatchedChannel  # noqa: PLC0415
+
+    async def _seed() -> None:
+        async with AsyncSessionLocal() as s:
+            s.add(
+                WatchedChannel(
+                    chat_id=-1001, title="A", chat_type="channel",
+                    username="a", enabled=True,
+                ),
+            )
+            await s.commit()
+
+            await create_config(
+                s,
+                chat_id=-1001,
+                payload={
+                    "name": "good",
+                    "priority": 100,
+                    "parser_type": "template",
+                    "parser_config": {"template": "{DIRECTION} {ASSET}"},
+                    "default_stake": 1.0,
+                    "default_duration_seconds": 60,
+                    "trade_mode": "live",
+                    "enabled": True,
+                    "martingale_enabled": False,
+                    "martingale_multiplier": 2.0,
+                    "martingale_max_streak": 5,
+                    "martingale_reset_on_win": True,
+                    "martingale_auto_recovery": False,
+                    "winning_streak_enabled": False,
+                    "winning_streak_max_level": 2,
+                    "asset_aliases": {},
+                    "aggregate_window_seconds": 0,
+                    "timezone": "UTC",
+                    "timezone_offset_minutes": 0,
+                },
+            )
+            await create_config(
+                s,
+                chat_id=-1001,
+                payload={
+                    "name": "broken",
+                    "priority": 110,
+                    "parser_type": "regex",
+                    "parser_config": {"pattern": "(["},  # invalid regex
+                    "default_stake": 1.0,
+                    "default_duration_seconds": 60,
+                    "trade_mode": "live",
+                    "enabled": True,
+                    "martingale_enabled": False,
+                    "martingale_multiplier": 2.0,
+                    "martingale_max_streak": 5,
+                    "martingale_reset_on_win": True,
+                    "martingale_auto_recovery": False,
+                    "winning_streak_enabled": False,
+                    "winning_streak_max_level": 2,
+                    "asset_aliases": {},
+                    "aggregate_window_seconds": 0,
+                    "timezone": "UTC",
+                    "timezone_offset_minutes": 0,
+                },
+            )
+
+    # Bootstrap the schema then seed inside first lifespan pass.
+    with TestClient(app):
+        asyncio.new_event_loop().run_until_complete(_seed())
+
+    with TestClient(app) as client:
+        # Lifespan completed despite the broken parser.
+        r = client.post("/auth/login", json={"passcode": "test-passcode"})
+        token = r.json()["token"]
+        r = client.get(
+            "/pipeline/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        body = r.json()
+        assert body["enabled_parser_count"] == 2
+        assert body["cached_parser_count"] == 1, (
+            f"warm_up must skip the broken parser; got {body}"
+        )
+
+        # The build_failed decision is in the ring buffer.
+        r = client.get(
+            "/pipeline/decisions?limit=10",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        decisions = r.json()
+        build_failures = [d for d in decisions if d["outcome"] == "build_failed"]
+        assert len(build_failures) >= 1
+        assert build_failures[0]["parser_name"] == "broken"

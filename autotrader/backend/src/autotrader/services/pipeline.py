@@ -17,7 +17,6 @@ import asyncio
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
 
 import structlog
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -164,6 +163,62 @@ class Pipeline:
             if cached.config_row.chat_id == chat_id
         ]:
             self._parsers.pop(cfg_id, None)
+
+    async def warm_up(self) -> dict[str, int]:
+        """Materialise every enabled parser_config into the cache.
+
+        Called by the lifespan after reconcile_pending and before the
+        Telegram message handler is attached, so by the time messages
+        flow in every parser is ready. Failures (bad regex / missing
+        required field) record a ``build_failed`` decision and
+        continue — the lifespan is not aborted.
+
+        Returns ``{built: N, failed: M}`` for log + telemetry.
+        Idempotent: re-running re-validates configs.
+        """
+        async with AsyncSessionLocal() as session:
+            configs = await _list_configs(session)
+        built = 0
+        failed = 0
+        for cfg in configs:
+            if not cfg.enabled:
+                continue
+            if self.prebuild(cfg):
+                built += 1
+            else:
+                failed += 1
+        log.info("pipeline.warm_up", built=built, failed=failed)
+        return {"built": built, "failed": failed}
+
+    def prebuild(self, cfg: ParserConfig) -> bool:
+        """Build a single parser into the cache. Returns True on
+        success, False on ParserBuildError. Failures emit a
+        ``build_failed`` decision so the dashboard surfaces them
+        immediately, not on first message arrival.
+        """
+        try:
+            self._get_or_build(cfg)
+        except ParserBuildError as exc:
+            log.error(
+                "pipeline.prebuild_failed",
+                config_id=cfg.id,
+                name=cfg.name,
+                error=str(exc),
+            )
+            self._record_decision(
+                {
+                    "chat_id": cfg.chat_id,
+                    "parser_config_id": cfg.id,
+                    "parser_name": cfg.name,
+                    "parser_type": cfg.parser_type,
+                    "outcome": "build_failed",
+                    "reasons": [str(exc)],
+                    "signals": 0,
+                    "text_preview": "(warm-up)",
+                },
+            )
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Dispatch
