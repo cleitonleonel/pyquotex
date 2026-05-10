@@ -596,26 +596,99 @@ class TelegramManager:
         # Touch ``handlers`` to satisfy lint that the import is used.
         _ = handlers
 
+    async def _subscribe_channel_via_diff(self, chat_id: int) -> None:
+        """Subscribe a broadcast channel's update push stream by calling
+        ``updates.GetChannelDifference`` directly.
+
+        Pyrogram 2.x's ``client.handle_updates`` (see ``client.py:558-560``)
+        only ``log.info()``-s an ``UpdateChannelTooLong`` push from the
+        Telegram server — it does NOT call ``GetChannelDifference`` to
+        recover. Once a session's per-channel ``pts`` drifts outside the
+        incremental-recovery window, Telegram backs off pushing
+        ``UpdateNewChannelMessage`` events because the session never
+        acknowledged the catchup. The result: read receipts keep flowing
+        (those use the global update channel) but new posts go silent.
+
+        We work around the library bug by invoking ``GetChannelDifference``
+        ourselves at prime time. Calling it is itself the "I'm an active
+        subscriber" signal Telegram needs — Telegram resumes pushing
+        ``UpdateNewChannelMessage`` for this channel after the response.
+        We start from ``server_pts - 1`` (read via ``GetPeerDialogs``) so
+        the response is a normal ``ChannelDifference`` rather than a
+        ``ChannelDifferenceTooLong`` we'd then have to special-case.
+
+        Used for ``chat_type == 'channel'``. Groups (which ride the global
+        ``pts`` and so are kept fresh by ``get_dialogs`` automatically)
+        keep using ``get_chat_history(limit=1)``.
+        """
+        if self._client is None:
+            return
+        from pyrogram.raw.functions.messages import (  # noqa: PLC0415
+            GetPeerDialogs,
+        )
+        from pyrogram.raw.functions.updates import (  # noqa: PLC0415
+            GetChannelDifference,
+        )
+        from pyrogram.raw.types import (  # noqa: PLC0415
+            ChannelMessagesFilterEmpty,
+            InputChannel,
+            InputDialogPeer,
+        )
+        peer = await self._client.resolve_peer(chat_id)
+        # InputChannel needs (channel_id, access_hash). resolve_peer for
+        # a broadcast channel returns InputPeerChannel which has both.
+        input_channel = InputChannel(
+            channel_id=peer.channel_id, access_hash=peer.access_hash,
+        )
+        dialogs = await self._client.invoke(
+            GetPeerDialogs(peers=[InputDialogPeer(peer=peer)]),
+        )
+        server_pts = None
+        for dlg in getattr(dialogs, "dialogs", []) or []:
+            if hasattr(dlg, "pts") and dlg.pts:
+                server_pts = dlg.pts
+                break
+        start_pts = max(1, (server_pts or 1) - 1)
+        diff = await self._client.invoke(
+            GetChannelDifference(
+                channel=input_channel,
+                filter=ChannelMessagesFilterEmpty(),
+                pts=start_pts,
+                limit=100,
+                force=False,
+            ),
+            sleep_threshold=10,
+        )
+        log.info(
+            "telegram.channel.subscribed_via_diff",
+            chat_id=chat_id,
+            server_pts=server_pts,
+            diff_kind=type(diff).__name__,
+            diff_pts=getattr(diff, "pts", None),
+            new_messages=len(getattr(diff, "new_messages", []) or []),
+            other_updates=len(getattr(diff, "other_updates", []) or []),
+        )
+
     async def _prime_peer_cache(self, *, limit: int = 500) -> None:
         """Walk dialogs once so Pyrogram's session storage knows every
-        channel/group the user is a member of, then explicitly resolve
-        each watched channel so its update stream is subscribed.
+        channel/group the user is a member of, then explicitly subscribe
+        each watched chat to its live update stream.
 
         Two reasons this can't just be a single ``get_dialogs`` walk:
 
         1. Without *any* primer, update dispatch crashes with
            ``ValueError: Peer id invalid: -100…`` the moment a message
            arrives in a chat the in-memory session has never resolved.
-        2. With ``in_memory=True``, Pyrogram loses the per-channel
-           ``pts`` state on every restart. Pyrogram's update dispatcher
-           silently drops ``UpdateNewChannelMessage`` events for
-           channels it hasn't actively touched this session — even if
-           the channel appears in ``get_dialogs``. ``get_chat_history``
-           on each watched channel forces the resolve + ``getDifference``
-           handshake that subscribes the live update stream.
+        2. Subscription to per-chat update push is a separate handshake.
+           For broadcast channels, that handshake is
+           ``updates.GetChannelDifference`` — see
+           :meth:`_subscribe_channel_via_diff` for the gory details. For
+           groups, ``get_chat_history(limit=1)`` is enough because they
+           ride the global update stream that ``get_dialogs`` already
+           primes.
 
-        Cheap (the payload comes back over the same socket Pyrogram
-        keeps warm) and idempotent — re-running just no-ops.
+        Cheap (the payloads come back over the same socket Pyrogram keeps
+        warm) and idempotent — re-running just no-ops.
         """
         if self._client is None:
             return
@@ -629,10 +702,9 @@ class TelegramManager:
             self._emit_system_error(kind="peer_cache.failed", detail=str(exc))
             return
 
-        # Touch each watched channel/group so Pyrogram subscribes its
-        # update stream. We pull the list lazily (avoids a hard import
-        # cycle with the models package at module load) and ignore
-        # failures per chat — a single broken row shouldn't block
+        # Subscribe each watched chat. We pull the list lazily (avoids a
+        # hard import cycle with the models package at module load) and
+        # ignore failures per chat — a single broken row shouldn't block
         # subscription for the others.
         try:
             from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
@@ -646,20 +718,23 @@ class TelegramManager:
             subscribed = 0
             for w in enabled:
                 try:
-                    # ``get_chat_history(limit=1)`` is the cheapest call
-                    # that forces a peer resolve AND touches the channel's
-                    # pts state — exactly what the live update dispatcher
-                    # needs to start routing posts to MessageHandler.
-                    async for _ in self._client.get_chat_history(
-                        w.chat_id, limit=1
-                    ):
-                        break
+                    if w.chat_type == "channel":
+                        await self._subscribe_channel_via_diff(w.chat_id)
+                    else:
+                        # Groups / supergroups / users — global pts is
+                        # enough; a one-row history fetch resolves the
+                        # peer and is the cheapest call that does so.
+                        async for _ in self._client.get_chat_history(
+                            w.chat_id, limit=1,
+                        ):
+                            break
                     subscribed += 1
                 except Exception as exc:
                     log.warning(
                         "telegram.peer_cache.subscribe_failed",
                         chat_id=w.chat_id,
                         title=w.title,
+                        chat_type=w.chat_type,
                         error=f"{type(exc).__name__}: {exc}",
                     )
             self._subscribed_chat_count = subscribed
@@ -675,10 +750,11 @@ class TelegramManager:
     async def subscribe_chat(self, chat_id: int) -> None:
         """Resolve + subscribe a single chat with the live update stream.
 
-        Mirrors what ``_prime_peer_cache`` does per chat at login: a
-        ``get_chat_history(limit=1)`` round-trip forces Pyrogram to
-        resolve the peer and run the ``getDifference`` handshake that
-        registers ``UpdateNewChannelMessage`` events for this channel.
+        Mirrors what ``_prime_peer_cache`` does per chat at login.
+        Branches on chat type because broadcast channels need
+        ``updates.GetChannelDifference`` (see
+        :meth:`_subscribe_channel_via_diff`) while groups can use the
+        cheaper ``get_chat_history(limit=1)`` path.
 
         Without this, a chat added via ``/telegram/watch`` after login
         sits silently in the database — the row is correct but the
@@ -691,9 +767,32 @@ class TelegramManager:
         """
         if not self.logged_in or self._client is None:
             return
+        # Look up the chat's type so we know which subscription path to
+        # take. We fall back to ``get_chat_history`` if the row isn't in
+        # the watched table yet (e.g. tests that call ``subscribe_chat``
+        # directly without a watched row).
+        chat_type = None
         try:
-            async for _ in self._client.get_chat_history(chat_id, limit=1):
-                break
+            from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+            from autotrader.models.watched_channel import (  # noqa: PLC0415
+                list_watched,
+            )
+
+            async with AsyncSessionLocal() as session:
+                rows = await list_watched(session)
+            for w in rows:
+                if w.chat_id == chat_id:
+                    chat_type = w.chat_type
+                    break
+        except Exception:  # pragma: no cover - best-effort lookup
+            chat_type = None
+
+        try:
+            if chat_type == "channel":
+                await self._subscribe_channel_via_diff(chat_id)
+            else:
+                async for _ in self._client.get_chat_history(chat_id, limit=1):
+                    break
         except Exception as exc:  # pragma: no cover - Pyrogram surfaces vary
             self._emit_system_error(
                 kind="subscribe_failed",
