@@ -681,9 +681,11 @@ function WinningStreakBlock({
 
       <p className="text-xs text-muted-foreground">
         On a win, the next channel signal stakes at{" "}
-        <code>ceil(prev_stake + prev_profit)</code> up to max level,
-        then resets to base. A loss at any point also resets to base.
-        Stakes round up to the nearest integer (Quotex constraint).
+        <code>ceil(prev_stake + prev_profit)</code>. Trades 1 through
+        max level are compounded; the trade <em>after</em> the
+        max-level win resets to base. A loss at any point also resets
+        to base. Stakes round up to the nearest integer (Quotex
+        constraint).
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2">

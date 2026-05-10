@@ -489,9 +489,11 @@ function StreaksCard({ data }: { data: RiskOverview }) {
                       {s.last_stake > 0 ? s.last_stake.toFixed(2) : "—"}
                     </td>
                     <td className="px-2 py-1.5 font-mono">
-                      {s.current_win_streak === 0
-                        ? "0"
-                        : `${s.current_win_streak} / ${s.winning_streak_max_level}`}
+                      {!s.winning_streak_enabled
+                        ? "—"
+                        : s.current_win_streak === 0
+                          ? "0"
+                          : `${s.current_win_streak} / ${s.winning_streak_max_level}`}
                     </td>
                     <td className="px-2 py-1.5 font-mono">
                       {s.last_payout > 0 ? `$${s.last_payout.toFixed(2)}` : "—"}
@@ -506,7 +508,10 @@ function StreaksCard({ data }: { data: RiskOverview }) {
                         size="sm"
                         variant="outline"
                         onClick={() => reset.mutate(s.parser_config_id)}
-                        disabled={reset.isPending || s.current_streak === 0}
+                        disabled={
+                          reset.isPending ||
+                          (s.current_streak === 0 && s.current_win_streak === 0)
+                        }
                       >
                         Reset
                       </Button>
