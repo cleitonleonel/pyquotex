@@ -617,3 +617,112 @@ async def test_elite_scenario_64bit_chat_id_round_trips(
     assert any(d["chat_id"] == ELITE_CHAT_ID for d in decisions), (
         "dispatch with the 64-bit id must surface in the decision feed"
     )
+
+
+async def test_auto_recovery_overrides_scheduled_trade_mode(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """The DreamVIP-style regression: a parser configured with
+    ``trade_mode=scheduled`` (because the channel posts future-dated
+    signals) loses a trade and the auto-recovery fires. The
+    synthesized recovery signal has ``fire_at=None`` — without the
+    override, the risk gate rejects it with "trade_mode=scheduled but
+    signal has no fire_at" and a phantom rejected row lands.
+
+    Recovery is by definition immediate — it can't be scheduled for
+    next week — so the executor must force ``trade_mode=live`` for the
+    recovery's risk-gate evaluation. This test pins that behaviour.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1009)
+
+    # Create a parser explicitly with trade_mode=scheduled, mimicking
+    # how DreamVIP / DreamFree are configured in the live container.
+    body = {
+        "chat_id": -1009,
+        "name": "dreamvip-style",
+        "priority": 100,
+        "parser_type": "regex",
+        "parser_config": {
+            "pattern": (
+                r"(?P<asset>[A-Z]{6})\s+(?P<time>\d{1,2}:\d{2})\s+(?P<direction>BUY|SELL)"
+            ),
+        },
+        "timezone": "UTC",
+        "timezone_offset_minutes": 0,
+        "asset_aliases": {},
+        "aggregate_window_seconds": 0,
+        "default_stake": 5.0,
+        "default_duration_seconds": 60,
+        "trade_mode": "scheduled",
+        "martingale": {
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 3,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        "enabled": True,
+    }
+    r = await async_client.post("/parsers/configs", headers=headers, json=body)
+    assert r.status_code == 201, r.text
+    await _activate()
+
+    # Channel signal carries a future fire_at (so it's a scheduled
+    # trade), then the broker reports loss. Recovery should fire as
+    # LIVE despite the parser being scheduled-mode.
+    from datetime import timedelta  # noqa: PLC0415
+    fire_at = (datetime.now(UTC) + timedelta(minutes=5)).strftime("%H:%M")
+
+    WatcherFakeQuotex.next_outcomes = [
+        ("loss", -5.0),    # original (scheduled) trade loses
+        ("win", 8.5),      # recovery (live, doubled) wins
+    ]
+    await _dispatch(
+        async_client, chat_id=-1009, text=f"EURUSD {fire_at} BUY",
+    )
+    # Three drains: the scheduled trade settles, then the recovery's
+    # watcher attaches and settles.
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+
+    # Original was scheduled-mode → routed to ``open_pending``, lands
+    # in ``pending_calls``. Recovery is forced to live → ``buy``,
+    # lands in ``buy_calls``. The combined sequence is what proves
+    # the override.
+    pending_amounts = [c["amount"] for c in WatcherFakeQuotex.pending_calls]
+    buy_amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert pending_amounts == [5.0], (
+        f"original scheduled trade must hit open_pending; "
+        f"got pending_amounts={pending_amounts}"
+    )
+    assert buy_amounts == [10.0], (
+        f"recovery must fire as live ({{open buy}}) at doubled stake; "
+        f"got buy_amounts={buy_amounts}"
+    )
+
+    # Two trades total: the original (scheduled, stake=$5) and the
+    # recovery (live, stake=$10). Identify the recovery as the one
+    # with the doubled stake.
+    trades = await _list_trades(async_client, headers)
+    assert len(trades) == 2, f"expected 2 trades (original + recovery); got {trades}"
+    recoveries = [t for t in trades if t["stake"] == 10.0]
+    assert len(recoveries) == 1, (
+        f"expected exactly one recovery row at stake=$10.0; got {recoveries}"
+    )
+    rec = recoveries[0]
+    assert rec["status"] != "rejected", (
+        f"recovery must not be rejected — trade_mode override should let "
+        f"it through; got {rec}"
+    )
+    assert rec["trade_mode"] == "live", (
+        f"recovery must execute as live despite parser scheduled-mode; "
+        f"got trade_mode={rec['trade_mode']!r}"
+    )
+
+    # No phantom rejected row — Task 6's "no rejected from recovery"
+    # invariant must continue to hold even with the new override.
+    rejected_rows = [t for t in trades if t["status"] == "rejected"]
+    assert rejected_rows == [], f"no rejected rows allowed; got {rejected_rows}"

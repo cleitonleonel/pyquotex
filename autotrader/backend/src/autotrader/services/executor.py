@@ -669,6 +669,24 @@ class TradeExecutor:
             parser_id=f"cfg-{fresh_cfg.id}-recovery-{streak}",
             asset_raw=original.asset_raw,
         )
+        # Auto-recovery is by definition immediate — the next ladder
+        # step has to fire NOW, not at the channel's scheduled time.
+        # Channels that post scheduled signals (``trade_mode=scheduled``
+        # or ``auto`` with a parsed ``fire_at``) would otherwise see the
+        # synthesized ``fire_at=None`` signal rejected by the risk gate
+        # with "trade_mode=scheduled but signal has no fire_at" — every
+        # recovery becoming a phantom rejected row. Override to ``live``
+        # on this in-memory copy only; the row is detached from its
+        # session so the mutation never reaches the DB.
+        if fresh_cfg.trade_mode != "live":
+            log.info(
+                "executor.auto_recovery.mode_override",
+                config_id=fresh_cfg.id,
+                original_attempt_id=original.id,
+                cfg_trade_mode=fresh_cfg.trade_mode,
+                effective_trade_mode="live",
+            )
+            fresh_cfg.trade_mode = "live"
         try:
             attempt = await self.submit(
                 signal=signal,
