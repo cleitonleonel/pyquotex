@@ -600,6 +600,12 @@ def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> Non
     _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
     pipeline = app_client.app.state.pipeline  # type: ignore[attr-defined]
     assert config_id in pipeline._parsers
+    # Capture the cached instance's identity. The PUT below changes only
+    # ``name`` and ``priority`` — neither is in ``_config_signature``, so
+    # ``_get_or_build`` would refresh ``config_row`` on the *same*
+    # instance if invalidate() were skipped. A different ``id()`` after
+    # the PUT therefore proves invalidate() really ran.
+    cached_before = pipeline._parsers[config_id]
 
     # Update without changing the parser shape — the signature would
     # not drift on its own, so the cache must be flushed by the route.
@@ -631,9 +637,16 @@ def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> Non
     # invalidate() drops the stale cached instance; prebuild() (added in
     # Task 7) immediately re-inserts a fresh one because enabled=True.
     # The invariant is that the cache holds the *new* config shape — not
-    # that the slot is empty. Verify the rebuilt row carries the new name.
+    # that the slot is empty. Verify (a) the rebuilt row carries the new
+    # name, and (b) the cached instance is a *different* object than
+    # before — without invalidate(), _get_or_build would have returned
+    # the same instance with config_row simply re-pointed.
     assert config_id in pipeline._parsers
     assert pipeline._parsers[config_id].config_row.name == "renamed"
+    assert pipeline._parsers[config_id] is not cached_before, (
+        "PUT must invalidate the cached parser instance, not just "
+        "refresh config_row in place"
+    )
 
 
 def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> None:
