@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 
+from autotrader.config import settings
 from autotrader.db import AsyncSessionLocal
 from autotrader.models.base import utc_now
 from autotrader.models.martingale_state import record_outcome
@@ -32,6 +33,7 @@ from autotrader.models.trade_attempt import (
     list_pending,
     update_attempt,
 )
+from autotrader.services.broker_wire_trace import BrokerWireTrace
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.parsers.base import ParsedSignal
 from autotrader.services.quotex_manager import (
@@ -394,33 +396,47 @@ class TradeExecutor:
         signal: ParsedSignal,
         decision: RiskDecision,
     ) -> TradeAttempt:
-        """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled)."""
+        """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled).
+
+        The broker call runs inside :class:`BrokerWireTrace` when the
+        ``AUTOTRADER_DEBUG_BROKER_WIRE`` flag is set — that records
+        every outgoing socket.io frame around the call so a silent
+        ``Timeout waiting for realtime price data`` leaves a wire-
+        level forensic record next to the ``executor.broker_error``
+        log.  When the flag is off (default), ``if_enabled`` returns
+        a no-op context manager; no wrapping, no extra allocations.
+        """
         is_scheduled = decision.trade_mode == "scheduled"
+        client = self._manager._client
         try:
-            if is_scheduled:
-                # Pyquotex's wire format is the strict ISO-8601 UTC
-                # form ``YYYY-MM-DDTHH:MM:SS.000Z`` — verified against
-                # ``ws2.qxbroker.com``. Python's ``datetime.isoformat``
-                # produces the equivalent ``...+00:00`` form, but the
-                # broker's parser doesn't always treat that as UTC; in
-                # the wild we've seen it fall back to "broker-local
-                # time", which silently shifts the schedule by the
-                # broker's default offset (commonly +2h).
-                open_time_iso = _wire_iso8601(signal.fire_at)
-                ok, info = await self._manager._client.open_pending(  # type: ignore[union-attr]
-                    amount=decision.stake,
-                    asset=signal.asset,
-                    direction=signal.direction,
-                    duration=signal.duration_seconds,
-                    open_time=open_time_iso,
-                )
-            else:
-                ok, info = await self._manager._client.buy(  # type: ignore[union-attr]
-                    amount=decision.stake,
-                    asset=signal.asset,
-                    direction=signal.direction,
-                    duration=signal.duration_seconds,
-                )
+            async with BrokerWireTrace.if_enabled(
+                client, signal.asset, enabled=settings.debug_broker_wire,
+            ):
+                if is_scheduled:
+                    # Pyquotex's wire format is the strict ISO-8601 UTC
+                    # form ``YYYY-MM-DDTHH:MM:SS.000Z`` — verified
+                    # against ``ws2.qxbroker.com``. Python's
+                    # ``datetime.isoformat`` produces the equivalent
+                    # ``...+00:00`` form, but the broker's parser
+                    # doesn't always treat that as UTC; in the wild
+                    # we've seen it fall back to "broker-local time",
+                    # which silently shifts the schedule by the
+                    # broker's default offset (commonly +2h).
+                    open_time_iso = _wire_iso8601(signal.fire_at)
+                    ok, info = await client.open_pending(  # type: ignore[union-attr]
+                        amount=decision.stake,
+                        asset=signal.asset,
+                        direction=signal.direction,
+                        duration=signal.duration_seconds,
+                        open_time=open_time_iso,
+                    )
+                else:
+                    ok, info = await client.buy(  # type: ignore[union-attr]
+                        amount=decision.stake,
+                        asset=signal.asset,
+                        direction=signal.direction,
+                        duration=signal.duration_seconds,
+                    )
         except QuotexManagerError as exc:
             return await self._mark_error(attempt, str(exc))
         except Exception as exc:  # pragma: no cover - broker surfaces vary

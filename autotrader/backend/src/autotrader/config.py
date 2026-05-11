@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     # delivery path is dropping. Off by default — high-cardinality.
     debug_telegram_raw_updates: bool = False
 
+    # When true, ``executor._place`` wraps each broker ``buy()`` /
+    # ``open_pending()`` in :class:`BrokerWireTrace`, which taps
+    # pyquotex's ``send_websocket_request`` to record every outgoing
+    # socket.io frame around the call. On exit (success or
+    # ``TimeoutError``) it emits ``executor.broker_wire.preflight``
+    # and ``executor.broker_wire.postmortem`` structured logs with
+    # the captured frames, ``realtime_price[asset]`` deque length
+    # before/after, and which registry events fired. Used to
+    # diagnose silent ``broker_error: Timeout waiting for realtime
+    # price data`` failures where the broker UI shows the asset as
+    # tradable. Off by default — flip to true only while a known
+    # issue is being investigated, the postmortem payload is large.
+    debug_broker_wire: bool = False
+
     @cached_property
     def cors_origins_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":
