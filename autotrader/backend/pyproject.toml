@@ -31,11 +31,15 @@ dependencies = [
     # Logging
     "structlog>=24.4.0",
 
-    # Telegram (Phase 2) — Pyrogram + native crypto extension.
-    # Pyrogram upstream has been quiet; if it lags, swap to the
-    # API-compatible fork `hydrogram` or `pyrofork` here without
-    # touching application code.
-    "pyrogram>=2.0.106",
+    # Telegram (Phase 2) — Pyrofork (drop-in maintained fork of
+    # Pyrogram) + native crypto extension. Pyrofork keeps the
+    # ``pyrogram`` Python namespace so application imports are
+    # unchanged. Switched off vanilla Pyrogram because its
+    # client.handle_updates() (client.py:558-560) silently drops
+    # UpdateChannelTooLong recovery — visible symptom was that
+    # channels whose per-channel pts drifted out-of-window stopped
+    # receiving UpdateNewChannelMessage push entirely.
+    "pyrofork>=2.3.69",
     "tgcrypto>=1.2.5",
 
     # Optional error reporting (Phase 7). Init fires only when
