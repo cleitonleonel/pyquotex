@@ -659,6 +659,36 @@ class TelegramManager:
             ),
             sleep_threshold=10,
         )
+        # Critically: inject the diff's contents into Pyrogram's
+        # dispatcher queue so the updates flow through the normal
+        # processing path. This is what sends the implicit
+        # acknowledgement back to Telegram ("yes, my session has
+        # processed up to this pts"). Without this acknowledgement,
+        # Telegram considers the session "stuck" on the previous
+        # state and stops pushing new ``UpdateNewChannelMessage``
+        # events for the channel — which is the exact symptom we
+        # see for channels that have ``other_updates: 1`` pending
+        # but never receive a new post even after multiple restarts.
+        from pyrogram.raw.types import (  # noqa: PLC0415
+            UpdateNewChannelMessage,
+        )
+        users = {u.id: u for u in getattr(diff, "users", []) or []}
+        chats = {c.id: c for c in getattr(diff, "chats", []) or []}
+        diff_pts = getattr(diff, "pts", 0) or 0
+        injected = 0
+        for msg in getattr(diff, "new_messages", []) or []:
+            update = UpdateNewChannelMessage(
+                message=msg, pts=diff_pts, pts_count=1,
+            )
+            self._client.dispatcher.updates_queue.put_nowait(
+                (update, users, chats),
+            )
+            injected += 1
+        for upd in getattr(diff, "other_updates", []) or []:
+            self._client.dispatcher.updates_queue.put_nowait(
+                (upd, users, chats),
+            )
+            injected += 1
         log.info(
             "telegram.channel.subscribed_via_diff",
             chat_id=chat_id,
@@ -667,6 +697,7 @@ class TelegramManager:
             diff_pts=getattr(diff, "pts", None),
             new_messages=len(getattr(diff, "new_messages", []) or []),
             other_updates=len(getattr(diff, "other_updates", []) or []),
+            injected_into_dispatcher=injected,
         )
 
     async def _prime_peer_cache(self, *, limit: int = 500) -> None:
