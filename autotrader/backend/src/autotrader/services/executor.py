@@ -627,6 +627,20 @@ class TradeExecutor:
         # fire the recovery itself. We gate on ``current_streak > 0``
         # so we don't fire when ``record_outcome`` just hit
         # ``max_streak`` and reset the ladder (recovery exhausted).
+        # Diagnostic log shows every condition value so a "recovery
+        # didn't fire" question can be answered without reading source.
+        log.info(
+            "executor.auto_recovery.gate",
+            attempt_id=attempt_id,
+            updated_present=updated is not None,
+            status=status,
+            cfg_present=cfg is not None,
+            martingale_enabled=getattr(cfg, "martingale_enabled", None),
+            auto_recovery=getattr(cfg, "martingale_auto_recovery", None),
+            new_state_present=new_state is not None,
+            current_streak=getattr(new_state, "current_streak", None),
+            max_streak=getattr(cfg, "martingale_max_streak", None),
+        )
         if (
             updated is not None
             and status != "win"

@@ -29,6 +29,7 @@ services:
       AUTOTRADER_API_HOST: "0.0.0.0"
       AUTOTRADER_API_PORT: "8000"
       AUTOTRADER_CORS_ORIGINS: "${AUTOTRADER_CORS_ORIGINS:-http://localhost:3000}"
+      AUTOTRADER_DEBUG_TELEGRAM_RAW_UPDATES: "${AUTOTRADER_DEBUG_TELEGRAM_RAW_UPDATES:-false}"
     volumes:
       - autotrader-data:/data
     healthcheck:
