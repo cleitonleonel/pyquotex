@@ -66,12 +66,15 @@ class FakeQuotex:
     pending_calls: ClassVar[list[dict]] = []
     # Asset universe returned by get_all_assets. Tests that exercise
     # the asset-availability pre-flight can override this mapping.
+    # Convention mirrors real pyquotex: {symbol_name: internal_numeric_id}.
+    # Symbol names are the trading codes used in WebSocket subscribes and
+    # signal.asset (e.g. "EURUSD_otc"); values are opaque numeric IDs.
     _DEFAULT_ASSETS_MAPPING: ClassVar[dict[str, str]] = {
-        "EUR/USD": "EURUSD",
-        "EUR/USD (OTC)": "EURUSD_otc",
-        "GBP/USD": "GBPUSD",
-        "Gold": "XAUUSD",
-        "USDBDT (OTC)": "USDBDT_otc",
+        "EURUSD": "1",
+        "EURUSD_otc": "2",
+        "GBPUSD": "3",
+        "XAUUSD": "4",
+        "USDBDT_otc": "5",
     }
     assets_mapping: ClassVar[dict[str, str]] = dict(_DEFAULT_ASSETS_MAPPING)
 
@@ -444,6 +447,42 @@ def test_assets_populated_after_connect(client: TestClient) -> None:
     assert body["count"] >= 4
     assert "EURUSD" in body["assets"]
     assert "EURUSD_otc" in body["assets"]
+
+
+def test_manager_assets_are_symbol_codes_not_numeric_ids(client: TestClient) -> None:
+    """REGRESSION: previously _refresh_assets_locked read mapping.values()
+    which yielded internal numeric IDs ('1','157',...). The pre-flight in
+    the executor compared signal.asset (a symbol like 'USDBRL_otc')
+    against these IDs and false-rejected every trade. This test locks
+    the schema: manager.assets must contain the SYMBOL NAMES used in
+    WebSocket subscribes."""
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    headers = _login(client)
+    _put_credentials(client, headers)
+    r = client.post("/broker/connect", headers=headers)
+    assert r.status_code == 200, r.text
+
+    # Wait until connected so the assets are fetched.
+    import time  # noqa: PLC0415
+    for _ in range(40):
+        if manager.status().state == "connected":
+            break
+        time.sleep(0.05)
+
+    assets = manager.assets
+    assert assets, "manager.assets is empty after connect"
+    # Must contain at least one of the symbols from the fake mapping.
+    # The fake uses real-convention keys (symbol names -> numeric IDs).
+    assert "EURUSD" in assets or "EURUSD_otc" in assets, (
+        f"expected symbol-style codes in assets; got {assets[:10]}"
+    )
+    # Numeric IDs should NOT appear as standalone entries.
+    assert not any(a.isdigit() for a in assets), (
+        f"manager.assets contains numeric IDs (the old bug); first 10: "
+        f"{sorted(assets)[:10]}"
+    )
 
 
 # ---------------------------------------------------------------------------

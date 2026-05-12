@@ -829,8 +829,11 @@ class QuotexManager:
             mapping = await self._client.get_all_assets()
         except Exception:
             raise
-        # ``get_all_assets`` returns ``{display_name: code}``; we want
-        # the code side.
-        codes = sorted({str(c).strip() for c in (mapping or {}).values() if c})
+        # ``get_all_assets`` returns ``{symbol_name: internal_id}``.
+        # Pyquotex's WebSocket subscribes (and our parsers + the
+        # executor's signal.asset field) use the SYMBOL NAMES — e.g.
+        # "EURUSD_otc", "USDBRL_otc" — not the internal numeric IDs.
+        # We want the KEY side of the mapping.
+        codes = sorted({str(k).strip() for k in (mapping or {}).keys() if k})
         self._assets = tuple(codes)
         log.info("broker.assets.refreshed", count=len(codes))
