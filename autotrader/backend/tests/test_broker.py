@@ -266,6 +266,7 @@ def client(fake_quotex_class: type[FakeQuotex]) -> Iterator[TestClient]:
         if manager.connected:
             await manager.disconnect()
         manager.clear_credentials()
+        manager.set_session_store(None)
         async with AsyncSessionLocal() as s:
             await s.exec(delete(BrokerCredentials))  # type: ignore[call-overload]
             await s.commit()
