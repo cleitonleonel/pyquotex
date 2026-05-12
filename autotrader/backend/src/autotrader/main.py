@@ -33,12 +33,16 @@ from autotrader.models.telegram_session import (
 from autotrader.routers import admin_bot as admin_bot_router
 from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, stats_v2, telegram
 from autotrader.routers import pipeline as pipeline_router
+from cryptography.fernet import Fernet
+
 from autotrader.services.admin_bot import AdminBot
+from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay
 from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
 from autotrader.services.quotex_manager import QuotexManager
+from autotrader.services.session_store import SessionStore
 from autotrader.services.telegram_manager import TelegramManager
 
 # Initialise logging at import time so anything emitted during module
@@ -120,6 +124,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
 
     manager = QuotexManager(root_path=_broker_root_path(), event_bus=event_bus)
     app.state.quotex_manager = manager
+
+    # --- Broker session persistence ---------------------------------------
+    # Encrypted on /data so most container restarts skip OTP. Uses the
+    # same Fernet key that already protects broker_credentials.
+    session_store_path = Path("/data") / "quotex_session.json"
+    session_store_fernet = Fernet(settings.fernet_key.get_secret_value().encode())
+    session_store = SessionStore(
+        path=session_store_path,
+        fernet=session_store_fernet,
+    )
+    manager.set_session_store(session_store)
 
     # Auto-load credentials and pre-warm the connection so the first
     # trade after startup pays no login cost. If the broker requests
@@ -234,11 +249,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     app.state.admin_bot = admin_bot
     await admin_bot.start()
 
+    # --- OTP relay (admin bot ↔ broker manager) -------------------------
+    # Wires the broker's OTP callback to the admin-bot Telegram client.
+    # Bound user is looked up from the persisted GlobalSettings row.
+    otp_relay = AdminBotOTPRelay(
+        manager=manager,
+        admin_bot=admin_bot,
+        bound_user_id=admin_bot.status().bound_user_id,
+        max_attempts=settings.otp_max_attempts,
+    )
+    manager.set_otp_relay(otp_relay)
+
     # Stash references the admin-bot command handlers need (pipeline
     # ring buffer, broker manager, the bot itself). Avoids handlers
     # depending on FastAPI's request context — see admin_bot_state.py.
     from autotrader.services import admin_bot_state  # noqa: PLC0415
-    admin_bot_state.attach(pipeline=pipeline, quotex=manager, admin_bot=admin_bot)
+    admin_bot_state.attach(pipeline=pipeline, quotex=manager, admin_bot=admin_bot, otp_relay=otp_relay)
 
     # Wire the command dispatcher only if the bot is actually running.
     # When disabled / errored, leaving the hook unset means AdminBot
@@ -267,6 +293,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
         quotex=manager,
         admin_bot=admin_bot,
         notifier=notifier,
+        otp_relay=otp_relay,
     )
 
     # Sweep ``pending`` trades from the previous process. In-memory
