@@ -637,3 +637,77 @@ def test_manager_saves_session_after_successful_connect(
     assert len(store.saved_payloads) >= 1
     last = store.saved_payloads[-1]
     assert last.get("token")  # truthy
+
+
+# ---------------------------------------------------------------------------
+# OTP relay integration (Task 7 of OTP relay plan)
+# ---------------------------------------------------------------------------
+
+
+class _FakeOTPRelay:
+    """Captures every relay-side call so manager tests can assert
+    the wiring."""
+
+    def __init__(self) -> None:
+        self.required_calls: list[tuple[str, int]] = []
+        self.resolved_count = 0
+        self.timeout_count = 0
+
+    async def on_otp_required(self, prompt: str, attempt: int) -> None:
+        self.required_calls.append((prompt, attempt))
+
+    async def on_otp_resolved(self) -> None:
+        self.resolved_count += 1
+
+    async def on_otp_timeout(self) -> None:
+        self.timeout_count += 1
+
+
+def test_manager_calls_relay_on_otp_required(client: TestClient) -> None:
+    """When the broker challenges with OTP, the manager invokes
+    relay.on_otp_required(prompt, attempt=1) BEFORE parking on the
+    180s timer."""
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    relay = _FakeOTPRelay()
+    manager.set_otp_relay(relay)
+    FakeQuotex.behavior = "needs_otp"
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+    # Fire connect; FakeQuotex.connect parks awaiting OTP via the
+    # registered callback. The relay must have been called before
+    # the response comes back as 202 awaiting_otp.
+    client.post("/broker/connect", headers=headers)
+
+    # Submit so the test doesn't leak a parked task.
+    client.post("/broker/otp", headers=headers, json={"code": "654321"})
+
+    assert len(relay.required_calls) >= 1
+    prompt, attempt = relay.required_calls[0]
+    assert attempt == 1
+    assert prompt  # non-empty
+
+
+def test_manager_calls_relay_on_otp_resolved(client: TestClient) -> None:
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    relay = _FakeOTPRelay()
+    manager.set_otp_relay(relay)
+    FakeQuotex.behavior = "needs_otp"
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+    client.post("/broker/connect", headers=headers)
+    client.post("/broker/otp", headers=headers, json={"code": "654321"})
+
+    # Allow the background connect task to settle.
+    import time  # noqa: PLC0415
+    for _ in range(20):
+        if manager.status().state == "connected":
+            break
+        time.sleep(0.05)
+
+    assert relay.resolved_count == 1

@@ -155,6 +155,16 @@ class QuotexManager:
         # restart.
         self._session_store: Any | None = None
 
+        # OTP relay. When attached (by lifespan), receives direct
+        # calls at the start, timeout, and resolved branches of the
+        # OTP cycle. Until attached, the manager's existing UI-side
+        # ``awaiting_otp`` state is the sole surface (the dashboard
+        # works without the relay).
+        self._otp_relay: Any | None = None
+        # Per-cycle attempt counter. Reset to 0 on every successful
+        # connect; incremented on each ``_on_otp_callback`` entry.
+        self._otp_attempt: int = 0
+
         # Broker asset codes (e.g. "EURUSD", "EURUSD_otc"). Populated
         # on each successful connect and refreshable via
         # ``refresh_assets``. The parser layer reads this to auto-
@@ -236,6 +246,13 @@ class QuotexManager:
         fake; production wires the real ``SessionStore``.
         """
         self._session_store = store
+
+    def set_otp_relay(self, relay: Any | None) -> None:
+        """Attach an AdminBotOTPRelay-like object. Duck-typed on
+        three async methods: ``on_otp_required(prompt, attempt)``,
+        ``on_otp_resolved()``, ``on_otp_timeout()``.
+        """
+        self._otp_relay = relay
 
     # ------------------------------------------------------------------
     # Connect lifecycle (state-machine, non-blocking)
@@ -372,6 +389,18 @@ class QuotexManager:
                         self._session_store.save(client.session_data)
                     except Exception as exc:  # noqa: BLE001
                         log.warning("broker.session.save_failed", error=str(exc))
+                # Notify the relay so the Telegram OTP message edits
+                # to '✅ Connected.' Best-effort: failure here is a
+                # cosmetic glitch, not a connect failure.
+                if self._otp_relay is not None and self._otp_attempt > 0:
+                    try:
+                        await self._otp_relay.on_otp_resolved()
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "broker.otp.relay_resolved_failed",
+                            error=str(exc),
+                        )
+                self._otp_attempt = 0
                 # Best-effort: fetch the asset universe so the parser
                 # layer can auto-resolve channel-side names to broker
                 # codes. Failure here doesn't fail the connect.
@@ -384,6 +413,7 @@ class QuotexManager:
                 self._last_error = reason
                 log.warning("broker.connect.rejected", reason=reason)
                 self._emit_system_error(kind="connect.rejected", detail=reason)
+                self._otp_attempt = 0
             self._reset_otp()
 
     async def disconnect(self) -> None:
@@ -614,16 +644,51 @@ class QuotexManager:
         resolves. pyquotex passes the resulting string straight to the
         login form; if the broker rejects it, ``connect()`` returns
         ``(False, ...)`` and the manager state moves to ``error``.
+
+        Re-prompts (broker re-challenges after a wrong code) come in
+        as additional invocations of this same callback within one
+        ``client.connect()`` await; we track that via
+        ``self._otp_attempt`` so the relay can edit (vs. send) the
+        Telegram message.
         """
         loop = asyncio.get_running_loop()
         self._otp_future = loop.create_future()
         self._otp_prompt = prompt.strip() or "Enter the code sent to your email."
         self._state = "awaiting_otp"
-        log.info("broker.otp.prompted", prompt=self._otp_prompt[:80])
+        self._otp_attempt += 1
+        log.info(
+            "broker.otp.prompted",
+            prompt=self._otp_prompt[:80],
+            attempt=self._otp_attempt,
+        )
+        # Bus-side broadcast for observers (notifier silently no-ops on
+        # this event type today; future dashboards / digest tooling
+        # may subscribe). Off the critical path — fire-and-forget.
+        if self._event_bus is not None:
+            try:
+                self._event_bus.publish("broker.otp_required", {
+                    "prompt": self._otp_prompt,
+                    "attempt": self._otp_attempt,
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.warning("broker.otp.bus_publish_failed", error=str(exc))
+        if self._otp_relay is not None:
+            try:
+                await self._otp_relay.on_otp_required(
+                    prompt=self._otp_prompt,
+                    attempt=self._otp_attempt,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("broker.otp.relay_required_failed", error=str(exc))
         try:
             return await asyncio.wait_for(self._otp_future, timeout=_OTP_TIMEOUT_SECONDS)
         except (TimeoutError, asyncio.CancelledError):
             self._last_error = "OTP timed out"
+            if self._otp_relay is not None:
+                try:
+                    await self._otp_relay.on_otp_timeout()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("broker.otp.relay_timeout_failed", error=str(exc))
             raise
         finally:
             self._reset_otp(keep_state=True)
