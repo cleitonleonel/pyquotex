@@ -712,6 +712,23 @@ def build_message_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
     """
 
     async def _hook(_client: Any, message: Any) -> None:
+        # Reply-to-message forwarding for the OTP relay. Must run
+        # BEFORE the slash-command check so a digit-only reply
+        # (which doesn't start with '/') still reaches the relay.
+        from autotrader.services.admin_bot_state import get_otp_relay  # noqa: PLC0415
+        relay = get_otp_relay()
+        if relay is not None and relay.owns_reply(message):
+            # Same auth model as commands: only the bound admin.
+            sender_id = int(getattr(message.from_user, "id", 0))
+            bound = bot.status().bound_user_id
+            if bound is None or sender_id != bound:
+                log.info(
+                    "admin_bot.otp_reply.unauthorised", sender=sender_id,
+                )
+                return
+            await relay.handle_reply(message)
+            return
+
         text = (getattr(message, "text", "") or "").strip()
         if not text.startswith("/"):
             return
