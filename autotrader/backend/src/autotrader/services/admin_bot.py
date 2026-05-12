@@ -181,6 +181,28 @@ class AdminBot:
             raise RuntimeError(f"admin bot not running (state={self._state})")
         await self._client.send_message(chat_id, text, reply_markup=reply_markup)
 
+    async def edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+    ) -> None:
+        """Edit a previously-sent message via the bot client.
+
+        Used by the OTP relay (admin_bot_otp_relay.py) to update its
+        single in-flight OTP message on re-prompts, on ✅ resolved,
+        on ⏰ timeout, and on attempts-cap exhaustion — keeping all
+        cycle state attached to one message_id instead of cluttering
+        the chat with multiple messages.
+
+        Raises whatever Pyrogram raises. The relay catches via its
+        ``_edit_with`` helper so a transient Telegram failure logs
+        and continues rather than crashing the connect.
+        """
+        if self._client is None or self._state != "running":
+            raise RuntimeError(f"admin bot not running (state={self._state})")
+        await self._client.edit_message_text(chat_id, message_id, text)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

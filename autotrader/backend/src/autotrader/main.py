@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -33,7 +34,6 @@ from autotrader.models.telegram_session import (
 from autotrader.routers import admin_bot as admin_bot_router
 from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, stats_v2, telegram
 from autotrader.routers import pipeline as pipeline_router
-from cryptography.fernet import Fernet
 
 from autotrader.services.admin_bot import AdminBot
 from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay
@@ -136,10 +136,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     )
     manager.set_session_store(session_store)
 
-    # Auto-load credentials and pre-warm the connection so the first
-    # trade after startup pays no login cost. If the broker requests
-    # an OTP we leave the connect parked in ``awaiting_otp`` — the
-    # user can finish it from the dashboard.
+    # Auto-load credentials so the connection can be pre-warmed once
+    # the OTP relay is wired (see below, after manager.set_otp_relay).
+    # If the broker requests an OTP we leave the connect parked in
+    # ``awaiting_otp`` — the relay then forwards the challenge to
+    # Telegram so the user never has to touch the dashboard.
+    _creds_ready = False
     async with AsyncSessionLocal() as session:
         creds = await load_credentials(session)
     if creds is not None:
@@ -168,16 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
                 else "PRACTICE"
             )
             manager.set_credentials(email, password, mode)
-            try:
-                manager.begin_connect()
-                await manager.wait_settled(timeout=2.0)
-                log.info(
-                    "broker.autoconnect",
-                    state=manager.status().state,
-                    last_error=manager.status().last_error,
-                )
-            except Exception as exc:  # pragma: no cover  (best-effort warm-up)
-                log.warning("broker.autoconnect.failed", error=str(exc))
+            _creds_ready = True
 
     # Telegram manager + session restore. Phase 2 just keeps the
     # client warm; Phase 3 attaches the live message handler.
@@ -259,6 +252,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
         max_attempts=settings.otp_max_attempts,
     )
     manager.set_otp_relay(otp_relay)
+
+    # Pre-warm the broker connection NOW that the OTP relay is attached.
+    # Any OTP challenge fired during begin_connect() will reach the relay
+    # (and thus Telegram) instead of falling back to dashboard-only mode.
+    if _creds_ready:
+        try:
+            manager.begin_connect()
+            await manager.wait_settled(timeout=2.0)
+            log.info(
+                "broker.autoconnect",
+                state=manager.status().state,
+                last_error=manager.status().last_error,
+            )
+        except Exception as exc:  # pragma: no cover  (best-effort warm-up)
+            log.warning("broker.autoconnect.failed", error=str(exc))
 
     # Stash references the admin-bot command handlers need (pipeline
     # ring buffer, broker manager, the bot itself). Avoids handlers

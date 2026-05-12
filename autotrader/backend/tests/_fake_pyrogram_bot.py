@@ -125,6 +125,16 @@ class FakePyrogramBot:
             raise exc_cls("fake send failure")
         self.sent_messages.append((chat_id, text, reply_markup))
 
+    async def edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        **_kwargs: Any,
+    ) -> None:
+        """No-op stub — OTP relay tests verify edits via AdminBot.edit_message_text."""
+        pass
+
     # ------------------------------------------------------------------
     # Replay surface (test-only)
     # ------------------------------------------------------------------
