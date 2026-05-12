@@ -402,3 +402,35 @@ async def test_fresh_attempt_1_after_terminal_replaces_cycle(
     await relay.on_otp_required("fresh prompt", attempt=1)
     assert len(fake_bot.sent) == 2
     assert fake_bot.sent[1].message_id != first_sent
+
+
+@pytest.mark.asyncio
+async def test_on_otp_resolved_is_idempotent(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """Second consecutive on_otp_resolved must be a no-op (guarded by
+    ``if self._active is None: return``). Future refactors that
+    accidentally drop the guard would otherwise crash the relay on
+    races."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    await relay.on_otp_resolved()
+    edit_count_after_first = len(fake_bot.edits)
+
+    # Second call must not raise and must produce no additional edits.
+    await relay.on_otp_resolved()
+    assert len(fake_bot.edits) == edit_count_after_first
+
+
+@pytest.mark.asyncio
+async def test_on_otp_timeout_is_idempotent(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """Same contract as on_otp_resolved — second timeout call is a no-op."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    await relay.on_otp_timeout()
+    edit_count_after_first = len(fake_bot.edits)
+
+    await relay.on_otp_timeout()
+    assert len(fake_bot.edits) == edit_count_after_first
