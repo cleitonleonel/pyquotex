@@ -250,3 +250,37 @@ async def test_handle_reply_when_idle_is_ignored(
 
     assert fake_manager.submitted == []
     assert fake_bot.edits == []
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_submit_failure_edits_error_message(
+    fake_bot: FakeAdminBot,
+) -> None:
+    """Spec contract: when manager.submit_otp raises, handle_reply
+    must swallow the exception, edit the Telegram message to an
+    operator-facing error, and never propagate. Future regression
+    that drops the except block would otherwise slip through."""
+    from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay  # noqa: PLC0415
+
+    class _RaisingManager:
+        async def submit_otp(self, code: str) -> None:
+            raise RuntimeError("broker timeout")
+
+    raising_manager = _RaisingManager()
+    relay = AdminBotOTPRelay(
+        manager=raising_manager,
+        admin_bot=fake_bot,
+        bound_user_id=42,
+        max_attempts=3,
+    )
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    # Must NOT raise — exception is swallowed at the handle_reply boundary.
+    await relay.handle_reply(_reply("123456", target_id=active_id))
+
+    # Operator-facing error edit is present.
+    assert len(fake_bot.edits) == 1
+    edit_text = fake_bot.edits[0].text.lower()
+    assert "internal error" in edit_text
+    assert "/reconnect" in edit_text
