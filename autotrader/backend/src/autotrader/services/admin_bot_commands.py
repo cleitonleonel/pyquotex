@@ -112,6 +112,7 @@ _HELP_TEXT = (
     "  /pipeline on|off\n"
     "  /panic — kill switch + pipeline off in one shot\n"
     "  /mode demo|real — switch broker account mode\n"
+    "  /reconnect — trigger a fresh broker connect (use after OTP timeout)\n"
     "  /stake <amount> — set default stake\n"
     "  /caps loss|stake|concurrent <value>\n"
     "  /notify placed|settled|risk_rejected|system_error on|off\n"
@@ -658,6 +659,36 @@ async def _confirm_unbind() -> str:
 
 
 # --------------------------------------------------------------------------
+# /reconnect — trigger a fresh broker connect attempt
+# --------------------------------------------------------------------------
+
+
+async def handle_reconnect(_message: Any, _bot: Any) -> Reply:
+    """Kick the broker manager into a fresh connect cycle.
+
+    Used by the OTP-relay recovery path: after an OTP timeout or an
+    attempts-exhausted terminal state, the relay's message tells the
+    operator to '/reconnect'. The new cycle starts with attempt=1 and
+    sends a fresh OTP message (no edit of the dead one)."""
+    from autotrader.services.admin_bot_state import get_quotex  # noqa: PLC0415
+    qx = get_quotex()
+    if qx is None:
+        return Reply(text="Broker manager not attached.")
+    if qx.connected:
+        return Reply(text="Broker is already connected — no action taken.")
+    if not qx.configured:
+        return Reply(
+            text="No broker credentials stored. Set them via the dashboard first.",
+        )
+    try:
+        qx.begin_connect()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("admin_bot.reconnect_failed")
+        return Reply(text=f"Reconnect failed to start: {type(exc).__name__}: {exc}")
+    return Reply(text="Reconnect triggered — watch for an OTP message in a few seconds.")
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -683,6 +714,7 @@ COMMANDS: dict[str, Handler] = {
     "/channel": handle_channel_detail,
     "/parsers": handle_parsers,
     "/parser": handle_parser_detail,
+    "/reconnect": handle_reconnect,
 }
 
 
