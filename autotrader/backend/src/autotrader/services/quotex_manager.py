@@ -146,6 +146,15 @@ class QuotexManager:
         self._disconnected_at: datetime | None = None
         self._consecutive_failed_reconnects: int = 0
 
+        # Session persistence. When attached (typically by lifespan),
+        # we hydrate ``client.session_data`` from this before calling
+        # ``client.connect()`` and push the (now-warm) session back
+        # into this after a successful connect. Until attached, both
+        # operations are no-ops — the manager works fine without
+        # persistence, just at the cost of an extra HTTP login per
+        # restart.
+        self._session_store: Any | None = None
+
         # Broker asset codes (e.g. "EURUSD", "EURUSD_otc"). Populated
         # on each successful connect and refreshable via
         # ``refresh_assets``. The parser layer reads this to auto-
@@ -218,6 +227,15 @@ class QuotexManager:
     def clear_credentials(self) -> None:
         self._email = None
         self._password = None
+
+    def set_session_store(self, store: Any | None) -> None:
+        """Attach a SessionStore-like object. ``None`` clears it.
+
+        Duck-typed on three methods: ``load() -> dict | None``,
+        ``save(dict) -> None``, ``clear() -> None``. Tests inject a
+        fake; production wires the real ``SessionStore``.
+        """
+        self._session_store = store
 
     # ------------------------------------------------------------------
     # Connect lifecycle (state-machine, non-blocking)
@@ -302,6 +320,19 @@ class QuotexManager:
                     ),
                 )
                 client.set_account_mode(self._account_mode)
+                # Hydrate session_data from disk if we have a store and
+                # a cached payload. Pyquotex's ``_connect_unlocked``
+                # checks ``self.session_data.get("token")`` and skips
+                # the HTTP login when present — so this is the path
+                # that lets a container restart skip OTP.
+                if self._session_store is not None:
+                    cached = self._session_store.load()
+                    if cached:
+                        client.session_data = cached
+                        log.info(
+                            "broker.session.loaded",
+                            token_present=bool(cached.get("token")),
+                        )
                 ok, reason = await client.connect()
             except asyncio.CancelledError:
                 # User-initiated cancel. ``cancel_connect`` is the
@@ -333,6 +364,14 @@ class QuotexManager:
                 # disconnect / reconnect) and mirrors it into our
                 # state machine + admin notifications.
                 self._start_status_watcher()
+                # Persist the freshly-warm session so the NEXT
+                # container restart can skip OTP. Best-effort: log on
+                # failure but don't fail the connect.
+                if self._session_store is not None:
+                    try:
+                        self._session_store.save(client.session_data)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("broker.session.save_failed", error=str(exc))
                 # Best-effort: fetch the asset universe so the parser
                 # layer can auto-resolve channel-side names to broker
                 # codes. Failure here doesn't fail the connect.

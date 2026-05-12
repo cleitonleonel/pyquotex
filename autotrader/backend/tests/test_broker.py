@@ -100,6 +100,10 @@ class FakeQuotex:
         )
         self.api.reconnect_supervisor = _FakeReconnectSupervisor()
         self.account_mode_set: str | None = None
+        # Manager mirrors session_data onto the client before
+        # connect() and reads it back after. Real pyquotex stores
+        # this on ``Quotex.session_data``.
+        self.session_data: dict = {}
         FakeQuotex.last_instance = self
 
     def set_account_mode(self, mode: str) -> None:
@@ -114,6 +118,14 @@ class FakeQuotex:
         """
         self.api.state.status = WebsocketStatus.CONNECTED
         self.api.state.auth_status = AuthStatus.AUTHENTICATED
+        # Mirror pyquotex's behaviour — a successful connect leaves a
+        # populated session_data on the client.
+        if not self.session_data.get("token"):
+            self.session_data = {
+                "token": "fake-ssid-from-login",
+                "cookies": "fake-cookies",
+                "user_agent": "Firefox/144 (test)",
+            }
 
     async def connect(self) -> tuple[bool, str]:
         if FakeQuotex.behavior == "ok":
@@ -546,3 +558,81 @@ def test_account_mode_switch_to_practice_ok(client: TestClient) -> None:
     )
     assert r.status_code == 200
     assert r.json()["account_mode"] == "PRACTICE"
+
+
+# ---------------------------------------------------------------------------
+# Session persistence (Task 3 of OTP relay plan)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSessionStore:
+    """In-memory drop-in for SessionStore — tests assert on
+    ``saved_payloads`` / ``primed_payload`` rather than real disk I/O."""
+
+    def __init__(self, primed: dict | None = None) -> None:
+        self.primed_payload = primed
+        self.saved_payloads: list[dict] = []
+        self.cleared_count = 0
+
+    def load(self) -> dict | None:
+        return self.primed_payload
+
+    def save(self, session_data: dict) -> None:
+        self.saved_payloads.append(dict(session_data))
+
+    def clear(self) -> None:
+        self.cleared_count += 1
+
+
+def test_manager_loads_session_before_connect_when_attached(
+    client: TestClient,
+) -> None:
+    """When a SessionStore is attached and has a cached payload, the
+    manager hydrates client.session_data BEFORE awaiting connect."""
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    primed = {
+        "token": "cached-ssid",
+        "cookies": "laravel_session=foo",
+        "user_agent": "Firefox/144",
+    }
+    store = _FakeSessionStore(primed=primed)
+    manager.set_session_store(store)
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+    r = client.post("/broker/connect", headers=headers)
+    assert r.status_code == 200, r.text
+
+    # The fake Quotex.connect() doesn't observe session_data directly,
+    # so we assert that the manager forwarded the payload onto the
+    # client instance constructed by the FakeQuotex factory.
+    fq = FakeQuotex.last_instance
+    assert fq is not None
+    # On real Quotex, session_data lives on self (the fake mirrors via
+    # ``session_data`` attr set by the manager).
+    assert getattr(fq, "session_data", None) == primed
+
+
+def test_manager_saves_session_after_successful_connect(
+    client: TestClient,
+) -> None:
+    """On a successful connect, manager pushes the (now-warm)
+    client.session_data through SessionStore.save."""
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    store = _FakeSessionStore()
+    manager.set_session_store(store)
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+
+    # FakeQuotex.connect populates a fresh session_data on its client.
+    r = client.post("/broker/connect", headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert len(store.saved_payloads) >= 1
+    last = store.saved_payloads[-1]
+    assert last.get("token")  # truthy
