@@ -406,6 +406,17 @@ class TradeExecutor:
         log.  When the flag is off (default), ``if_enabled`` returns
         a no-op context manager; no wrapping, no extra allocations.
         """
+        # Asset-availability pre-flight (fix: prevents the 30s
+        # "Timeout waiting for realtime price data" failure mode for
+        # assets the broker isn't currently streaming — e.g. exotic OTC
+        # pairs outside their hours, or assets that have been removed
+        # from the broker's catalog).
+        if not await self._asset_is_available(signal.asset):
+            return await self._mark_error(
+                attempt,
+                f"asset_not_available: {signal.asset}",
+            )
+
         is_scheduled = decision.trade_mode == "scheduled"
         client = self._manager._client
         try:
@@ -552,6 +563,39 @@ class TradeExecutor:
         if updated is not None:
             self._publish(updated)
         return updated or attempt
+
+    async def _asset_is_available(self, asset: str) -> bool:
+        """Returns True iff ``asset`` is in the broker's current asset
+        universe. The manager caches the universe at connect time; if a
+        miss happens here, force one refresh and re-check before deciding.
+
+        Returns ``True`` when the cache is empty (e.g. tests, brand-new
+        manager) so we don't false-positive on a fresh boot — the broker
+        will surface its own error in that case.
+        """
+        cached = self._manager.assets
+        if not cached:
+            # No asset cache populated yet — let the broker's natural
+            # error path handle it. Don't false-positive on a fresh boot.
+            return True
+        if asset in cached:
+            return True
+        # Cold miss — refresh the universe once. The cache might have
+        # gone stale since connect time (broker rotated availability).
+        try:
+            refreshed = await self._manager.refresh_assets()
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "executor.asset_refresh_failed",
+                asset=asset,
+                error=str(exc),
+            )
+            # On refresh failure, fall back to the original cached check.
+            # We've already established asset is not in the original cache,
+            # so this means we tried + failed to confirm. Return False to
+            # fail fast rather than burn 30s.
+            return False
+        return asset in refreshed
 
     async def _watch_result(
         self,

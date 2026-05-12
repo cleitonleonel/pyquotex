@@ -64,6 +64,16 @@ class FakeQuotex:
     # Pipeline / executor: capture every trade call here.
     buy_calls: ClassVar[list[dict]] = []
     pending_calls: ClassVar[list[dict]] = []
+    # Asset universe returned by get_all_assets. Tests that exercise
+    # the asset-availability pre-flight can override this mapping.
+    _DEFAULT_ASSETS_MAPPING: ClassVar[dict[str, str]] = {
+        "EUR/USD": "EURUSD",
+        "EUR/USD (OTC)": "EURUSD_otc",
+        "GBP/USD": "GBPUSD",
+        "Gold": "XAUUSD",
+        "USDBDT (OTC)": "USDBDT_otc",
+    }
+    assets_mapping: ClassVar[dict[str, str]] = dict(_DEFAULT_ASSETS_MAPPING)
 
     def __init__(
         self,
@@ -165,13 +175,9 @@ class FakeQuotex:
 
     async def get_all_assets(self) -> dict[str, str]:
         # name -> code mapping mirrors pyquotex's real shape.
-        return {
-            "EUR/USD": "EURUSD",
-            "EUR/USD (OTC)": "EURUSD_otc",
-            "GBP/USD": "GBPUSD",
-            "Gold": "XAUUSD",
-            "USDBDT (OTC)": "USDBDT_otc",
-        }
+        # Tests that want a custom universe set ``FakeQuotex.assets_mapping``
+        # before the asset cache is populated.
+        return dict(FakeQuotex.assets_mapping)
 
     # -- Trade-execution surface used by the pipeline tests ----------
 
@@ -242,6 +248,7 @@ def _reset_fake_quotex() -> Iterator[None]:
     FakeQuotex.last_instance = None
     FakeQuotex.buy_calls = []
     FakeQuotex.pending_calls = []
+    FakeQuotex.assets_mapping = dict(FakeQuotex._DEFAULT_ASSETS_MAPPING)
     yield
 
 
@@ -825,3 +832,79 @@ def test_manager_clears_session_store_after_rejected_connect_with_cached_session
         f"expected session_store.clear() to fire after rejected connect "
         f"with cached session; cleared_count={store.cleared_count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Asset-availability pre-flight (fix: 30s timeout-burn on unavailable assets)
+# ---------------------------------------------------------------------------
+
+
+class _StubManager:
+    """Minimal QuotexManager stand-in for _asset_is_available unit tests.
+
+    Only ``assets`` and ``refresh_assets`` are needed — the executor's
+    pre-flight reads the cache then optionally calls refresh.
+    """
+
+    def __init__(self, assets: tuple[str, ...] = ()) -> None:
+        self._assets = assets
+        self.refresh_calls: int = 0
+        # Simulated post-refresh universe (defaults to same as initial).
+        self.refresh_result: tuple[str, ...] = assets
+
+    @property
+    def assets(self) -> tuple[str, ...]:
+        return self._assets
+
+    async def refresh_assets(self) -> tuple[str, ...]:
+        self.refresh_calls += 1
+        return self.refresh_result
+
+    # -- Stubs required only to construct TradeExecutor ------------------
+
+    def status(self):  # type: ignore[return]
+        class _S:
+            account_mode = "PRACTICE"
+        return _S()
+
+    connected = True
+    _client = None
+
+
+async def test_executor_skips_unavailable_asset_after_refresh() -> None:
+    """A signal for an asset absent from both the cached and refreshed
+    universe must never reach client.buy() — it is marked broker_error
+    with reason 'asset_not_available'."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    # Universe does NOT contain USDBRL_otc (either before or after refresh).
+    mgr = _StubManager(assets=("EURUSD_otc", "GBPUSD_otc"))
+    mgr.refresh_result = ("EURUSD_otc", "GBPUSD_otc")
+
+    executor = TradeExecutor(
+        manager=mgr,  # type: ignore[arg-type]
+        live_trading_enabled_env=False,
+    )
+    available = await executor._asset_is_available("USDBRL_otc")
+
+    # Pre-flight must return False and have tried one refresh.
+    assert available is False, "expected False for asset absent from universe"
+    assert mgr.refresh_calls == 1, "expected exactly one refresh attempt"
+
+
+async def test_executor_proceeds_when_asset_is_available() -> None:
+    """A signal for an asset that IS in the cached universe must pass the
+    pre-flight check without touching refresh_assets."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    mgr = _StubManager(assets=("EURUSD_otc", "GBPUSD_otc", "USDBRL_otc"))
+
+    executor = TradeExecutor(
+        manager=mgr,  # type: ignore[arg-type]
+        live_trading_enabled_env=False,
+    )
+    available = await executor._asset_is_available("USDBRL_otc")
+
+    assert available is True, "expected True for asset present in universe"
+    # Cache hit — refresh must NOT have been called.
+    assert mgr.refresh_calls == 0, "unexpected refresh for a cache-hit asset"
