@@ -356,12 +356,21 @@ class QuotexManager:
                 # one that resolves the final state — we just bail
                 # cleanly so the lock unwinds.
                 self._reset_otp()
+                # Reset attempt counter so the NEXT begin_connect
+                # starts at attempt=1, sending a fresh Telegram
+                # OTP message instead of editing the dead one
+                # from the cancelled cycle.
+                self._otp_attempt = 0
                 log.info("broker.connect.cancelled")
                 raise
             except Exception as exc:
                 self._state = "error"
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 self._reset_otp()
+                # Same rationale as the CancelledError branch — a
+                # pyquotex crash inside connect() must not leave a
+                # stale OTP attempt counter on the next try.
+                self._otp_attempt = 0
                 log.exception("broker.connect.error")
                 return
 
