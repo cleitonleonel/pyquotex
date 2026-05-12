@@ -38,11 +38,12 @@ class FakeAdminBot:
     def __init__(self, state: str = "running") -> None:
         self._state = state
         self._next_message_id = 1000
+        self._bound_user_id: int | None = 42  # default for existing tests
         self.sent: list[_SentMessage] = []
         self.edits: list[_EditedMessage] = []
 
     def status(self) -> Any:
-        return type("S", (), {"state": self._state})()
+        return type("S", (), {"state": self._state, "bound_user_id": self._bound_user_id})()
 
     async def send(self, chat_id: int, text: str, **_kwargs: Any) -> Any:
         msg_id = self._next_message_id
@@ -434,3 +435,73 @@ async def test_on_otp_timeout_is_idempotent(
 
     await relay.on_otp_timeout()
     assert len(fake_bot.edits) == edit_count_after_first
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: final holistic review C1 + C2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_captures_real_message_id_through_admin_bot(
+    fake_manager: FakeManager,
+) -> None:
+    """REGRESSION (final-review C1): AdminBot.send used to return None,
+    so the relay captured message_id=0 and every edit/reply was broken.
+    This test wires the real AdminBot through FakePyrogramBot and asserts
+    the relay sees a non-zero message_id."""
+    from autotrader.services.admin_bot import AdminBot  # noqa: PLC0415
+    from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay  # noqa: PLC0415
+    from tests._fake_pyrogram_bot import FakePyrogramBot  # noqa: PLC0415
+
+    fake_client_factory = lambda _token: FakePyrogramBot()  # noqa: E731
+    bot = AdminBot(
+        bot_token="test-token",
+        client_factory=fake_client_factory,
+        bound_user_id=42,
+    )
+    await bot.start()
+    assert bot.status().state == "running"
+
+    relay = AdminBotOTPRelay(
+        manager=fake_manager,
+        admin_bot=bot,
+        bound_user_id=42,
+        max_attempts=3,
+    )
+    await relay.on_otp_required("prompt", attempt=1)
+
+    # The relay's active cycle must have captured a real, non-zero
+    # message_id from the bot's send round-trip.
+    assert relay._active is not None
+    assert relay._active.message_id != 0, (
+        f"relay captured message_id=0 — AdminBot.send is dropping the "
+        f"Message return value. Active cycle: {relay._active}"
+    )
+
+    await bot.stop()
+
+
+@pytest.mark.asyncio
+async def test_relay_picks_up_bound_user_id_after_start_command(
+    fake_manager: FakeManager,
+) -> None:
+    """REGRESSION (final-review C2): relay used to cache bound_user_id
+    at __init__. On first-deploy where /start runs AFTER lifespan, the
+    relay was permanently locked out. Now it reads lazily."""
+    bot = FakeAdminBot(state="running")
+    # Bot starts WITHOUT a bound user.
+    bot._bound_user_id = None  # simulate ctor with bound_user_id=None
+
+    relay = _relay(bot, fake_manager, bound_user_id=None)
+    await relay.on_otp_required("prompt", attempt=1)
+    # No bound user → silent skip.
+    assert bot.sent == []
+
+    # Operator runs /start, which calls set_bound_user_id on the bot.
+    bot._bound_user_id = 42  # simulate post-construction /start binding
+
+    await relay.on_otp_required("prompt 2", attempt=1)
+    # Now the relay picks up the new binding.
+    assert len(bot.sent) == 1
+    assert bot.sent[0].chat_id == 42

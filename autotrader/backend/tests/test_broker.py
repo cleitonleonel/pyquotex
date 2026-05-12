@@ -781,3 +781,47 @@ def test_persisted_ssid_skips_otp_on_second_connect(client: TestClient) -> None:
     # No new OTP cycle this time — but the save still ran (fresh
     # session_data refreshes the on-disk copy).
     assert len(primed_store.saved_payloads) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Regression test: final holistic review I1
+# ---------------------------------------------------------------------------
+
+
+def test_manager_clears_session_store_after_rejected_connect_with_cached_session(
+    client: TestClient,
+) -> None:
+    """REGRESSION (final-review I1): when the cached SSID is dead and
+    the broker rejects, the manager must clear the on-disk cache so the
+    next attempt does a fresh login instead of looping on the same dead
+    token."""
+    import time  # noqa: PLC0415
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    primed = {
+        "token": "expired-ssid",
+        "cookies": "x",
+        "user_agent": "x",
+    }
+    store = _FakeSessionStore(primed=primed)
+    manager.set_session_store(store)
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+
+    FakeQuotex.behavior = "rejected"
+    client.post("/broker/connect", headers=headers)
+
+    # Wait for connect to settle to error.
+    for _ in range(40):
+        if manager.status().state == "error":
+            break
+        time.sleep(0.05)
+
+    # The clear() call must have fired because we DID use a cached session.
+    assert store.cleared_count == 1, (
+        f"expected session_store.clear() to fire after rejected connect "
+        f"with cached session; cleared_count={store.cleared_count}"
+    )

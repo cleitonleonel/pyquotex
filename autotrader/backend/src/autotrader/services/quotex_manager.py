@@ -342,10 +342,12 @@ class QuotexManager:
                 # checks ``self.session_data.get("token")`` and skips
                 # the HTTP login when present — so this is the path
                 # that lets a container restart skip OTP.
+                used_cached_session = False  # local flag for I1 cleanup
                 if self._session_store is not None:
                     cached = self._session_store.load()
                     if cached:
                         client.session_data = cached
+                        used_cached_session = True  # ← track cache hit
                         log.info(
                             "broker.session.loaded",
                             token_present=bool(cached.get("token")),
@@ -421,6 +423,18 @@ class QuotexManager:
                 self._state = "error"
                 self._last_error = reason
                 log.warning("broker.connect.rejected", reason=reason)
+                # Stale SSID? Clear the cached session so the next
+                # connect attempt re-runs the HTTP login from scratch
+                # instead of loop-failing on the same dead token.
+                if used_cached_session and self._session_store is not None:
+                    try:
+                        self._session_store.clear()
+                        log.info("broker.session.cleared.after_rejection")
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "broker.session.clear_failed",
+                            error=str(exc),
+                        )
                 self._emit_system_error(kind="connect.rejected", detail=reason)
                 self._otp_attempt = 0
             self._reset_otp()

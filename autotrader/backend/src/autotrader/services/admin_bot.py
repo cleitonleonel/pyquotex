@@ -173,13 +173,17 @@ class AdminBot:
         chat_id: int,
         text: str,
         reply_markup: Any | None = None,
-    ) -> None:
-        """Send a message via the bot client. Raises whatever the
-        underlying client raises — the notifier catches Forbidden /
-        RPCError to drive its 5-failure backoff."""
+    ) -> Any:
+        """Send a message via the bot client. Returns the Pyrogram
+        Message (or test-double equivalent) so callers can capture
+        the message_id for later edits. The relay uses this to track
+        its single in-flight OTP message across re-prompts.
+
+        Raises whatever the underlying client raises — the notifier
+        catches Forbidden / RPCError to drive its 5-failure backoff."""
         if self._client is None or self._state != "running":
             raise RuntimeError(f"admin bot not running (state={self._state})")
-        await self._client.send_message(chat_id, text, reply_markup=reply_markup)
+        return await self._client.send_message(chat_id, text, reply_markup=reply_markup)
 
     async def edit_message_text(
         self,

@@ -69,12 +69,16 @@ class AdminBotOTPRelay:
         *,
         manager: Any,
         admin_bot: Any,
-        bound_user_id: int | None,
+        bound_user_id: int | None,  # kept for API compatibility; not stored
         max_attempts: int = 3,
     ) -> None:
         self._manager = manager
         self._admin_bot = admin_bot
-        self._bound_user_id = bound_user_id
+        # NOTE: bound_user_id is read lazily from admin_bot.status() on
+        # every prompt — see _resolve_bound_user_id. The ctor argument
+        # is kept for API compatibility but no longer stored.
+        # If you must override (tests), pass bound_user_id to AdminBot
+        # directly.
         self._max_attempts = max_attempts
         self._active: _ActiveCycle | None = None
 
@@ -87,12 +91,13 @@ class AdminBotOTPRelay:
         if not self._can_relay():
             log.info("otp_relay.skipped.bot_unavailable", attempt=attempt)
             return
-        if self._bound_user_id is None:
+        bound_user_id = self._resolve_bound_user_id()
+        if bound_user_id is None:
             log.info("otp_relay.skipped.no_bound_user", attempt=attempt)
             return
 
         if attempt <= 1 or self._active is None:
-            await self._start_new_cycle(prompt=prompt)
+            await self._start_new_cycle(prompt=prompt, bound_user_id=bound_user_id)
         else:
             await self._bump_existing_cycle(prompt=prompt, attempt=attempt)
 
@@ -185,17 +190,30 @@ class AdminBotOTPRelay:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _start_new_cycle(self, *, prompt: str) -> None:
+    def _resolve_bound_user_id(self) -> int | None:
+        """Read the bound admin user_id lazily from the bot.
+
+        The bot's bound_user_id can be set via /start AFTER the relay
+        is constructed (first-ever deployment scenario). Caching at
+        __init__ would lock us out forever. Resolving on every prompt
+        is cheap.
+        """
+        try:
+            return self._admin_bot.status().bound_user_id
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _start_new_cycle(self, *, prompt: str, bound_user_id: int) -> None:
         text = self._format_initial_prompt()
         try:
-            msg = await self._admin_bot.send(self._bound_user_id, text)
+            msg = await self._admin_bot.send(bound_user_id, text)
         except Exception as exc:  # noqa: BLE001
             log.warning("otp_relay.send_failed", error=str(exc))
             self._active = None
             return
         self._active = _ActiveCycle(
             message_id=int(getattr(msg, "id", 0)),
-            chat_id=int(self._bound_user_id or 0),
+            chat_id=bound_user_id,
             attempt=1,
             expires_at=utc_now() + timedelta(seconds=_OTP_WINDOW_SECONDS),
             broker_prompt=prompt,

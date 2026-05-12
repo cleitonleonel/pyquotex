@@ -89,6 +89,7 @@ class FakePyrogramBot:
     raise_on_send: type[BaseException] | None = None
     _on_message: MessageHandler | None = None
     _on_callback: CallbackHandler | None = None
+    _next_message_id: int = field(default=1, init=False)
 
     # ------------------------------------------------------------------
     # Lifecycle (matches the bits of pyrogram.Client AdminBot calls)
@@ -118,12 +119,17 @@ class FakePyrogramBot:
         text: str,
         reply_markup: Any | None = None,
         **_kwargs: Any,
-    ) -> None:
+    ) -> Any:
         if self.raise_on_send is not None:
             exc_cls = self.raise_on_send
             self.raise_on_send = None  # one-shot unless reset
             raise exc_cls("fake send failure")
+        msg_id = self._next_message_id
+        self._next_message_id += 1
         self.sent_messages.append((chat_id, text, reply_markup))
+        # Return a Pyrogram-shaped object so callers like the OTP relay
+        # can capture the message_id from the round-trip (C1 fix).
+        return type("Message", (), {"id": msg_id})()
 
     async def edit_message_text(
         self,
