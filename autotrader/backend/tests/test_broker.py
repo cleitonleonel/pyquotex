@@ -759,6 +759,10 @@ def test_persisted_ssid_skips_otp_on_second_connect(client: TestClient) -> None:
         if manager.status().state == "idle":
             break
         time.sleep(0.05)
+    assert manager.status().state == "idle", (
+        "Disconnect did not settle within 1s — "
+        "second-connect cycle would test the wrong path"
+    )
 
     # Build a NEW SessionStore primed with the previous save — this
     # is what a fresh container start sees when reading the on-disk file.
