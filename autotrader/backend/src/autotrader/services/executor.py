@@ -590,10 +590,11 @@ class TradeExecutor:
                 asset=asset,
                 error=str(exc),
             )
-            # On refresh failure, fall back to the original cached check.
-            # We've already established asset is not in the original cache,
-            # so this means we tried + failed to confirm. Return False to
-            # fail fast rather than burn 30s.
+            # On refresh failure, fail fast rather than burn 30s on a
+            # broker subscribe that we already know is unlikely to stream.
+            # We've established the asset is not in the original cache;
+            # refresh would have been our only chance to confirm
+            # otherwise. Return False unconditionally.
             return False
         return asset in refreshed
 

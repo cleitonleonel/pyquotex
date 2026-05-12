@@ -851,6 +851,7 @@ class _StubManager:
         self.refresh_calls: int = 0
         # Simulated post-refresh universe (defaults to same as initial).
         self.refresh_result: tuple[str, ...] = assets
+        self.raise_on_refresh: bool = False
 
     @property
     def assets(self) -> tuple[str, ...]:
@@ -858,6 +859,8 @@ class _StubManager:
 
     async def refresh_assets(self) -> tuple[str, ...]:
         self.refresh_calls += 1
+        if self.raise_on_refresh:
+            raise RuntimeError("broker disconnected")
         return self.refresh_result
 
     # -- Stubs required only to construct TradeExecutor ------------------
@@ -890,6 +893,24 @@ async def test_executor_skips_unavailable_asset_after_refresh() -> None:
     # Pre-flight must return False and have tried one refresh.
     assert available is False, "expected False for asset absent from universe"
     assert mgr.refresh_calls == 1, "expected exactly one refresh attempt"
+
+
+async def test_executor_fails_fast_when_asset_refresh_raises() -> None:
+    """REGRESSION: _asset_is_available must return False when
+    refresh_assets() raises — fail fast, do not optimistically proceed
+    and burn 30s on the broker side. Locks the exception-branch
+    contract against silent regressions."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    manager = _StubManager(assets=("EURUSD_otc",))  # asset of interest is NOT here
+    manager.raise_on_refresh = True
+
+    executor = TradeExecutor.__new__(TradeExecutor)  # bypass full ctor
+    executor._manager = manager  # type: ignore[attr-defined]
+
+    available = await executor._asset_is_available("USDBRL_otc")
+    assert available is False
+    assert manager.refresh_calls == 1  # refresh attempted exactly once
 
 
 async def test_executor_proceeds_when_asset_is_available() -> None:
