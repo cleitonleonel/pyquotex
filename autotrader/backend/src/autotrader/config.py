@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Hard gate for real-money trading. Even when true, channels still
     # have their own enable flag — this is a *master* off-switch.
     live_trading_enabled: bool = False
+
+    # Maximum OTP attempts per cycle before the relay gives up and
+    # edits the message to '/reconnect to retry'. Trades off
+    # alert-fatigue (low) against finger-fumble forgiveness (high).
+    # 3 is the sweet spot per the spec; tune via env if you find
+    # yourself routinely needing more.
+    otp_max_attempts: int = Field(default=3, ge=1, le=10)
 
     db_url: str = "sqlite+aiosqlite:///./data/autotrader.db"
 
