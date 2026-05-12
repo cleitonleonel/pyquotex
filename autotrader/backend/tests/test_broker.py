@@ -131,6 +131,16 @@ class FakeQuotex:
         if FakeQuotex.behavior == "ok":
             self._flip_connected()
             return True, "ok"
+        if FakeQuotex.behavior == "ok_no_otp":
+            # Caller provided session_data with a token; pyquotex
+            # would skip authenticate() in this case. Fake it: succeed
+            # WITHOUT invoking on_otp_callback.
+            assert self.session_data.get("token"), (
+                "ok_no_otp expects pre-warmed session_data — the test "
+                "should have wired a SessionStore with a primed payload."
+            )
+            self._flip_connected()
+            return True, "ok"
         if FakeQuotex.behavior == "rejected":
             return False, "auth rejected by broker"
         if FakeQuotex.behavior == "needs_otp":
@@ -712,3 +722,58 @@ def test_manager_calls_relay_on_otp_resolved(client: TestClient) -> None:
         time.sleep(0.05)
 
     assert relay.resolved_count == 1
+
+
+def test_persisted_ssid_skips_otp_on_second_connect(client: TestClient) -> None:
+    """End-to-end: first connect goes through OTP, second connect on
+    the same manager reuses the saved session_data and SKIPS the
+    on_otp_callback entirely. This is the production restart win the
+    spec promises."""
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.quotex_manager
+    store = _FakeSessionStore()
+    manager.set_session_store(store)
+
+    headers = _login(client)
+    _put_credentials(client, headers)
+
+    # ---------- First connect: OTP-required path ----------------------
+    FakeQuotex.behavior = "needs_otp"
+    client.post("/broker/connect", headers=headers)
+    client.post("/broker/otp", headers=headers, json={"code": "654321"})
+    import time  # noqa: PLC0415
+    for _ in range(40):
+        if manager.status().state == "connected":
+            break
+        time.sleep(0.05)
+    assert manager.status().state == "connected"
+    # Session got saved.
+    assert len(store.saved_payloads) >= 1
+
+    # Simulate a restart: disconnect, wipe the in-memory manager state
+    # but keep the SessionStore (its primed_payload is the last save).
+    primed = store.saved_payloads[-1]
+    client.post("/broker/disconnect", headers=headers)
+    for _ in range(20):
+        if manager.status().state == "idle":
+            break
+        time.sleep(0.05)
+
+    # Build a NEW SessionStore primed with the previous save — this
+    # is what a fresh container start sees when reading the on-disk file.
+    primed_store = _FakeSessionStore(primed=primed)
+    manager.set_session_store(primed_store)
+
+    # ---------- Second connect: SSID-reuse path -----------------------
+    FakeQuotex.behavior = "ok_no_otp"
+    r = client.post("/broker/connect", headers=headers)
+    assert r.status_code == 200, r.text
+    for _ in range(40):
+        if manager.status().state == "connected":
+            break
+        time.sleep(0.05)
+    assert manager.status().state == "connected"
+    # No new OTP cycle this time — but the save still ran (fresh
+    # session_data refreshes the on-disk copy).
+    assert len(primed_store.saved_payloads) >= 1
