@@ -96,6 +96,67 @@ class AdminBotOTPRelay:
         else:
             await self._bump_existing_cycle(prompt=prompt, attempt=attempt)
 
+    def owns_reply(self, message: Any) -> bool:
+        """Returns True iff this message is a reply targeting the
+        relay's active OTP message. Cheap-and-side-effect-free so the
+        commands hook can call it on every inbound message.
+        """
+        if self._active is None:
+            return False
+        reply_to = getattr(message, "reply_to_message", None)
+        if reply_to is None:
+            return False
+        reply_to_id = getattr(reply_to, "id", None)
+        return reply_to_id == self._active.message_id
+
+    async def handle_reply(self, message: Any) -> None:
+        """Operator replied to the active OTP message. Extract digits
+        and submit. Idempotent for stale/no-digit replies — only the
+        terminal call into ``manager.submit_otp`` advances the state."""
+        if self._active is None:
+            return
+        if not self.owns_reply(message):
+            log.info(
+                "otp_relay.reply.stale_target",
+                got=getattr(getattr(message, "reply_to_message", None), "id", None),
+                active=self._active.message_id,
+            )
+            return
+        text = getattr(message, "text", "") or ""
+        match = _OTP_DIGIT_PATTERN.search(text)
+        if not match:
+            await self._edit_with(
+                "❌ No digits found in your reply — reply with just "
+                "the code (4–8 digits).",
+            )
+            return
+        code = match.group(1)
+        log.info(
+            "otp_relay.reply.submitting",
+            attempt=self._active.attempt,
+            digits=len(code),
+        )
+        try:
+            await self._manager.submit_otp(code)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("otp_relay.submit_failed", error=str(exc))
+            await self._edit_with(
+                f"❌ Internal error submitting OTP ({type(exc).__name__}). "
+                "Reply /reconnect to retry.",
+            )
+
+    async def _edit_with(self, text: str) -> None:
+        if self._active is None:
+            return
+        try:
+            await self._admin_bot.edit_message_text(
+                self._active.chat_id,
+                self._active.message_id,
+                text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("otp_relay.edit_failed", error=str(exc))
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

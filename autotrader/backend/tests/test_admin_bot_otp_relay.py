@@ -139,3 +139,114 @@ async def test_disabled_bot_short_circuits(
 
     assert bot.sent == []
     assert bot.edits == []
+
+
+# ---------------------------------------------------------------------------
+# handle_reply — extract digits + submit
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeReplyTo:
+    id: int
+
+
+@dataclass
+class _FakeFromUser:
+    id: int
+
+
+@dataclass
+class _FakeMessage:
+    text: str
+    reply_to_message: _FakeReplyTo | None
+    from_user: _FakeFromUser
+
+
+def _reply(text: str, target_id: int, user_id: int = 42) -> _FakeMessage:
+    return _FakeMessage(
+        text=text,
+        reply_to_message=_FakeReplyTo(id=target_id),
+        from_user=_FakeFromUser(id=user_id),
+    )
+
+
+@pytest.mark.asyncio
+async def test_owns_reply_returns_true_only_for_active_message_id(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """The admin_bot_commands hook asks the relay 'is this yours?'
+    before handing the message over. Yes only when there's an active
+    cycle and the reply_to_message.id matches."""
+    relay = _relay(fake_bot, fake_manager)
+    # No active cycle → never owns.
+    assert relay.owns_reply(_reply("123456", target_id=9999)) is False
+
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    assert relay.owns_reply(_reply("123456", target_id=active_id)) is True
+    assert relay.owns_reply(_reply("123456", target_id=active_id + 1)) is False
+    # Message with no reply_to_message is not ours.
+    assert relay.owns_reply(
+        _FakeMessage(text="123456", reply_to_message=None, from_user=_FakeFromUser(id=42)),
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_extracts_digits_and_submits(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    await relay.handle_reply(_reply("code: 123456 (got it)", target_id=active_id))
+
+    assert fake_manager.submitted == ["123456"]
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_with_no_digits_edits_helper_message(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """A reply without 4–8 contiguous digits is a fat-finger. We edit
+    the message to nudge, without burning an attempt slot."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    await relay.handle_reply(_reply("hello what", target_id=active_id))
+
+    assert fake_manager.submitted == []
+    assert len(fake_bot.edits) == 1
+    assert "no digits" in fake_bot.edits[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_with_wrong_target_is_ignored(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """Defensive: even if the commands hook somehow forwards a reply
+    that doesn't target our message, we drop it silently."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    await relay.handle_reply(_reply("123456", target_id=active_id + 99))
+
+    assert fake_manager.submitted == []
+    assert fake_bot.edits == []
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_when_idle_is_ignored(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    relay = _relay(fake_bot, fake_manager)
+    # Never called on_otp_required → cycle is idle.
+
+    await relay.handle_reply(_reply("123456", target_id=12345))
+
+    assert fake_manager.submitted == []
+    assert fake_bot.edits == []
