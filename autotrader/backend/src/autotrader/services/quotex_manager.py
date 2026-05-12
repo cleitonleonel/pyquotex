@@ -13,10 +13,17 @@ us a single place to:
   an ``asyncio.Future`` while the user types the code into the UI,
 * expose a tiny, stable status snapshot to the rest of the app,
 * pre-warm the connection at app startup so the first trade pays no
-  login cost.
+  login cost,
+* **observe** pyquotex's auto-reconnect supervisor and surface those
+  transitions to the rest of the app — the previous version trusted
+  pyquotex to handle everything internally and silently degraded for
+  the few seconds it took to swap sockets, which is unacceptable for
+  a real-money trading bot. See :meth:`_status_watcher` below.
 
-pyquotex itself owns reconnect supervision and session caching, so we
-just stay out of its way and call its async methods.
+pyquotex itself owns the *mechanism* of reconnecting (TCP reset, fresh
+WS handshake, replay of subscriptions). The manager owns the *policy*
+of how aggressive that should be and the *observability* of when it's
+happening.
 """
 
 from __future__ import annotations
@@ -29,9 +36,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import structlog
+from pyquotex.global_value import AuthStatus, WebsocketStatus
 from pyquotex.stable_api import Quotex
 from pyquotex.utils.account_type import AccountType
 from pyquotex.utils.proxy_config import ProxyConfig
+from pyquotex.utils.reconnect import ReconnectPolicy
 
 from autotrader.config import settings
 from autotrader.models.base import utc_now
@@ -39,12 +48,39 @@ from autotrader.models.base import utc_now
 log = structlog.get_logger(__name__)
 
 AccountMode = Literal["PRACTICE", "REAL"]
-ConnectState = Literal["idle", "connecting", "awaiting_otp", "connected", "error"]
+ConnectState = Literal[
+    "idle",
+    "connecting",
+    "awaiting_otp",
+    "connected",
+    "reconnecting",  # WS dropped after first connect, supervisor is retrying
+    "error",
+]
 
 # How long the manager waits for the user to type an OTP before giving
 # up and tearing the in-flight connect down. Three minutes covers slow
 # email delivery / SMS without keeping a stale connect task forever.
 _OTP_TIMEOUT_SECONDS = 180
+
+# Reconnect policy passed into pyquotex. Defaults there (1s → 60s,
+# unlimited attempts) are tuned for a long-running data scraper; for
+# binary-options trading where a missed signal is a missed dollar, we
+# want the first retry near-instant and the backoff capped well below
+# a single 60s option duration.
+_MANAGER_RECONNECT_POLICY = ReconnectPolicy(
+    enabled=True,
+    max_attempts=-1,         # never give up — operator decides via UI
+    initial_delay=0.5,       # first retry inside half a second
+    max_delay=15.0,          # cap at 15s — shorter than a 1-min option
+    backoff_factor=2.0,
+    jitter=0.25,
+)
+
+# Status-watcher poll cadence. 100ms is well below human-perception
+# latency for "Connected → Reconnecting" UI flips and small enough
+# that the risk gate never ships a trade more than ~100ms after the
+# socket died. Cheap — just two int comparisons per tick.
+_STATUS_POLL_INTERVAL = 0.1
 
 
 class QuotexManagerError(Exception):
@@ -101,6 +137,15 @@ class QuotexManager:
         self._otp_future: asyncio.Future[str] | None = None
         self._otp_prompt: str | None = None
 
+        # Resilience watcher — runs once a session is established and
+        # mirrors the underlying WS state (which pyquotex's supervisor
+        # mutates on its own clock) into our state machine. ``None``
+        # while we're idle/connecting/error; populated on the way out
+        # of ``_do_connect`` if the login succeeded.
+        self._status_watcher_task: asyncio.Task[None] | None = None
+        self._disconnected_at: datetime | None = None
+        self._consecutive_failed_reconnects: int = 0
+
         # Broker asset codes (e.g. "EURUSD", "EURUSD_otc"). Populated
         # on each successful connect and refreshable via
         # ``refresh_assets``. The parser layer reads this to auto-
@@ -122,7 +167,26 @@ class QuotexManager:
 
     @property
     def connected(self) -> bool:
-        return self._client is not None and self._client.api is not None
+        """Whether the broker WS is *actually* live and authorised.
+
+        Previously this only checked Python-object existence
+        (``self._client.api is not None``), which stayed ``True`` for
+        the rest of the process after the first successful login —
+        even when the WebSocket had been dead for minutes. The risk
+        gate keys on this flag, so every trade attempted during a
+        reconnect window was firing into a closed pipe and timing
+        out at ``confirm_timeout`` (~10s). Now we mirror the real
+        state of the underlying socket so the gate blocks cleanly.
+        """
+        if self._client is None or self._client.api is None:
+            return False
+        state = getattr(self._client.api, "state", None)
+        if state is None:
+            return False
+        return (
+            state.status == WebsocketStatus.CONNECTED
+            and state.auth_status == AuthStatus.AUTHENTICATED
+        )
 
     def status(self) -> BrokerStatus:
         return BrokerStatus(
@@ -211,6 +275,10 @@ class QuotexManager:
                     root_path=self._root_path,
                     lang="en",
                     on_otp_callback=self._on_otp_callback,
+                    # Trading-tuned reconnect policy — see the
+                    # ``_MANAGER_RECONNECT_POLICY`` constant for the
+                    # rationale on the timing constants.
+                    reconnect_policy=_MANAGER_RECONNECT_POLICY,
                     # Quotex's ``qxbroker.com`` login page is behind
                     # Cloudflare and 403s plain ``httpx`` because the
                     # TLS / JA3 fingerprint isn't a real browser. We
@@ -254,11 +322,17 @@ class QuotexManager:
                 self._connected_at = utc_now()
                 self._state = "connected"
                 self._last_error = None
+                self._consecutive_failed_reconnects = 0
                 log.info(
                     "broker.connect.ok",
                     email_masked=_mask_email(self._email or ""),
                     account_mode=self._account_mode,
                 )
+                # Spawn the resilience watcher. It observes pyquotex's
+                # internal WS state (which the supervisor mutates on
+                # disconnect / reconnect) and mirrors it into our
+                # state machine + admin notifications.
+                self._start_status_watcher()
                 # Best-effort: fetch the asset universe so the parser
                 # layer can auto-resolve channel-side names to broker
                 # codes. Failure here doesn't fail the connect.
@@ -277,6 +351,10 @@ class QuotexManager:
         # Kill any in-flight connect first so it can't race against
         # us into "connected" right after we've torn down.
         await self.cancel_connect()
+        # Stop the resilience watcher *before* taking the lock — the
+        # watcher itself may briefly contend on it via callbacks and
+        # we want a clean cancel before the client object disappears.
+        await self._stop_status_watcher()
         async with self._lock:
             if self._client is None:
                 self._state = "idle"
@@ -289,8 +367,183 @@ class QuotexManager:
             finally:
                 self._client = None
                 self._connected_at = None
+                self._disconnected_at = None
+                self._consecutive_failed_reconnects = 0
                 self._state = "idle"
                 log.info("broker.disconnect.ok")
+
+    # ------------------------------------------------------------------
+    # Resilience watcher
+    # ------------------------------------------------------------------
+
+    def _start_status_watcher(self) -> None:
+        """Spawn the WS-state observer if not already running."""
+        if (
+            self._status_watcher_task is not None
+            and not self._status_watcher_task.done()
+        ):
+            return
+        self._status_watcher_task = asyncio.create_task(self._status_watcher())
+
+    async def _stop_status_watcher(self) -> None:
+        task = self._status_watcher_task
+        if task is None or task.done():
+            self._status_watcher_task = None
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        self._status_watcher_task = None
+
+    async def _status_watcher(self) -> None:
+        """Mirror the underlying WS health into our state machine.
+
+        Polls ``client.api.state.status`` + ``auth_status``. Pyquotex's
+        ``ReconnectSupervisor`` mutates these on its own clock — we
+        just *observe* them and:
+
+        * On a CONNECTED → not-CONNECTED transition: flip the manager
+          to ``reconnecting``, capture ``_disconnected_at`` for the
+          downtime tally, and publish a ``system.error`` so the admin
+          bot can notify the operator. This is the loud signal that
+          used to be missing.
+        * On not-CONNECTED → CONNECTED + AUTHENTICATED: flip back to
+          ``connected``, log the downtime, and reset the failed-
+          reconnect counter. Currently silent on success — see the
+          escalation hook in :meth:`_on_reconnect_attempt_failed` for
+          the noisy-vs-quiet policy.
+        * While stuck in ``reconnecting``, track the supervisor's
+          ``failed_reconnects`` count and escalate if it climbs above
+          a configured threshold (the operator should know if we've
+          been down for minutes, not silently bleed signals).
+
+        The loop runs until cancelled by :meth:`disconnect` or until
+        the underlying client object disappears.
+        """
+        last_was_connected = True
+        last_failed_reconnects = self._supervisor_failed_count()
+        try:
+            while True:
+                await asyncio.sleep(_STATUS_POLL_INTERVAL)
+
+                client = self._client
+                if client is None or client.api is None:
+                    return
+
+                state = getattr(client.api, "state", None)
+                if state is None:
+                    continue
+
+                now_connected = (
+                    state.status == WebsocketStatus.CONNECTED
+                    and state.auth_status == AuthStatus.AUTHENTICATED
+                )
+
+                if last_was_connected and not now_connected:
+                    self._on_ws_dropped(state)
+                elif not last_was_connected and now_connected:
+                    self._on_ws_recovered()
+
+                # Watch the supervisor's failed-attempt counter so the
+                # admin bot can be told that we've been stuck — this is
+                # independent of the per-transition events above.
+                failed_now = self._supervisor_failed_count()
+                if failed_now > last_failed_reconnects:
+                    self._consecutive_failed_reconnects = failed_now
+                    self._on_reconnect_attempt_failed(failed_now)
+                last_failed_reconnects = failed_now
+
+                last_was_connected = now_connected
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # pragma: no cover — watcher must not die silently
+            log.exception("broker.status_watcher.crashed", error=str(exc))
+            self._emit_system_error(
+                kind="status_watcher.crashed",
+                detail=str(exc),
+                recoverable=False,
+            )
+
+    def _supervisor_failed_count(self) -> int:
+        client = self._client
+        if client is None or client.api is None:
+            return 0
+        supervisor = getattr(client.api, "reconnect_supervisor", None)
+        if supervisor is None:
+            return 0
+        stats = getattr(supervisor, "stats", None)
+        return int(getattr(stats, "failed_reconnects", 0) or 0)
+
+    def _on_ws_dropped(self, state: Any) -> None:
+        """Called once per CONNECTED → not-CONNECTED edge."""
+        self._disconnected_at = utc_now()
+        self._state = "reconnecting"
+        reason = (
+            getattr(state, "websocket_error_reason", None)
+            or f"status={int(state.status)} auth={int(state.auth_status)}"
+        )
+        log.warning("broker.ws.dropped", reason=reason)
+        self._emit_system_error(
+            kind="broker.disconnected",
+            detail=reason,
+            recoverable=True,
+        )
+
+    def _on_ws_recovered(self) -> None:
+        """Called once per not-CONNECTED → CONNECTED+AUTHENTICATED edge."""
+        downtime_s: float | None = None
+        if self._disconnected_at is not None:
+            downtime_s = (utc_now() - self._disconnected_at).total_seconds()
+        self._disconnected_at = None
+        self._state = "connected"
+        self._last_error = None
+        self._consecutive_failed_reconnects = 0
+        log.info(
+            "broker.ws.recovered",
+            downtime_s=round(downtime_s, 2) if downtime_s is not None else None,
+        )
+
+    # When the supervisor has racked up this many failed reconnect
+    # attempts in a row, the watcher flips the event's ``recoverable``
+    # flag to ``False`` so the admin notifier formats it as a hard
+    # outage rather than a transient blip. Keeping recoverable=True
+    # before this lets the operator tell apart "we're working it" from
+    # "this isn't going to fix itself."
+    _HARD_OUTAGE_AFTER_ATTEMPTS = 10
+
+    def _on_reconnect_attempt_failed(self, failed_count: int) -> None:
+        """Called each time pyquotex's supervisor counts a failed retry.
+
+        **Policy: LOUD** (chosen for real-money trading, 2026-05-12).
+
+        Every failed reconnect attempt past the initial drop fires a
+        ``broker.recover_stalled`` event onto the bus. The initial drop
+        itself is already announced by :meth:`_on_ws_dropped` as
+        ``broker.disconnected``, so the operator sees a clean two-event
+        sequence per outage:
+
+          1. ``broker.disconnected`` — "WS just died, supervisor taking over"
+          2. ``broker.recover_stalled`` (1..N) — "retry #N failed, still trying"
+
+        Trade-off acknowledged: this maximises visibility at the cost
+        of inbox noise. The ``admin_bot_notify`` layer already
+        suppresses bursts via its own backoff (see
+        ``admin_bot_notify.py:_backoff_state``), so the wire-level
+        Telegram message count is bounded even when the bus is loud.
+        Picked over the quieter alternatives because the cost of a
+        silent gap during real-money trading is strictly worse than
+        the cost of a few extra pings.
+        """
+        # Past ``_HARD_OUTAGE_AFTER_ATTEMPTS`` failures, downgrade
+        # ``recoverable`` so the admin bot formats this as an outage
+        # rather than a transient hiccup. The supervisor keeps trying
+        # regardless — this only affects the operator-facing tone.
+        is_hard_outage = failed_count >= self._HARD_OUTAGE_AFTER_ATTEMPTS
+        self._emit_system_error(
+            kind="broker.recover_stalled",
+            detail=f"reconnect attempt {failed_count} failed; still trying",
+            recoverable=not is_hard_outage,
+        )
 
     async def cancel_connect(self) -> None:
         """Abort an in-flight connect (e.g. user closed the OTP dialog).

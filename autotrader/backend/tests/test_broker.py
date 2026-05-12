@@ -10,15 +10,43 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from typing import ClassVar
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from pyquotex.global_value import AuthStatus, WebsocketStatus
+
 # ---------------------------------------------------------------------------
 # Fake Quotex
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeState:
+    """Mirrors :class:`pyquotex.global_value.ConnectionState` — the
+    manager keys ``connected`` on these two fields now, so the stub
+    has to expose them as real integers (not MagicMock attrs that are
+    always truthy)."""
+
+    status: WebsocketStatus = WebsocketStatus.CONNECTED
+    auth_status: AuthStatus = AuthStatus.AUTHENTICATED
+    websocket_error_reason: str | None = None
+
+
+@dataclass
+class _FakeReconnectStats:
+    attempts: int = 0
+    successful_reconnects: int = 0
+    failed_reconnects: int = 0
+    last_error: str | None = None
+
+
+@dataclass
+class _FakeReconnectSupervisor:
+    stats: _FakeReconnectStats = field(default_factory=_FakeReconnectStats)
 
 
 class FakeQuotex:
@@ -45,6 +73,8 @@ class FakeQuotex:
         lang: str = "en",
         on_otp_callback=None,
         proxy_config=None,
+        reconnect_policy: Any = None,
+        **_: Any,  # tolerate further kwargs the real Quotex grows
     ) -> None:
         self.email = email
         self.password = password
@@ -55,17 +85,39 @@ class FakeQuotex:
         # a ``ProxyConfig(use_browser_tls=True)`` so pyquotex uses
         # curl_cffi to clear Cloudflare on ``qxbroker.com``.
         self.proxy_config = proxy_config
-        # ``api`` is truthy → manager.connected reads True after
-        # connect() succeeds.
+        # Captured so tests can assert the manager forwards a
+        # trading-tuned ``ReconnectPolicy`` instead of accepting the
+        # pyquotex-default 1s → 60s backoff.
+        self.reconnect_policy = reconnect_policy
+        # The manager now keys ``connected`` on real WS+auth state
+        # (``api.state.status`` + ``auth_status``) — so the fake has
+        # to expose a real state object, not a MagicMock. ``connect()``
+        # flips these to CONNECTED/AUTHENTICATED on success below.
         self.api = MagicMock()
+        self.api.state = _FakeState(
+            status=WebsocketStatus.DISCONNECTED,
+            auth_status=AuthStatus.NOT_AUTHENTICATED,
+        )
+        self.api.reconnect_supervisor = _FakeReconnectSupervisor()
         self.account_mode_set: str | None = None
         FakeQuotex.last_instance = self
 
     def set_account_mode(self, mode: str) -> None:
         self.account_mode_set = mode
 
+    def _flip_connected(self) -> None:
+        """Move the fake state machine into the post-login steady state.
+
+        Real pyquotex transitions through CONNECTING → CONNECTED inside
+        ``api.connect``; tests only care about the terminal state, so
+        we shortcut to it here on every success path.
+        """
+        self.api.state.status = WebsocketStatus.CONNECTED
+        self.api.state.auth_status = AuthStatus.AUTHENTICATED
+
     async def connect(self) -> tuple[bool, str]:
         if FakeQuotex.behavior == "ok":
+            self._flip_connected()
             return True, "ok"
         if FakeQuotex.behavior == "rejected":
             return False, "auth rejected by broker"
@@ -73,11 +125,14 @@ class FakeQuotex:
             assert self.on_otp_callback is not None
             code = await self.on_otp_callback("Enter the code sent to your email:")
             if str(code) == FakeQuotex.valid_otp:
+                self._flip_connected()
                 return True, "ok"
             return False, "bad otp"
         raise AssertionError(f"unknown behavior: {FakeQuotex.behavior}")
 
     async def close(self) -> bool:
+        self.api.state.status = WebsocketStatus.DISCONNECTED
+        self.api.state.auth_status = AuthStatus.NOT_AUTHENTICATED
         return True
 
     async def change_account(self, mode: str, tournament_id: int = 0) -> None:
