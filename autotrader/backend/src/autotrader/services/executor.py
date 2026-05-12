@@ -51,6 +51,28 @@ log = structlog.get_logger(__name__)
 _RECONCILE_SLACK_SECONDS = 60
 
 
+def _inverse_currency_pair(asset: str) -> str | None:
+    """Compute the inverse-ordering of a 6-letter currency pair.
+
+    ``"USDBRL_otc"`` → ``"BRLUSD_otc"``.
+    ``"EURUSD"`` → ``"USDEUR"``.
+    Returns ``None`` for shapes that don't match a 6-letter pair
+    (e.g. an index, a crypto symbol with non-3-letter parts, an
+    asset already known to be inverted-only).
+
+    Used by the asset pre-flight to surface 'did you mean?'
+    suggestions in the admin-bot Telegram alert when the broker
+    lists the pair in the opposite order from what the parser
+    produced. We never trade the inverse automatically — direction
+    must also flip, which is a manual operator decision.
+    """
+    body, sep, suffix = asset.partition("_")
+    if len(body) != 6 or not body.isalpha():
+        return None
+    inverted = body[3:] + body[:3]
+    return f"{inverted}_{suffix}" if sep else inverted
+
+
 def _wire_iso8601(value: datetime | None) -> str | None:
     """Format ``value`` as the broker's documented wire timestamp.
 
@@ -412,6 +434,7 @@ class TradeExecutor:
         # pairs outside their hours, or assets that have been removed
         # from the broker's catalog).
         if not await self._asset_is_available(signal.asset):
+            self._maybe_emit_swap_suggestion(signal.asset, signal.direction)
             return await self._mark_error(
                 attempt,
                 f"asset_not_available: {signal.asset}",
@@ -546,6 +569,49 @@ class TradeExecutor:
             fire_at = fire_at.replace(tzinfo=UTC)
         wait_secs = max(0.0, (fire_at - now).total_seconds())
         return wait_secs + signal.duration_seconds + 60.0
+
+    def _maybe_emit_swap_suggestion(self, asset: str, direction: str) -> None:
+        """If the inverse-ordering of ``asset`` IS in the broker's asset
+        universe, emit a system.error event so the admin-bot notifier
+        Telegram-pings the operator with 'broker has X — update your
+        config or signal channel to send X with the inverted direction.'
+
+        Never raises — best-effort observability. The reject still fires
+        via the caller's ``_mark_error`` either way.
+        """
+        inverse = _inverse_currency_pair(asset)
+        if inverse is None:
+            return
+        if inverse not in self._manager.assets:
+            return
+        flipped = "put" if direction.lower() == "call" else "call"
+        detail = (
+            f"Broker lists this pair inverted as '{inverse}', not "
+            f"'{asset}'. To trade the same direction, update your signal "
+            f"channel/parser to emit '{inverse}' with direction='{flipped}' "
+            f"(inverted from '{direction}'). The trade was rejected — no "
+            f"auto-swap (would silently invert direction)."
+        )
+        log.warning(
+            "executor.asset.suggested_swap",
+            original=asset,
+            suggested=inverse,
+            original_direction=direction,
+            suggested_direction=flipped,
+        )
+        if self._event_bus is not None:
+            try:
+                self._event_bus.publish("system.error", {
+                    "component": "executor",
+                    "kind": "asset_not_available.suggested_swap",
+                    "detail": detail,
+                    "recoverable": True,
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "executor.asset.suggest_bus_publish_failed",
+                    error=str(exc),
+                )
 
     async def _mark_error(
         self,

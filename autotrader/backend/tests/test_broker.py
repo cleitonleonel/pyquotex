@@ -968,3 +968,82 @@ async def test_executor_proceeds_when_asset_is_available() -> None:
     assert available is True, "expected True for asset present in universe"
     # Cache hit — refresh must NOT have been called.
     assert mgr.refresh_calls == 0, "unexpected refresh for a cache-hit asset"
+
+
+# ---------------------------------------------------------------------------
+# "Did you mean?" inverse-pair swap suggestion
+# ---------------------------------------------------------------------------
+
+
+def test_inverse_currency_pair_helper() -> None:
+    """Verifies the inverse helper handles common shapes."""
+    from autotrader.services.executor import _inverse_currency_pair  # noqa: PLC0415
+
+    assert _inverse_currency_pair("USDBRL_otc") == "BRLUSD_otc"
+    assert _inverse_currency_pair("EURUSD") == "USDEUR"
+    assert _inverse_currency_pair("USDBRL") == "BRLUSD"
+    # Non-6-letter shapes return None.
+    assert _inverse_currency_pair("BTC_otc") is None
+    assert _inverse_currency_pair("XAUUSD3_otc") is None
+    assert _inverse_currency_pair("") is None
+    # Non-alpha bodies return None.
+    assert _inverse_currency_pair("USD123") is None
+
+
+@pytest.mark.asyncio
+async def test_executor_emits_swap_suggestion_when_inverse_exists() -> None:
+    """REGRESSION: when an asset is missing but its inverse-ordering is
+    in the broker's universe (e.g., user sends USDBRL_otc but broker has
+    BRLUSD_otc), the executor must emit a system.error event suggesting
+    the operator update their config — without auto-swapping the trade."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    # Capture published events.
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    manager = _StubManager(assets=("BRLUSD_otc", "EURUSD_otc"))  # inverse IS present
+    manager.refresh_result = manager._assets  # refresh returns same set
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    executor._maybe_emit_swap_suggestion("USDBRL_otc", "call")
+
+    assert len(captured) == 1
+    event_type, payload = captured[0]
+    assert event_type == "system.error"
+    assert payload["kind"] == "asset_not_available.suggested_swap"
+    # Detail mentions both symbols and the direction flip.
+    detail = payload["detail"]
+    assert "BRLUSD_otc" in detail
+    assert "USDBRL_otc" in detail
+    assert "put" in detail  # flipped from call
+
+
+@pytest.mark.asyncio
+async def test_executor_skips_swap_suggestion_when_inverse_missing() -> None:
+    """When the inverse pair is ALSO not in the broker's universe,
+    no swap suggestion is emitted — the asset is genuinely unknown."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    manager = _StubManager(assets=("EURUSD_otc",))  # no BRLUSD, no USDBRL
+    manager.refresh_result = manager._assets
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    executor._maybe_emit_swap_suggestion("USDBRL_otc", "call")
+
+    assert captured == []
