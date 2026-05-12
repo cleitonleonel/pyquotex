@@ -145,6 +145,24 @@ class AdminBotOTPRelay:
                 "Reply /reconnect to retry.",
             )
 
+    async def on_otp_resolved(self) -> None:
+        """Connect completed successfully. Edit to terminal '✅' and
+        clear the cycle."""
+        if self._active is None:
+            return
+        await self._edit_with("✅ Connected.")
+        self._active = None
+
+    async def on_otp_timeout(self) -> None:
+        """The manager's 180s timer fired. Edit to '⏰ expired' and
+        clear. No auto-retry — operator decides via /reconnect."""
+        if self._active is None:
+            return
+        await self._edit_with(
+            "⏰ OTP expired. Reply /reconnect to retry.",
+        )
+        self._active = None
+
     async def _edit_with(self, text: str) -> None:
         if self._active is None:
             return
@@ -189,9 +207,26 @@ class AdminBotOTPRelay:
         )
 
     async def _bump_existing_cycle(self, *, prompt: str, attempt: int) -> None:
-        assert self._active is not None
+        # Defensive guard — replaces a bare ``assert`` so behaviour
+        # is identical under ``python -O``. ``_bump_existing_cycle`` is
+        # only routed to from ``on_otp_required`` when ``_active`` is
+        # truthy, so reaching here without an active cycle indicates
+        # a programmer error — log and return rather than crash.
+        if self._active is None:
+            log.warning("otp_relay.bump_without_cycle", attempt=attempt)
+            return
         self._active.attempt = attempt
         self._active.broker_prompt = prompt
+        if attempt > self._max_attempts:
+            await self._edit_with(
+                f"❌ OTP failed after {self._max_attempts} attempts. "
+                f"Reply /reconnect to retry from scratch.",
+            )
+            # Cycle becomes inert — refuse further replies until a
+            # fresh attempt=1 fires.
+            self._active = None
+            log.info("otp_relay.exhausted", attempts=attempt)
+            return
         text = self._format_retry_prompt(attempt=attempt)
         try:
             await self._admin_bot.edit_message_text(

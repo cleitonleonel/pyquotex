@@ -284,3 +284,121 @@ async def test_handle_reply_submit_failure_edits_error_message(
     edit_text = fake_bot.edits[0].text.lower()
     assert "internal error" in edit_text
     assert "/reconnect" in edit_text
+
+
+# ---------------------------------------------------------------------------
+# on_otp_resolved + on_otp_timeout + max-attempts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_otp_resolved_edits_to_connected_and_clears_cycle(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    await relay.on_otp_resolved()
+
+    # The terminal edit shows up.
+    assert any(
+        edit.message_id == active_id and ("connected" in edit.text.lower())
+        for edit in fake_bot.edits
+    )
+    # And the cycle is cleared — a stale reply now is ignored.
+    fake_manager.submitted.clear()
+    await relay.handle_reply(_reply("123456", target_id=active_id))
+    assert fake_manager.submitted == []
+
+
+@pytest.mark.asyncio
+async def test_on_otp_timeout_edits_to_expired_and_clears_cycle(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+
+    await relay.on_otp_timeout()
+
+    assert any(
+        edit.message_id == active_id and ("expired" in edit.text.lower())
+        for edit in fake_bot.edits
+    )
+    assert relay.owns_reply(_reply("123456", target_id=active_id)) is False
+
+
+@pytest.mark.asyncio
+async def test_attempts_cap_exhausted_edits_terminal_and_stops_accepting(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """After ``max_attempts`` re-prompts in a row, the relay edits to
+    a terminal '/reconnect to retry' message and refuses further
+    replies until a fresh cycle (attempt=1) starts."""
+    relay = _relay(fake_bot, fake_manager)  # default max_attempts=3
+    await relay.on_otp_required("p1", attempt=1)
+    active_id = fake_bot.sent[0].message_id
+    await relay.on_otp_required("p2", attempt=2)
+    await relay.on_otp_required("p3", attempt=3)
+    # The 4th prompt — beyond the cap — must lock down the cycle.
+    await relay.on_otp_required("p4", attempt=4)
+
+    # Last edit is the terminal message.
+    last_edit = fake_bot.edits[-1]
+    assert last_edit.message_id == active_id
+    assert "/reconnect" in last_edit.text.lower()
+    # And replies are now dropped.
+    fake_manager.submitted.clear()
+    await relay.handle_reply(_reply("123456", target_id=active_id))
+    assert fake_manager.submitted == []
+
+
+@pytest.mark.asyncio
+async def test_max_attempts_env_var_changes_cap(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """With max_attempts=5, attempts 4 and 5 are still soft retries —
+    only attempt=6 triggers the terminal edit."""
+    relay = _relay(fake_bot, fake_manager)
+    # Replace with a higher cap.
+    from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay  # noqa: PLC0415
+    relay = AdminBotOTPRelay(
+        manager=fake_manager,
+        admin_bot=fake_bot,
+        bound_user_id=42,
+        max_attempts=5,
+    )
+
+    await relay.on_otp_required("p", attempt=1)
+    for n in range(2, 6):
+        await relay.on_otp_required("p", attempt=n)
+
+    # Attempts 1..5 are within the cap → no '/reconnect' edit yet.
+    edits_so_far = " | ".join(e.text for e in fake_bot.edits)
+    assert "/reconnect" not in edits_so_far
+
+    await relay.on_otp_required("p", attempt=6)
+    assert "/reconnect" in fake_bot.edits[-1].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_fresh_attempt_1_after_terminal_replaces_cycle(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """After the operator hits /reconnect and the manager triggers a
+    fresh begin_connect → fresh on_otp_required(attempt=1) — the relay
+    sends a NEW message rather than editing the dead one."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    # Force the terminal edit via exhausted attempts.
+    for n in range(2, 5):
+        await relay.on_otp_required("p", attempt=n)
+    assert "/reconnect" in fake_bot.edits[-1].text.lower()
+
+    first_sent = fake_bot.sent[0].message_id
+
+    # Fresh cycle.
+    await relay.on_otp_required("fresh prompt", attempt=1)
+    assert len(fake_bot.sent) == 2
+    assert fake_bot.sent[1].message_id != first_sent
