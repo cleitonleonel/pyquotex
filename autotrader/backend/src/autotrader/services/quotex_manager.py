@@ -54,6 +54,7 @@ ConnectState = Literal[
     "awaiting_otp",
     "connected",
     "reconnecting",  # WS dropped after first connect, supervisor is retrying
+    "awaiting_manual_recovery",  # OTP cap exhausted; operator must run /reconnect
     "error",
 ]
 
@@ -164,6 +165,16 @@ class QuotexManager:
         # Per-cycle attempt counter. Reset to 0 on every successful
         # connect; incremented on each ``_on_otp_callback`` entry.
         self._otp_attempt: int = 0
+        # Distinct from ``_otp_attempt``: this counts CONSECUTIVE OTP
+        # FAILURES (timeouts / cancels) across pyquotex's internal
+        # ReconnectSupervisor retries. Pyquotex's supervisor has
+        # ``max_attempts=-1`` (never give up), so without an explicit
+        # gate here it regenerates a PIN email forever — see
+        # production incident 2026-05-12 (5 PIN emails in 13min).
+        # When this reaches ``settings.otp_max_attempts`` we halt the
+        # supervisor (``policy.enabled = False``) and require manual
+        # /reconnect from the operator.
+        self._consecutive_otp_failures: int = 0
 
         # Broker asset codes (e.g. "EURUSD", "EURUSD_otc"). Populated
         # on each successful connect and refreshable via
@@ -382,6 +393,9 @@ class QuotexManager:
                 self._state = "connected"
                 self._last_error = None
                 self._consecutive_failed_reconnects = 0
+                # Fix C — clean connect resets the OTP-failure gate so a
+                # FUTURE disconnect window starts the cap from zero.
+                self._consecutive_otp_failures = 0
                 log.info(
                     "broker.connect.ok",
                     email_masked=_mask_email(self._email or ""),
@@ -673,6 +687,15 @@ class QuotexManager:
         ``client.connect()`` await; we track that via
         ``self._otp_attempt`` so the relay can edit (vs. send) the
         Telegram message.
+
+        Fix C (2026-05-12) — guards against pyquotex's internal
+        supervisor regenerating a PIN email forever. If
+        ``_consecutive_otp_failures`` has already reached
+        ``settings.otp_max_attempts`` from prior timeouts in this
+        disconnect window, we relay one final over-cap call (so
+        Fix A's exhaustion alert fires on the operator's Telegram),
+        disable the supervisor's policy, and raise to abort the
+        in-flight connect. The operator must run /reconnect.
         """
         loop = asyncio.get_running_loop()
         self._otp_future = loop.create_future()
@@ -695,18 +718,44 @@ class QuotexManager:
                 })
             except Exception as exc:  # noqa: BLE001
                 log.warning("broker.otp.bus_publish_failed", error=str(exc))
+
+        cap = settings.otp_max_attempts
+        over_cap = self._consecutive_otp_failures >= cap
+
+        # Relay the prompt to Telegram FIRST — whether under-cap (so
+        # the operator can reply) or over-cap (so Fix A's relay can
+        # fire its 'gave up' exhaustion alert). The over-cap signal
+        # lives in the ``attempt`` arg we pass (cap+1+) — relay's
+        # entry-point check handles it.
+        relay_attempt = (
+            self._consecutive_otp_failures + 1
+            if over_cap
+            else self._otp_attempt
+        )
         if self._otp_relay is not None:
             try:
                 await self._otp_relay.on_otp_required(
                     prompt=self._otp_prompt,
-                    attempt=self._otp_attempt,
+                    attempt=relay_attempt,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("broker.otp.relay_required_failed", error=str(exc))
+
+        if over_cap:
+            # Halt pyquotex's supervisor and bail out of the connect.
+            self._halt_for_otp_exhaustion()
+            self._reset_otp(keep_state=True)
+            raise QuotexManagerError("otp_attempts_exhausted")
+
         try:
             return await asyncio.wait_for(self._otp_future, timeout=_OTP_TIMEOUT_SECONDS)
         except (TimeoutError, asyncio.CancelledError):
             self._last_error = "OTP timed out"
+            # Fix C — this timeout/cancel is a real failure (operator
+            # didn't reply in the 180s window). Bump the gate counter
+            # BEFORE the relay call so a subsequent _on_otp_callback
+            # can read the up-to-date value.
+            self._consecutive_otp_failures += 1
             if self._otp_relay is not None:
                 try:
                     await self._otp_relay.on_otp_timeout()
@@ -715,6 +764,94 @@ class QuotexManager:
             raise
         finally:
             self._reset_otp(keep_state=True)
+
+    def _halt_for_otp_exhaustion(self) -> None:
+        """Manager-side response to the OTP cap being exceeded.
+
+        Flips the state machine into ``awaiting_manual_recovery``,
+        disables pyquotex's internal reconnect supervisor (the loop
+        that was regenerating PIN emails), and publishes a
+        ``system.error`` event so the admin notifier knows this is a
+        wedged-needs-operator state, not a transient blip.
+        """
+        cap = settings.otp_max_attempts
+        log.warning(
+            "broker.otp.exhausted_halting_supervisor",
+            consecutive_failures=self._consecutive_otp_failures,
+            cap=cap,
+        )
+        self._state = "awaiting_manual_recovery"
+        self._last_error = (
+            f"OTP attempts exhausted ({self._consecutive_otp_failures}/{cap})"
+            f" — awaiting /reconnect"
+        )
+        # Disable the supervisor so its retry loop stops issuing PIN
+        # emails. Best-effort: log at warning level if anything is
+        # None or missing so we can diagnose in production. The
+        # client / api objects may be absent in tests or before the
+        # first successful connect.
+        try:
+            self._client.api.reconnect_supervisor.policy.enabled = False  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "broker.otp.supervisor_disable_failed",
+                error=str(exc),
+            )
+
+        self._emit_system_error(
+            kind="otp.exhausted_manual_recovery_required",
+            detail=(
+                f"OTP cap ({cap}) hit after consecutive timeouts; "
+                f"halted pyquotex supervisor — operator must run /reconnect"
+            ),
+            recoverable=False,
+        )
+
+    def reset_for_manual_reconnect(self) -> None:
+        """Called by the /reconnect command BEFORE :meth:`begin_connect`.
+
+        Clears the OTP-failure gate so the next cycle has a fresh cap
+        budget, clears the relay's exhaustion latch (so its prompts
+        relay normally again), and re-enables pyquotex's reconnect
+        supervisor so subsequent transient WS drops are still handled
+        internally.
+
+        Idempotent and safe to call when ``_client`` / ``api`` are
+        ``None`` (the typical state before the first connect).
+        """
+        log.info(
+            "broker.otp.manual_reconnect_reset",
+            previous_failures=self._consecutive_otp_failures,
+            previous_state=self._state,
+        )
+        self._consecutive_otp_failures = 0
+        # Clear the relay's exhaustion latch (duck-typed — relay may
+        # be ``None`` or may be a stub without the method, depending
+        # on wiring stage).
+        if self._otp_relay is not None:
+            reset = getattr(self._otp_relay, "reset_exhaustion", None)
+            if callable(reset):
+                try:
+                    reset()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "broker.otp.relay_reset_failed", error=str(exc),
+                    )
+        # Re-enable pyquotex's supervisor — without this, the next
+        # connect's transient WS drops would never auto-recover.
+        try:
+            self._client.api.reconnect_supervisor.policy.enabled = True  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "broker.otp.supervisor_reenable_skipped",
+                error=str(exc),
+            )
+        # Drop the manual-recovery state back to idle so begin_connect
+        # can transition cleanly into connecting on the operator's
+        # next /reconnect step.
+        if self._state == "awaiting_manual_recovery":
+            self._state = "idle"
+            self._last_error = None
 
     async def submit_otp(self, code: str) -> None:
         if self._otp_future is None or self._otp_future.done():

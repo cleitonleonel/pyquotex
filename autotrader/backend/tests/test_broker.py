@@ -9,6 +9,7 @@ The suite never touches the network.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -768,6 +769,220 @@ def test_manager_calls_relay_on_otp_resolved(client: TestClient) -> None:
         time.sleep(0.05)
 
     assert relay.resolved_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix C — manager halts pyquotex's internal ReconnectSupervisor after N
+# consecutive OTP-timeout failures. Without this gate, pyquotex's
+# supervisor (default `max_attempts=-1`) regenerates a PIN email
+# inside one `_do_connect` call forever. Production incident
+# 2026-05-12: 5 PIN emails in 13min before the operator could intervene.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manager_halts_after_consecutive_otp_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After N consecutive OTP-callback timeouts (`settings.otp_max_attempts`),
+    the manager must:
+
+    * transition to `awaiting_manual_recovery`,
+    * disable pyquotex's reconnect supervisor (`policy.enabled = False`),
+    * emit a `system.error` event signalling the operator must run /reconnect,
+    * raise `QuotexManagerError` from `_on_otp_callback` to abort the
+      in-flight `client.connect()` call.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from autotrader.config import settings  # noqa: PLC0415
+    from autotrader.services.quotex_manager import (  # noqa: PLC0415
+        QuotexManager,
+        QuotexManagerError,
+    )
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    captured_events: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured_events.append((event_type, payload))
+
+    mgr = QuotexManager(root_path=".", event_bus=_SpyBus())
+    relay = _FakeOTPRelay()
+    mgr.set_otp_relay(relay)
+
+    # Inject a stub client with a supervisor whose ``policy.enabled``
+    # we'll observe getting flipped to False.
+    policy = SimpleNamespace(enabled=True)
+    supervisor = SimpleNamespace(policy=policy)
+    api_ns = SimpleNamespace(reconnect_supervisor=supervisor)
+    mgr._client = SimpleNamespace(api=api_ns)  # type: ignore[assignment]
+
+    cap = settings.otp_max_attempts
+    assert cap == 3, f"test assumes default cap=3, got {cap}"
+
+    # First `cap` calls all park on `asyncio.wait_for` and hit our
+    # timeout — model that by failing the future fast (cancel it) so
+    # the except branch in `_on_otp_callback` runs and bumps the
+    # `_consecutive_otp_failures` counter.
+    async def _drive_one_timeout() -> None:
+        # Schedule the callback, then cancel its future from outside.
+        task = asyncio.create_task(mgr._on_otp_callback("prompt"))
+        # Give it a tick to register the future.
+        for _ in range(20):
+            if mgr._otp_future is not None and not mgr._otp_future.done():
+                break
+            await asyncio.sleep(0)
+        assert mgr._otp_future is not None
+        mgr._otp_future.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    for _ in range(cap):
+        await _drive_one_timeout()
+    assert mgr._consecutive_otp_failures == cap
+
+    # The (cap+1)-th call must NOT park on the future — it must
+    # detect the cap, disable the supervisor, emit the error, and
+    # raise.
+    with pytest.raises(QuotexManagerError, match="otp.*exhausted|exhausted.*otp"):
+        await mgr._on_otp_callback("prompt over cap")
+
+    # Manager state transitioned to manual-recovery.
+    assert mgr._state == "awaiting_manual_recovery"
+    assert mgr._last_error and "exhausted" in mgr._last_error.lower()
+
+    # Supervisor was disabled.
+    assert policy.enabled is False, (
+        "manager did not disable pyquotex's reconnect supervisor — "
+        "the internal loop will keep regenerating PIN emails"
+    )
+
+    # `system.error` event was published with an exhausted-kind.
+    exhausted = [
+        p for kind, p in captured_events
+        if kind == "system.error"
+        and "exhausted" in str(p.get("kind", "")).lower()
+    ]
+    assert exhausted, (
+        f"expected a system.error event for OTP exhaustion; got "
+        f"{[k for k, _ in captured_events]}"
+    )
+
+    # Relay was notified of the over-cap attempt so Fix A can fire its
+    # 'gave up' alert. We can't assert exhausted-text here (Fix A logic
+    # lives in the relay) — just that on_otp_required was called with
+    # attempt > cap.
+    over_cap_calls = [
+        a for (_, a) in relay.required_calls if a > cap
+    ]
+    assert over_cap_calls, (
+        f"expected at least one relay.on_otp_required call with "
+        f"attempt > {cap}; got {relay.required_calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_resets_otp_failures_on_successful_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful connect must zero the consecutive-failure counter
+    so a future disconnect's cap starts fresh."""
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    mgr = QuotexManager(root_path=".")
+    mgr.set_credentials("u@v.com", "pw", "PRACTICE")
+    # Pre-seed the counter as if a previous disconnect window had bumped it.
+    mgr._consecutive_otp_failures = 2
+
+    mgr.begin_connect()
+    await mgr.wait_settled(timeout=2.0)
+    assert mgr.status().state == "connected", mgr.status().last_error
+    assert mgr._consecutive_otp_failures == 0, (
+        f"successful connect must reset counter; got "
+        f"{mgr._consecutive_otp_failures}"
+    )
+    await mgr.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_manager_reset_for_manual_reconnect_clears_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/reconnect` calls `reset_for_manual_reconnect()`: zero the
+    counter, re-enable the supervisor, and clear the relay's
+    exhaustion latch."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    mgr = QuotexManager(root_path=".")
+
+    # Track relay calls.
+    relay_resets: list[int] = []
+
+    class _Relay(_FakeOTPRelay):
+        def reset_exhaustion(self) -> None:
+            relay_resets.append(1)
+
+    relay = _Relay()
+    mgr.set_otp_relay(relay)
+
+    # Pre-seed the manager as if Fix C had halted it.
+    mgr._consecutive_otp_failures = 3
+    mgr._state = "awaiting_manual_recovery"
+    mgr._last_error = "OTP attempts exhausted — awaiting /reconnect"
+    policy = SimpleNamespace(enabled=False)
+    supervisor = SimpleNamespace(policy=policy)
+    api_ns = SimpleNamespace(reconnect_supervisor=supervisor)
+    mgr._client = SimpleNamespace(api=api_ns)  # type: ignore[assignment]
+
+    mgr.reset_for_manual_reconnect()
+
+    assert mgr._consecutive_otp_failures == 0
+    assert policy.enabled is True, (
+        "reset_for_manual_reconnect must re-enable pyquotex's supervisor"
+    )
+    assert relay_resets == [1], (
+        f"relay.reset_exhaustion was not called; got {relay_resets}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_reset_for_manual_reconnect_safe_when_no_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_client` may be None (first-ever connect, or post-disconnect)
+    — `reset_for_manual_reconnect` must not crash."""
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    mgr = QuotexManager(root_path=".")
+    mgr._consecutive_otp_failures = 3
+    # `_client` is None by default — no setattr needed.
+
+    # Must not raise.
+    mgr.reset_for_manual_reconnect()
+    assert mgr._consecutive_otp_failures == 0
 
 
 def test_persisted_ssid_skips_otp_on_second_connect(client: TestClient) -> None:
