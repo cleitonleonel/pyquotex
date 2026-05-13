@@ -1047,3 +1047,142 @@ async def test_executor_skips_swap_suggestion_when_inverse_missing() -> None:
     executor._maybe_emit_swap_suggestion("USDBRL_otc", "call")
 
     assert captured == []
+
+
+# ---------------------------------------------------------------------------
+# Case-insensitive auto-fix + ticker-alias "did you mean?" suggestion
+# (USCRUDE→USCrude case-fold, RIPPLE→XRPUSD ticker alias, etc.)
+# ---------------------------------------------------------------------------
+
+
+async def test_executor_case_corrects_asset() -> None:
+    """A case-mismatched signal (USCRUDE_otc) must resolve to the broker's
+    canonical casing (USCrude_otc) on a cache hit — no refresh required."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    mgr = _StubManager(assets=("USCrude_otc",))
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = mgr  # type: ignore[attr-defined]
+
+    resolved = await executor._resolve_asset("USCRUDE_otc")
+
+    assert resolved == "USCrude_otc"
+    # Case-fold cache hit — refresh must NOT have fired.
+    assert mgr.refresh_calls == 0, "case-fold hit must not refresh"
+
+
+async def test_resolve_asset_returns_literal_when_exact() -> None:
+    """Literal cache hit: return the asset unchanged, never touch refresh."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    mgr = _StubManager(assets=("EURUSD_otc",))
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = mgr  # type: ignore[attr-defined]
+
+    resolved = await executor._resolve_asset("EURUSD_otc")
+
+    assert resolved == "EURUSD_otc"
+    assert mgr.refresh_calls == 0
+
+
+async def test_resolve_asset_returns_none_when_truly_missing() -> None:
+    """Asset absent before AND after refresh — return None so the caller
+    rejects the trade. Refresh must have been attempted exactly once."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    mgr = _StubManager(assets=("EURUSD_otc",))
+    mgr.refresh_result = ("EURUSD_otc",)  # still missing after refresh
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = mgr  # type: ignore[attr-defined]
+
+    resolved = await executor._resolve_asset("USDCOP_otc")
+
+    assert resolved is None
+    assert mgr.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_emits_ticker_suggestion_for_known_alias() -> None:
+    """RIPPLE_otc with broker streaming XRPUSD_otc → emit a
+    ``asset_not_available.ticker_suggestion`` event naming both symbols.
+    Trade still rejects — operator must update parser config deliberately."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    manager = _StubManager(assets=("XRPUSD_otc",))
+    manager.refresh_result = manager._assets
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    emitted = executor._maybe_emit_ticker_suggestion("RIPPLE_otc", "call")
+
+    assert emitted is True
+    assert len(captured) == 1
+    event_type, payload = captured[0]
+    assert event_type == "system.error"
+    assert payload["kind"] == "asset_not_available.ticker_suggestion"
+    detail = payload["detail"]
+    assert "RIPPLE_otc" in detail
+    assert "XRPUSD_otc" in detail
+
+
+@pytest.mark.asyncio
+async def test_executor_no_ticker_suggestion_when_alias_unknown() -> None:
+    """USDCOP_otc has no entry in the alias map — silently do nothing.
+    The catalog-sample fallback log handles this case at the call site."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    manager = _StubManager(assets=("EURUSD_otc",))
+    manager.refresh_result = manager._assets
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    emitted = executor._maybe_emit_ticker_suggestion("USDCOP_otc", "call")
+
+    assert emitted is False
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_executor_no_ticker_suggestion_when_alias_target_missing_from_catalog(
+) -> None:
+    """Alias is known (RIPPLE→XRPUSD) but XRPUSD_otc is ALSO absent from
+    the broker's universe — don't emit a misleading suggestion. The
+    asset is genuinely unrecognized (catalog-sample log handles it)."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    manager = _StubManager(assets=("EURUSD_otc",))  # XRPUSD_otc absent
+    manager.refresh_result = manager._assets
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    emitted = executor._maybe_emit_ticker_suggestion("RIPPLE_otc", "call")
+
+    assert emitted is False
+    assert captured == []

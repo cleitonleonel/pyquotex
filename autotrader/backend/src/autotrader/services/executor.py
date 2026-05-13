@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -49,6 +50,52 @@ log = structlog.get_logger(__name__)
 # slack covers broker-side processing jitter — pyquotex sometimes
 # emits ``order_closed`` a beat after the natural expiry.
 _RECONCILE_SLACK_SECONDS = 60
+
+
+# Known broker ticker quirks: signal text → broker's actual symbol code.
+# Used for "did you mean?" suggestions when an asset is missing — never
+# auto-swapped (operator must update their config or parser deliberately).
+# Match is performed on the body (suffix-stripped, upper-cased).
+#
+# Concrete production cases this covers (observed in trade history):
+#   RIPPLE_otc  → broker streams Ripple as XRPUSD_otc
+#   PFIZER_otc  → broker uses NYSE ticker PFE_otc
+#   INTEL_otc   → broker uses NASDAQ ticker INTC_otc
+# The rest are common big-name aliases we may as well catch the first
+# time they show up rather than wait for a separate fix.
+_TICKER_ALIASES: dict[str, str] = {
+    "RIPPLE": "XRPUSD",
+    "BITCOIN": "BTCUSD",
+    "ETHEREUM": "ETHUSD",
+    "PFIZER": "PFE",
+    "INTEL": "INTC",
+    "MICROSOFT": "MSFT",
+    "FACEBOOK": "META",
+    "GOOGLE": "GOOGL",
+    "APPLE": "AAPL",
+    "NETFLIX": "NFLX",
+    "AMAZON": "AMZN",
+    "TESLA": "TSLA",
+}
+
+
+def _match_case_fold(asset: str, universe) -> str | None:
+    """Return the broker's casing of ``asset`` when it appears in
+    ``universe`` (literally or case-folded), else ``None``.
+
+    Literal hits take precedence over case-fold matches — when both
+    ``"EURUSD_otc"`` and ``"eurusd_otc"`` exist (theoretical), the
+    literal wins. Iteration order is deterministic for the rest:
+    first case-fold equal asset wins, matching ``tuple`` insertion
+    order from the manager's cache.
+    """
+    if asset in universe:
+        return asset
+    target = asset.casefold()
+    for candidate in universe:
+        if candidate.casefold() == target:
+            return candidate
+    return None
 
 
 def _inverse_currency_pair(asset: str) -> str | None:
@@ -433,12 +480,43 @@ class TradeExecutor:
         # assets the broker isn't currently streaming — e.g. exotic OTC
         # pairs outside their hours, or assets that have been removed
         # from the broker's catalog).
-        if not await self._asset_is_available(signal.asset):
-            self._maybe_emit_swap_suggestion(signal.asset, signal.direction)
+        #
+        # ``_resolve_asset`` also handles broker-side casing quirks:
+        # ``USCRUDE_otc`` from a signal channel transparently becomes
+        # ``USCrude_otc`` (the broker's exact symbol). We rebind
+        # ``signal.asset`` so every downstream call (BrokerWireTrace,
+        # client.buy, logs) sees the corrected name.
+        resolved = await self._resolve_asset(signal.asset)
+        if resolved is None:
+            swap_emitted = self._maybe_emit_swap_suggestion(
+                signal.asset, signal.direction,
+            )
+            ticker_emitted = self._maybe_emit_ticker_suggestion(
+                signal.asset, signal.direction,
+            )
+            if not swap_emitted and not ticker_emitted:
+                # Neither known recovery hint matched — surface the
+                # raw asset + a slice of the catalog so the operator
+                # can debug from the structured log alone (covers
+                # cases like USDCOP_otc that the broker just doesn't
+                # stream).
+                log.warning(
+                    "executor.asset.unrecognized",
+                    asset=signal.asset,
+                    catalog_size=len(self._manager.assets),
+                    catalog_sample=list(self._manager.assets)[:20],
+                )
             return await self._mark_error(
                 attempt,
                 f"asset_not_available: {signal.asset}",
             )
+        if resolved != signal.asset:
+            log.info(
+                "executor.asset.case_corrected",
+                original=signal.asset,
+                resolved=resolved,
+            )
+            signal = dataclasses.replace(signal, asset=resolved)
 
         is_scheduled = decision.trade_mode == "scheduled"
         client = self._manager._client
@@ -570,20 +648,22 @@ class TradeExecutor:
         wait_secs = max(0.0, (fire_at - now).total_seconds())
         return wait_secs + signal.duration_seconds + 60.0
 
-    def _maybe_emit_swap_suggestion(self, asset: str, direction: str) -> None:
+    def _maybe_emit_swap_suggestion(self, asset: str, direction: str) -> bool:
         """If the inverse-ordering of ``asset`` IS in the broker's asset
         universe, emit a system.error event so the admin-bot notifier
         Telegram-pings the operator with 'broker has X — update your
         config or signal channel to send X with the inverted direction.'
 
+        Returns ``True`` iff a suggestion was emitted (so the caller
+        can decide whether the catalog-sample fallback log should fire).
         Never raises — best-effort observability. The reject still fires
         via the caller's ``_mark_error`` either way.
         """
         inverse = _inverse_currency_pair(asset)
         if inverse is None:
-            return
+            return False
         if inverse not in self._manager.assets:
-            return
+            return False
         flipped = "put" if direction.lower() == "call" else "call"
         detail = (
             f"Broker lists this pair inverted as '{inverse}', not "
@@ -612,6 +692,60 @@ class TradeExecutor:
                     "executor.asset.suggest_bus_publish_failed",
                     error=str(exc),
                 )
+        return True
+
+    def _maybe_emit_ticker_suggestion(self, asset: str, direction: str) -> bool:
+        """Emit a 'did you mean?' alert when the operator's symbol is a
+        known alias for a broker-side ticker.
+
+        Example: signal says ``RIPPLE_otc`` but the broker streams Ripple
+        as ``XRPUSD_otc``. We rebuild ``XRPUSD_otc`` from the suffix and,
+        if the broker actually carries it, emit a ``system.error`` event
+        naming both symbols. The trade still rejects — operator must
+        update their parser/config deliberately; we never auto-rename
+        because the symbol semantics differ.
+
+        Returns ``True`` iff a suggestion was emitted (so the caller
+        can decide whether the catalog-sample fallback log should fire).
+        Never raises — best-effort observability.
+        """
+        body, sep, suffix = asset.partition("_")
+        broker_body = _TICKER_ALIASES.get(body.upper())
+        if broker_body is None:
+            return False
+        candidate = f"{broker_body}_{suffix}" if sep else broker_body
+        # Confirm the broker actually streams the aliased symbol —
+        # case-fold so a USCrude-style casing quirk doesn't suppress
+        # an otherwise-valid suggestion.
+        resolved = _match_case_fold(candidate, self._manager.assets)
+        if resolved is None:
+            return False
+        detail = (
+            f"Broker streams this asset as '{resolved}', not '{asset}'. "
+            f"Update your signal channel/parser to emit '{resolved}' "
+            f"(same direction='{direction}'). The trade was rejected — "
+            f"no auto-rename (different symbol semantics)."
+        )
+        log.warning(
+            "executor.asset.ticker_suggestion",
+            original=asset,
+            suggested=resolved,
+            direction=direction,
+        )
+        if self._event_bus is not None:
+            try:
+                self._event_bus.publish("system.error", {
+                    "component": "executor",
+                    "kind": "asset_not_available.ticker_suggestion",
+                    "detail": detail,
+                    "recoverable": True,
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "executor.asset.ticker_bus_publish_failed",
+                    error=str(exc),
+                )
+        return True
 
     async def _mark_error(
         self,
@@ -632,20 +766,34 @@ class TradeExecutor:
 
     async def _asset_is_available(self, asset: str) -> bool:
         """Returns True iff ``asset`` is in the broker's current asset
-        universe. The manager caches the universe at connect time; if a
-        miss happens here, force one refresh and re-check before deciding.
+        universe. Thin wrapper around :meth:`_resolve_asset` kept for
+        call sites that only need a boolean (and for the existing test
+        contract).
+        """
+        return await self._resolve_asset(asset) is not None
 
-        Returns ``True`` when the cache is empty (e.g. tests, brand-new
-        manager) so we don't false-positive on a fresh boot — the broker
-        will surface its own error in that case.
+    async def _resolve_asset(self, asset: str) -> str | None:
+        """Look up the broker's canonical name for ``asset``.
+
+        Returns the literal ``asset`` on an exact-case cache hit, the
+        broker's cased version on a case-fold hit
+        (``"USCRUDE_otc"`` → ``"USCrude_otc"``), and ``None`` when the
+        asset is genuinely absent — even after one refresh. The pre-
+        flight rebinds ``signal.asset`` to the returned value so the
+        broker subscribe lands on the symbol it actually streams.
+
+        Returns ``asset`` (unchanged) when the cache is empty (tests,
+        fresh boot) so we don't false-positive — the broker's own
+        error path handles that case.
         """
         cached = self._manager.assets
         if not cached:
             # No asset cache populated yet — let the broker's natural
             # error path handle it. Don't false-positive on a fresh boot.
-            return True
-        if asset in cached:
-            return True
+            return asset
+        match = _match_case_fold(asset, cached)
+        if match is not None:
+            return match
         # Cold miss — refresh the universe once. The cache might have
         # gone stale since connect time (broker rotated availability).
         try:
@@ -660,9 +808,9 @@ class TradeExecutor:
             # broker subscribe that we already know is unlikely to stream.
             # We've established the asset is not in the original cache;
             # refresh would have been our only chance to confirm
-            # otherwise. Return False unconditionally.
-            return False
-        return asset in refreshed
+            # otherwise. Return None unconditionally.
+            return None
+        return _match_case_fold(asset, refreshed)
 
     async def _watch_result(
         self,
