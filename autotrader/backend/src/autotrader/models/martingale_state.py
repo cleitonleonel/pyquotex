@@ -99,7 +99,14 @@ async def record_outcome(
         # Winning-streak: advance + record payout, with max-level reset.
         if winning_streak_enabled:
             row.current_win_streak += 1
-            row.last_payout = last_stake + last_profit
+            # Phase 4 (audit 2026-05-13, M5): round to broker-precision
+            # before persisting. ``last_payout`` carries forward into
+            # the next streak step's stake calculation (``ceil(payout)``
+            # in the risk gate), so float drift here can produce stake
+            # ladders that are 1¢ off across long winning streaks.
+            # The eventual money-column migration to Decimal is filed
+            # as a Phase 5 follow-up; this is the bounded fix for now.
+            row.last_payout = round(last_stake + last_profit, 2)
             if (
                 winning_streak_max_level > 0
                 and row.current_win_streak >= winning_streak_max_level

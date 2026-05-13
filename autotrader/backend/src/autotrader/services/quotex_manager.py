@@ -41,7 +41,6 @@ from typing import Any, Literal
 import structlog
 from pyquotex.global_value import AuthStatus, WebsocketStatus
 from pyquotex.stable_api import Quotex
-from pyquotex.utils.account_type import AccountType
 from pyquotex.utils.proxy_config import ProxyConfig
 from pyquotex.utils.reconnect import ReconnectPolicy
 
@@ -1106,10 +1105,11 @@ class QuotexManager:
             self._emit_system_error(kind="balance.failed", detail=str(exc))
             raise QuotexManagerError(self._last_error) from exc
 
-    @property
-    def account_type_int(self) -> int:
-        """Underlying ``AccountType`` int (0=REAL, 1=DEMO)."""
-        return AccountType.DEMO if self._account_mode == "PRACTICE" else AccountType.REAL
+    # Phase 4 cleanup (audit 2026-05-13, L2): the ``account_type_int``
+    # property was defined but never called from anywhere in the
+    # codebase. Dead code removed — the integer form is read straight
+    # from pyquotex's ``AccountType`` enum at the only sites that
+    # ever needed it.
 
     # ------------------------------------------------------------------
     # Assets
