@@ -668,3 +668,99 @@ async def test_otp_prompt_includes_timestamp_and_stale_warning(
     assert "UTC" in retry_text
     assert "⚠️" in retry_text
     assert "latest" in retry_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Reviewer follow-up (2026-05-13) — Important #1 + #2
+# ---------------------------------------------------------------------------
+# Important #1: ``_bump_existing_cycle`` had a now-unreachable cap-check
+# block (cap enforcement moved to the ``on_otp_required`` entry point in
+# commit 6dd5766). Removing it doesn't change behaviour at runtime — we
+# guard against future regressions via the existing
+# test_attempts_cap_exhausted_sends_terminal_and_stops_accepting (asserts
+# the entry-point check fires a SEND, not an edit) and the new test
+# below.
+#
+# Important #2: when ``_handle_exhaustion`` fires while ``_active`` is
+# still set (e.g. on a fast over-cap path where no timeout intervened),
+# the dying prompt would otherwise sit in the operator's inbox as a
+# stale "reply with the code" message right next to the loud "❌ Gave
+# up" alert. The relay now edits it to a closing state FIRST, then
+# sends the fresh alert.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_closes_active_prompt_before_sending_alert(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """REGRESSION (Important #2, 2026-05-13): if the over-cap path is
+    reached while ``_active`` is still set (no timeout intervened —
+    e.g. fast re-prompt cycles), the relay must close the active
+    prompt with an edit before firing the fresh 'Gave up' alert as a
+    new send. Otherwise the operator sees a live 'reply with the
+    code' message sitting next to the 'gave up' alert."""
+    relay = _relay(fake_bot, fake_manager)  # default max_attempts=3
+
+    # Drive a fast under-cap retry chain WITHOUT triggering on_otp_timeout
+    # between attempts — this leaves ``_active`` populated all the way
+    # through to the over-cap call.
+    await relay.on_otp_required("p1", attempt=1)
+    sent_id = fake_bot.sent[0].message_id
+    await relay.on_otp_required("p2", attempt=2)
+    await relay.on_otp_required("p3", attempt=3)
+    # At this point _active is still set, attempt 3 of 3.
+    assert relay._active is not None
+
+    edits_before_exhaustion = len(fake_bot.edits)
+    sends_before_exhaustion = len(fake_bot.sent)
+
+    # Now the over-cap call.
+    await relay.on_otp_required("p4", attempt=4)
+
+    # The loud 'Gave up' alert lands as a fresh send.
+    assert len(fake_bot.sent) == sends_before_exhaustion + 1
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+
+    # AND the dying prompt must have been closed with a one-shot edit
+    # naming the cycle as closed / pointing at the latest message.
+    new_edits = fake_bot.edits[edits_before_exhaustion:]
+    closing_edits = [
+        e for e in new_edits
+        if e.message_id == sent_id
+        and ("closed" in e.text.lower() or "see the latest" in e.text.lower())
+    ]
+    assert closing_edits, (
+        f"expected a closing edit on the dying prompt before the alert; "
+        f"got new edits: {[e.text for e in new_edits]}"
+    )
+    # And of course _active is cleared after exhaustion.
+    assert relay._active is None
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_no_close_edit_when_no_active_cycle(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """Symmetric guard: when ``_active`` is already None at the moment
+    exhaustion fires (the production path via on_otp_timeout clearing
+    _active between attempts), we don't emit a spurious edit against a
+    dead message_id. Just the loud 'Gave up' send."""
+    relay = _relay(fake_bot, fake_manager)
+    # Drive timeouts between attempts to clear _active each time.
+    for n in range(1, 4):
+        await relay.on_otp_required(f"p{n}", attempt=n)
+        await relay.on_otp_timeout()
+    assert relay._active is None
+    edits_before = len(fake_bot.edits)
+
+    await relay.on_otp_required("p4", attempt=4)
+
+    # Exactly one send (the 'gave up' alert); no NEW edits attributed
+    # to the exhaustion path (the timeout edits from the loop above
+    # still stand).
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+    assert len(fake_bot.edits) == edits_before, (
+        f"unexpected new edits on exhaustion when _active was None: "
+        f"{fake_bot.edits[edits_before:]}"
+    )

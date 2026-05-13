@@ -137,6 +137,24 @@ class AdminBotOTPRelay:
                 max_attempts=self._max_attempts,
             )
             return
+        # Important #2 (2026-05-13) — close any in-flight prompt BEFORE
+        # sending the fresh alert. On the fast over-cap path (no
+        # ``on_otp_timeout`` between attempts), ``_active`` is still
+        # pointing at a live "reply with the code" prompt — leaving it
+        # untouched means the operator sees two contradictory messages:
+        # the dying retry prompt and the loud "gave up" alert. Edit
+        # the dying prompt to a closing state so the inbox is
+        # unambiguous about which one is current.
+        if self._active is not None:
+            try:
+                await self._admin_bot.edit_message_text(
+                    self._active.chat_id,
+                    self._active.message_id,
+                    "⏰ This OTP cycle is closed — see the latest message below.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("otp_relay.exhaustion_edit_failed", error=str(exc))
+            self._active = None
         text = (
             f"❌ Gave up after {self._max_attempts} OTP attempts. "
             f"No reply received. Run /reconnect when you're ready and "
@@ -149,9 +167,6 @@ class AdminBotOTPRelay:
                 "otp_relay.exhaustion_alert_send_failed", error=str(exc),
             )
         self._exhausted_window = True
-        # Any lingering in-flight cycle is now meaningless — clear it
-        # so a future stray reply doesn't hit a dead message_id.
-        self._active = None
         log.info(
             "otp_relay.exhausted_alert_sent",
             attempt=attempt,
@@ -293,6 +308,16 @@ class AdminBotOTPRelay:
         )
 
     async def _bump_existing_cycle(self, *, prompt: str, attempt: int) -> None:
+        """Edit the active prompt in place for a soft re-prompt.
+
+        Cap enforcement is NOT done here — :meth:`on_otp_required` is
+        now the sole entry-point check (see commit 6dd5766 / Fix A,
+        2026-05-12). Before that, the cap also lived inside this method,
+        but the timeout path clears ``_active`` between attempts, which
+        meant a fresh prompt would route through ``_start_new_cycle``
+        and bypass the cap entirely. The entry-point check closes that
+        gap; the per-cycle copy in here became dead code and was
+        removed in Important #1 (2026-05-13)."""
         # Defensive guard — replaces a bare ``assert`` so behaviour
         # is identical under ``python -O``. ``_bump_existing_cycle`` is
         # only routed to from ``on_otp_required`` when ``_active`` is
@@ -303,16 +328,6 @@ class AdminBotOTPRelay:
             return
         self._active.attempt = attempt
         self._active.broker_prompt = prompt
-        if attempt > self._max_attempts:
-            await self._edit_with(
-                f"❌ OTP failed after {self._max_attempts} attempts. "
-                f"Reply /reconnect to retry from scratch.",
-            )
-            # Cycle becomes inert — refuse further replies until a
-            # fresh attempt=1 fires.
-            self._active = None
-            log.info("otp_relay.exhausted", attempts=attempt)
-            return
         text = self._format_retry_prompt(attempt=attempt)
         try:
             await self._admin_bot.edit_message_text(
