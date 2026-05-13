@@ -226,12 +226,20 @@ class TradeExecutor:
         signal: ParsedSignal,
         parser_config: ParserConfig,
         settings: GlobalSettings,
+        tg_message_id: int | None = None,
     ) -> TradeAttempt:
         """Run risk gate, place the trade, persist the attempt.
 
         Always returns a row — blocked attempts are stored with
         ``status="rejected"`` so the operator can see why nothing
         fired. Result tracking is fired off in a background task.
+
+        ``tg_message_id`` is the Phase 2 idempotency key (audit
+        2026-05-13, H1): the pipeline passes the Pyrogram message id
+        through so the persisted attempt carries enough context for
+        a future dispatch to recognise replay. ``None`` for sources
+        that don't have one (parser test endpoint, auto-recovery's
+        synthetic re-fire, batch aggregator passes).
         """
         async with AsyncSessionLocal() as session:
             decision = await evaluate(
@@ -244,7 +252,9 @@ class TradeExecutor:
                 broker_connected=self._manager.connected,
             )
 
-        attempt = self._build_attempt(signal, parser_config, decision)
+        attempt = self._build_attempt(
+            signal, parser_config, decision, tg_message_id=tg_message_id,
+        )
         async with AsyncSessionLocal() as session:
             attempt = await insert_attempt(session, attempt)
 
@@ -443,6 +453,8 @@ class TradeExecutor:
         signal: ParsedSignal,
         parser_config: ParserConfig,
         decision: RiskDecision,
+        *,
+        tg_message_id: int | None = None,
     ) -> TradeAttempt:
         return TradeAttempt(
             chat_id=parser_config.chat_id,
@@ -457,6 +469,7 @@ class TradeExecutor:
             status="pending" if decision.allowed else "rejected",
             error=None if decision.allowed else decision.reason,
             raw_text=signal.raw_text,
+            tg_message_id=tg_message_id,
         )
 
     async def _place(

@@ -119,6 +119,13 @@ class IncomingMessage:
     text: str
     media_kind: str         # "text" | "caption" | "sticker"
     received_at: datetime
+    # Phase 2 idempotency (audit 2026-05-13, H1). Telegram's per-chat
+    # ``msg.id`` — propagated end-to-end so the pipeline can dedup
+    # Pyrogram replays via the persisted ``(chat_id, tg_message_id)``
+    # key on ``TradeAttempt``. ``None`` when the source genuinely
+    # doesn't have one (very old Pyrogram message shapes, manual
+    # synthetic replays from tests).
+    message_id: int | None = None
 
 
 def _mask_phone(phone: str) -> str:
@@ -970,6 +977,15 @@ class TelegramManager:
             text_preview=text[:80],
         )
 
+        # Phase 2 (audit 2026-05-13, H1): plumb the per-chat Pyrogram
+        # message id through so the pipeline can dedup replays. Real
+        # Pyrogram exposes this as ``msg.id``; older shapes used
+        # ``message_id``. Fall back to ``None`` for synthetic test
+        # messages that don't set either — dedup just no-ops on those.
+        message_id: int | None = getattr(msg, "id", None)
+        if message_id is None:
+            legacy = getattr(msg, "message_id", None)
+            message_id = int(legacy) if legacy is not None else None
         try:
             await self._on_message(
                 IncomingMessage(
@@ -978,6 +994,7 @@ class TelegramManager:
                     text=text,
                     media_kind=kind,
                     received_at=date,
+                    message_id=message_id,
                 ),
             )
         except Exception as exc:  # pragma: no cover - consumer-side failure

@@ -31,6 +31,7 @@ from autotrader.models.parser_config import (
     list_configs as _list_configs,
 )
 from autotrader.models.settings import GlobalSettings
+from autotrader.models.trade_attempt import find_recent_by_tg_message_id
 from autotrader.models.watched_channel import WatchedChannel
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
@@ -328,6 +329,49 @@ class Pipeline:
                     chat_id=message.chat_id,
                 )
                 return
+            # Phase 2 idempotency gate (audit 2026-05-13, H1). Run
+            # before parser build so a Pyrogram replay never wastes
+            # CPU on parsing or hits the executor. Keys on the
+            # persisted ``(chat_id, tg_message_id)`` of any
+            # ``TradeAttempt`` from the last 10 min — including
+            # ``rejected`` ones, because "we already processed this
+            # message" is the right invariant regardless of outcome.
+            #
+            # No ``message_id`` (synthetic test replay, batch passes)
+            # falls through; the Phase 0 fingerprint warning above
+            # already flagged any obvious replay shape.
+            message_id = getattr(message, "message_id", None)
+            if message_id is not None:
+                existing = await find_recent_by_tg_message_id(
+                    session,
+                    chat_id=message.chat_id,
+                    tg_message_id=int(message_id),
+                )
+                if existing is not None:
+                    self._record_decision(
+                        {
+                            "chat_id": message.chat_id,
+                            "parser_config_id": existing.parser_config_id,
+                            "parser_name": None,
+                            "parser_type": None,
+                            "outcome": "duplicate",
+                            "reasons": [
+                                f"tg_message_id={message_id} already "
+                                f"processed as TradeAttempt #{existing.id} "
+                                f"(status={existing.status})",
+                            ],
+                            "signals": 0,
+                            "text_preview": (message.text or "")[:120],
+                        },
+                    )
+                    log.warning(
+                        "pipeline.duplicate_blocked",
+                        chat_id=message.chat_id,
+                        tg_message_id=message_id,
+                        prior_attempt_id=existing.id,
+                        prior_status=existing.status,
+                    )
+                    return
             configs = await self._enabled_configs_for(session, message.chat_id)
             settings = await self._get_settings(session)
 
@@ -467,10 +511,18 @@ class Pipeline:
                 # flip mid-batch takes effect immediately.
                 async with AsyncSessionLocal() as session:
                     fresh = await self._get_settings(session)
+                # Phase 2 (audit 2026-05-13, H1): pass the source
+                # Pyrogram message id so the persisted TradeAttempt is
+                # findable by the next dispatch's dedup gate. Batch
+                # parsers fan one message out to N signals — every row
+                # carries the SAME ``tg_message_id`` (correct: they
+                # all derive from one inbound message).
+                tg_message_id = getattr(message, "message_id", None)
                 await self._executor.submit(
                     signal=sig,
                     parser_config=cached.config_row,
                     settings=fresh,
+                    tg_message_id=int(tg_message_id) if tg_message_id is not None else None,
                 )
             # Priority orders the walk, but every matching enabled
             # parser fires its own trade — they're independent
