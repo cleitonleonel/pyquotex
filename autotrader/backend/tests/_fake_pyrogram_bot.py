@@ -29,12 +29,22 @@ class FakeUser:
     id: int
     is_bot: bool = False
     first_name: str = "Tester"
+    # See note on ``FakeChat.username`` — pyrofork's
+    # ``MessageHandler.check_if_has_matching_listener`` also reads
+    # ``from_user.username`` on every incoming message.
+    username: str | None = None
 
 
 @dataclass
 class FakeChat:
     id: int
     type: str = "private"
+    # Pyrofork's ``MessageHandler.check_if_has_matching_listener`` reads
+    # ``chat.username`` (message_handler.py:67) before dispatching — bots
+    # in private chats never have one, but the attribute access still
+    # has to succeed. Default ``None`` matches what real Pyrogram returns
+    # for private peers without a public @-handle.
+    username: str | None = None
 
 
 @dataclass
