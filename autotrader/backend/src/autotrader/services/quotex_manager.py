@@ -905,16 +905,34 @@ class QuotexManager:
         # We clear BOTH ``_stopping`` and ``policy.enabled`` because
         # ``_halt_for_otp_exhaustion`` flips both (see the matching
         # halt path for the rationale).
-        try:
-            supervisor = self._client.api.reconnect_supervisor  # type: ignore[union-attr]
-            if supervisor is not None:
+        #
+        # Cold-start path: when /reconnect runs before any successful
+        # connect has built a client (e.g. fresh boot, or after a halt
+        # that tore the client down), ``_client`` is ``None`` and there
+        # is no supervisor to re-enable. That's an EXPECTED state — log
+        # it at info with a structured reason, not a warning, so the
+        # next disconnect investigation isn't distracted by a phantom
+        # 'failed to re-enable' line.
+        client = self._client
+        api = getattr(client, "api", None) if client is not None else None
+        supervisor = getattr(api, "reconnect_supervisor", None) if api is not None else None
+        if supervisor is None:
+            log.info(
+                "broker.otp.supervisor_reenable_skipped",
+                reason="no_client",
+            )
+        else:
+            try:
                 supervisor._stopping = False
                 supervisor.policy.enabled = True
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "broker.otp.supervisor_reenable_skipped",
-                error=str(exc),
-            )
+            except Exception as exc:  # noqa: BLE001
+                # Genuinely unexpected — the supervisor existed but
+                # we couldn't flip its flags. Keep this as a warning
+                # so it surfaces in alerting.
+                log.warning(
+                    "broker.otp.supervisor_reenable_failed",
+                    error=str(exc),
+                )
         # Drop the manual-recovery state back to idle so begin_connect
         # can transition cleanly into connecting on the operator's
         # next /reconnect step.

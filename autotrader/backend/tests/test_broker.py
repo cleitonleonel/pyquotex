@@ -988,9 +988,15 @@ async def test_manager_reset_for_manual_reconnect_clears_state(
 @pytest.mark.asyncio
 async def test_manager_reset_for_manual_reconnect_safe_when_no_client(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """`_client` may be None (first-ever connect, or post-disconnect)
-    — `reset_for_manual_reconnect` must not crash."""
+    — `reset_for_manual_reconnect` must not crash AND must NOT log a
+    warning (cold-start is an expected state, not an alerting event).
+
+    Locks the production fix where the previous code raised AttributeError
+    inside a try/except + warning log on every cold-start /reconnect."""
+    import logging  # noqa: PLC0415
     from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
 
     monkeypatch.setattr(
@@ -1002,9 +1008,22 @@ async def test_manager_reset_for_manual_reconnect_safe_when_no_client(
     mgr._consecutive_otp_failures = 3
     # `_client` is None by default — no setattr needed.
 
+    caplog.set_level(logging.INFO, logger="autotrader.services.quotex_manager")
     # Must not raise.
     mgr.reset_for_manual_reconnect()
     assert mgr._consecutive_otp_failures == 0
+
+    # No warning-level events tied to the supervisor-reenable path —
+    # cold-start should be a clean info-only flow.
+    warning_events = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING
+        and r.name == "autotrader.services.quotex_manager"
+    ]
+    assert warning_events == [], (
+        f"unexpected warnings on cold-start /reconnect: "
+        f"{[r.getMessage() for r in warning_events]}"
+    )
 
 
 def test_persisted_ssid_skips_otp_on_second_connect(client: TestClient) -> None:
