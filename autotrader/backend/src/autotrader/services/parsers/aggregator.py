@@ -37,6 +37,16 @@ from autotrader.services.parsers.base import (
 log = structlog.get_logger(__name__)
 
 _DEFAULT_MAX_BUFFERS: Final = 1024  # bound memory: keys evicted LRU-style
+# Phase 3b age cap (audit 2026-05-13, H3): absolute upper bound on
+# buffer lifetime regardless of how chatty the channel is. The
+# Aggregator's per-message ``expires_at = now + window`` extends the
+# sliding window indefinitely under a chatty channel — a late, unrelated
+# message can then re-trigger the inner parser against ageing context
+# and emit a corrupted signal. Default 3× the configured window is
+# generous: legitimate two- and three-part signals fit comfortably
+# inside ``window_seconds``, so 3× covers retries and Telegram
+# delivery jitter without holding onto material that's plainly stale.
+_DEFAULT_MAX_AGE_MULTIPLIER: Final = 3
 
 
 @dataclass(slots=True)
@@ -63,12 +73,22 @@ class Aggregator:
         window_seconds: int,
         max_buffers: int = _DEFAULT_MAX_BUFFERS,
         max_buffered_messages: int = 16,
+        max_age_multiplier: int = _DEFAULT_MAX_AGE_MULTIPLIER,
     ) -> None:
         if window_seconds <= 0:
             msg = "window_seconds must be positive"
             raise ValueError(msg)
+        if max_age_multiplier < 1:
+            msg = "max_age_multiplier must be >= 1"
+            raise ValueError(msg)
         self._inner = inner
         self._window = timedelta(seconds=window_seconds)
+        # Phase 3b (audit 2026-05-13, H3): absolute lifetime cap. A
+        # buffer can have its ``expires_at`` extended by chatter, but
+        # never past ``first_seen_at + _max_total_age``. When the cap
+        # is hit the buffer is dropped at the next ``feed`` and the
+        # new message starts a fresh buffer.
+        self._max_total_age = self._window * max_age_multiplier
         self._max_buffers = max_buffers
         self._max_msgs = max_buffered_messages
         # OrderedDict so we can evict in insertion order when the cap
@@ -87,10 +107,33 @@ class Aggregator:
             * :class:`ParseError`  — nothing emitted yet (still buffering).
         """
         now = message.received_at if message.received_at else datetime.now(UTC)
-        self._evict_expired(now)
-
+        # Phase 3b age-cap (audit 2026-05-13, H3): check the absolute
+        # cap on THIS chat's buffer BEFORE the general expiry sweep,
+        # so we can emit the distinctive ``aggregator.buffer_aged_out``
+        # log line (vs the silent natural expiry). Once the cap is
+        # crossed the buffer is dropped and the new message starts a
+        # fresh window — preventing a chatty channel from holding
+        # stale context indefinitely. ``_evict_expired`` below then
+        # cleans up any other stale per-sender buffers.
         key = (message.chat_id, message.sender_id)
         buf = self._buffers.get(key)
+        if buf is not None and (now - buf.first_seen_at) >= self._max_total_age:
+            log.warning(
+                "aggregator.buffer_aged_out",
+                chat_id=message.chat_id,
+                sender_id=message.sender_id,
+                age_seconds=round((now - buf.first_seen_at).total_seconds(), 3),
+                max_age_seconds=int(self._max_total_age.total_seconds()),
+                buffered_messages=len(buf.messages),
+            )
+            del self._buffers[key]
+            buf = None
+        self._evict_expired(now)
+        # ``_evict_expired`` may have removed this key too if its
+        # ``expires_at`` clamp landed before ``now``. Re-resolve so
+        # we open a fresh buffer for the current message.
+        if buf is not None and key not in self._buffers:
+            buf = None
         if buf is None:
             buf = _Buffer(
                 messages=[],
@@ -105,7 +148,7 @@ class Aggregator:
             # than the configured window because earlier messages kept
             # pushing ``expires_at`` forward. Logged at WARNING so a
             # chatty channel surfaces during the observation window
-            # — Phase 3b will cap this at ``first_seen_at + window``.
+            # — Phase 3b's hard cap above is the eventual gate.
             age = now - buf.first_seen_at
             if age >= self._window:
                 log.warning(
@@ -118,7 +161,13 @@ class Aggregator:
                 )
 
         buf.messages.append(message)
-        buf.expires_at = now + self._window
+        # Phase 3b: extend ``expires_at`` but never past the absolute
+        # cap. After ``first_seen_at + _max_total_age`` the buffer
+        # is dead — the next ``feed`` for this key starts fresh
+        # (handled above), and ``_evict_expired`` will sweep dead
+        # buffers between feeds too.
+        absolute_deadline = buf.first_seen_at + self._max_total_age
+        buf.expires_at = min(now + self._window, absolute_deadline)
         if len(buf.messages) > self._max_msgs:
             # Drop the oldest to keep the buffer bounded.
             buf.messages = buf.messages[-self._max_msgs :]
