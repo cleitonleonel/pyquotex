@@ -765,12 +765,17 @@ def build_message_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
     """
 
     async def _hook(_client: Any, message: Any) -> None:
-        # Reply-to-message forwarding for the OTP relay. Must run
-        # BEFORE the slash-command check so a digit-only reply
-        # (which doesn't start with '/') still reaches the relay.
+        # OTP-submission forwarding. Must run BEFORE the slash-command
+        # check so a digit-only reply (which doesn't start with '/')
+        # still reaches the relay. We use ``claims_submission`` rather
+        # than ``owns_reply`` because most operators on mobile just
+        # type the code as a fresh message instead of using Telegram's
+        # Reply gesture — production observed at 2026-05-13T05:08:35Z
+        # where an OTP reply "463031" was silently dropped because it
+        # wasn't a reply-to-message.
         from autotrader.services.admin_bot_state import get_otp_relay  # noqa: PLC0415
         relay = get_otp_relay()
-        if relay is not None and relay.owns_reply(message):
+        if relay is not None and relay.claims_submission(message):
             # Same auth model as commands: only the bound admin.
             sender_id = int(getattr(message.from_user, "id", 0))
             bound = bot.status().bound_user_id

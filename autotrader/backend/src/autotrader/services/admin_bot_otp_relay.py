@@ -182,9 +182,14 @@ class AdminBotOTPRelay:
         self._exhausted_window = False
 
     def owns_reply(self, message: Any) -> bool:
-        """Returns True iff this message is a reply targeting the
-        relay's active OTP message. Cheap-and-side-effect-free so the
-        commands hook can call it on every inbound message.
+        """Strict predicate: True iff ``message`` is a literal reply-to
+        targeting our active OTP prompt's ``message_id``.
+
+        Side-effect-free. Kept for tests + as the strict branch inside
+        :meth:`claims_submission`. New routing code should call
+        :meth:`claims_submission` instead — it ALSO accepts plain
+        digit-only messages, which is what most operators actually send
+        on mobile when they forget to use Telegram's Reply gesture.
         """
         if self._active is None:
             return False
@@ -194,13 +199,46 @@ class AdminBotOTPRelay:
         reply_to_id = getattr(reply_to, "id", None)
         return reply_to_id == self._active.message_id
 
+    def claims_submission(self, message: Any) -> bool:
+        """Broader predicate: True iff this message looks like an OTP
+        submission for our active cycle.
+
+        Routing rules:
+
+        - If ``message.reply_to_message`` is present, the operator made
+          an explicit Reply choice. Honor it strictly — only the active
+          message_id wins (delegates to :meth:`owns_reply`). A reply to
+          the wrong target is a deliberate signal we must NOT override
+          with broader text matching.
+        - Otherwise (no reply gesture): accept any non-slash-command
+          text containing a 4–8 digit run. This is the production fix
+          for operators on mobile who just type the code without using
+          Telegram's Reply gesture (observed silent-drop, 2026-05-13).
+
+        Sender-id auth is the hook's responsibility — this stays
+        side-effect-free. Slash-commands are excluded so ``/reconnect``
+        typed mid-cycle still routes to its handler.
+        """
+        if self._active is None:
+            return False
+        reply_to = getattr(message, "reply_to_message", None)
+        if reply_to is not None:
+            # Explicit reply gesture: be strict.
+            return self.owns_reply(message)
+        # No reply gesture: permissive digit fallback.
+        text = (getattr(message, "text", "") or "").strip()
+        if not text or text.startswith("/"):
+            return False
+        return bool(_OTP_DIGIT_PATTERN.search(text))
+
     async def handle_reply(self, message: Any) -> None:
-        """Operator replied to the active OTP message. Extract digits
-        and submit. Idempotent for stale/no-digit replies — only the
-        terminal call into ``manager.submit_otp`` advances the state."""
+        """Operator submitted an OTP for the active cycle. Extracts
+        digits and submits. Idempotent for stale/no-digit messages —
+        only the terminal call into ``manager.submit_otp`` advances
+        the state."""
         if self._active is None:
             return
-        if not self.owns_reply(message):
+        if not self.claims_submission(message):
             log.info(
                 "otp_relay.reply.stale_target",
                 got=getattr(getattr(message, "reply_to_message", None), "id", None),
@@ -350,8 +388,8 @@ class AdminBotOTPRelay:
 
     def _format_initial_prompt(self) -> str:
         return (
-            f"🔐 Broker needs OTP — reply to this message with the "
-            f"code we just emailed you ({_OTP_WINDOW_SECONDS}s)."
+            f"🔐 Broker needs OTP — send the code we just emailed you "
+            f"(or reply to this message). ({_OTP_WINDOW_SECONDS}s)."
             f"{self._format_stale_suffix()}"
         )
 

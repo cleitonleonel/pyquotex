@@ -195,6 +195,55 @@ async def test_owns_reply_returns_true_only_for_active_message_id(
 
 
 @pytest.mark.asyncio
+async def test_claims_submission_accepts_plain_digit_text_during_active_cycle(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """REGRESSION: production observed 2026-05-13 — operator typed
+    "463031" as a plain message (no Reply gesture), the relay dropped
+    it because ``owns_reply`` requires a literal reply-to-message, and
+    180s later the OTP timed out. ``claims_submission`` is the wider
+    predicate: it accepts plain digit text from anyone (sender auth
+    happens at the hook) while a cycle is active."""
+    relay = _relay(fake_bot, fake_manager)
+    # No active cycle → never claims.
+    plain = _FakeMessage(text="463031", reply_to_message=None, from_user=_FakeFromUser(id=42))
+    assert relay.claims_submission(plain) is False
+
+    await relay.on_otp_required("p", attempt=1)
+    # Active cycle + plain digits → claims.
+    assert relay.claims_submission(plain) is True
+    # Active cycle + slash-command → does NOT claim (must route to commands).
+    cmd = _FakeMessage(text="/reconnect", reply_to_message=None, from_user=_FakeFromUser(id=42))
+    assert relay.claims_submission(cmd) is False
+    # Active cycle + non-digit chat → does NOT claim.
+    chatter = _FakeMessage(text="hello bot", reply_to_message=None, from_user=_FakeFromUser(id=42))
+    assert relay.claims_submission(chatter) is False
+    # Active cycle + literal reply-to-message still claims (strict branch).
+    active_id = fake_bot.sent[0].message_id
+    assert relay.claims_submission(_reply("123456", target_id=active_id)) is True
+
+
+@pytest.mark.asyncio
+async def test_handle_reply_submits_plain_digit_text(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """End-to-end: a plain digit message during an active cycle
+    forwards to ``manager.submit_otp`` (not just a stale_target log).
+    Locks the production fix path."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+
+    plain = _FakeMessage(
+        text="463031", reply_to_message=None, from_user=_FakeFromUser(id=42),
+    )
+    await relay.handle_reply(plain)
+
+    assert fake_manager.submitted == ["463031"], (
+        "expected plain digit text to be forwarded to manager.submit_otp"
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_reply_extracts_digits_and_submits(
     fake_bot: FakeAdminBot, fake_manager: FakeManager,
 ) -> None:
