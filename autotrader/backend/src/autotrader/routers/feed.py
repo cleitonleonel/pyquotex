@@ -14,11 +14,11 @@ gates entry — invalid / expired tokens get a clean 1008 close.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
 from autotrader.auth import _decode  # type: ignore[attr-defined]
 from autotrader.dependencies import EventBusDep
@@ -47,7 +47,14 @@ async def feed_ws(
         return
     try:
         _decode(token)
-    except Exception as exc:
+    except (HTTPException, InvalidToken) as exc:
+        # Phase 1 (audit 2026-05-13, M4): narrow the catch to the
+        # auth-rejection class so unexpected exceptions surface as a
+        # framework-level ``log.exception`` instead of being silently
+        # swallowed by a bare ``except Exception``. Auth.py's
+        # ``_decode`` only raises ``HTTPException`` today; we include
+        # the lower-level Fernet ``InvalidToken`` for defence in
+        # depth in case the call surface ever bypasses ``_decode``.
         log.warning(
             "feed.ws.auth_rejected",
             reason=type(exc).__name__,
@@ -61,7 +68,6 @@ async def feed_ws(
     # "live" before the first event arrives.
     await websocket.send_json({"type": "feed.ready", "payload": {}})
 
-    consumer_task: asyncio.Task[None] | None = None
     try:
         async for event in bus.subscribe():
             payload: dict[str, Any] = {
@@ -71,6 +77,3 @@ async def feed_ws(
             await websocket.send_json(payload)
     except WebSocketDisconnect:
         return
-    finally:
-        if consumer_task is not None and not consumer_task.done():
-            consumer_task.cancel()

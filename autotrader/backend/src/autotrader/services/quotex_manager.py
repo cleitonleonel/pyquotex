@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -250,12 +251,24 @@ class QuotexManager:
         )
 
     def status(self) -> BrokerStatus:
+        # Phase 1 (audit 2026-05-13, L7): the OTP prompt round-trips
+        # broker-controlled text to the dashboard. Today the React app
+        # renders it inside a plain text node, so an unescaped angle
+        # bracket is harmless — but ``html.escape`` is a cheap defence
+        # against any future consumer (HTML email, raw-HTML preview,
+        # admin-bot Telegram digest) that interpolates the value into
+        # an HTML context. Escape at the boundary so downstream code
+        # never has to think about it.
+        if self._state == "awaiting_otp" and self._otp_prompt is not None:
+            otp_prompt = html.escape(self._otp_prompt)
+        else:
+            otp_prompt = None
         return BrokerStatus(
             configured=self.configured,
             connected=self.connected,
             state=self._state,
             awaiting_otp=self._state == "awaiting_otp",
-            otp_prompt=self._otp_prompt if self._state == "awaiting_otp" else None,
+            otp_prompt=otp_prompt,
             email_masked=_mask_email(self._email) if self._email else None,
             account_mode=self._account_mode,
             connected_at=self._connected_at,

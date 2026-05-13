@@ -143,6 +143,15 @@ class TelegramManager:
     # call returns). A 5 s round-trip means MTProto is wedged.
     _SLOW_LOGIN_THRESHOLD_SECONDS: float = 5.0
 
+    # Phase 1 hard timeout (audit 2026-05-13, M1): each MTProto call
+    # in the login flow is wrapped in ``asyncio.wait_for(...)`` against
+    # this deadline so a hung Telegram peer turns into a bounded
+    # ``TelegramManagerError`` instead of stalling the manager lock
+    # forever. 20 s comfortably covers a healthy round-trip (usually
+    # < 2 s) plus DC migration. The HTTP layer wires this up too —
+    # operators see "login timed out, retry?" in the dashboard.
+    _LOGIN_TIMEOUT_SECONDS: float = 20.0
+
     def __init__(self, *, event_bus: Any | None = None) -> None:
         self._event_bus = event_bus
         self._client: Client | None = None
@@ -311,18 +320,23 @@ class TelegramManager:
 
             client = self._new_client()
             try:
-                # Phase 0 instrumentation (audit 2026-05-13, M1): MTProto
-                # ``connect`` + ``send_code`` round-trip with no timeout
-                # today, so a hung Telegram peer wedges this coroutine
-                # silently. Time both and warn when the wall clock
-                # crosses ``_SLOW_LOGIN_THRESHOLD_SECONDS`` even if the
-                # call ultimately succeeds. Phase 1 will wrap both in
-                # ``asyncio.wait_for`` so the hang becomes a bounded
-                # ``TelegramManagerError`` instead of a silent stall.
+                # Phase 1 (audit 2026-05-13, M1): hard timeout on each
+                # MTProto call. Without ``asyncio.wait_for`` a hung
+                # Telegram peer wedges this coroutine silently while
+                # holding ``self._lock`` — the operator's only signal
+                # is the dashboard "connecting…" spinner sitting there
+                # forever. Phase 0 added the soft-warning timer below;
+                # this is the bounded-failure version.
                 _t0 = time.monotonic()
-                await client.connect()
+                await asyncio.wait_for(
+                    client.connect(),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
                 _t_connect = time.monotonic() - _t0
-                sent = await client.send_code(phone)
+                sent = await asyncio.wait_for(
+                    client.send_code(phone),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
                 _t_total = time.monotonic() - _t0
                 if _t_total >= self._SLOW_LOGIN_THRESHOLD_SECONDS:
                     log.warning(
@@ -331,6 +345,20 @@ class TelegramManager:
                         connect_seconds=round(_t_connect, 3),
                         phone_masked=_mask_phone(phone),
                     )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                log.warning(
+                    "telegram.send_code.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                    phone_masked=_mask_phone(phone),
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except PhoneNumberInvalid as exc:
                 self._state = "error"
                 self._last_error = "invalid phone number"
@@ -367,11 +395,30 @@ class TelegramManager:
             assert self._phone_code_hash is not None
 
             try:
-                await self._client.sign_in(
-                    self._phone,
-                    self._phone_code_hash,
-                    code,
+                # Phase 1 (audit 2026-05-13, M1): same hard-timeout
+                # rationale as ``begin_login``. Wraps the sign-in
+                # round-trip; the per-exception handling below stays
+                # intact so PhoneCodeInvalid / SessionPasswordNeeded
+                # still flow through their existing branches.
+                await asyncio.wait_for(
+                    self._client.sign_in(
+                        self._phone,
+                        self._phone_code_hash,
+                        code,
+                    ),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
                 )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                log.warning(
+                    "telegram.sign_in.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except SessionPasswordNeeded:
                 self._state = "awaiting_password"
                 log.info("telegram.sign_in.password_needed")
@@ -400,7 +447,22 @@ class TelegramManager:
             assert self._client is not None
 
             try:
-                await self._client.check_password(password)
+                # Phase 1 (audit 2026-05-13, M1): hard timeout.
+                await asyncio.wait_for(
+                    self._client.check_password(password),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                log.warning(
+                    "telegram.check_password.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except PasswordHashInvalid as exc:
                 self._last_error = "invalid 2FA password"
                 raise TelegramManagerError(self._last_error) from exc
