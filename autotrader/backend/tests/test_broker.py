@@ -46,8 +46,30 @@ class _FakeReconnectStats:
 
 
 @dataclass
+class _FakeReconnectPolicy:
+    """Mirrors the bits of :class:`pyquotex.utils.reconnect.ReconnectPolicy`
+    the manager touches in ``_halt_for_otp_exhaustion`` and
+    ``reset_for_manual_reconnect``. We only need ``enabled`` to observe
+    the toggling — the real policy carries timing fields that aren't
+    relevant for the halt assertions."""
+
+    enabled: bool = True
+
+
+@dataclass
 class _FakeReconnectSupervisor:
+    """Stand-in for :class:`pyquotex.utils.reconnect.ReconnectSupervisor`.
+
+    Exposes ``stats``, ``policy``, and ``_stopping`` because the
+    manager's halt path now flips ``_stopping`` AND ``policy.enabled``
+    to break out of pyquotex's inner ``_reconnect_with_backoff`` loop
+    on its very next iteration. Setting only ``policy.enabled`` left
+    the inner loop swallowing exceptions forever — see Critical #1 in
+    the 2026-05-13 reviewer follow-up."""
+
     stats: _FakeReconnectStats = field(default_factory=_FakeReconnectStats)
+    policy: _FakeReconnectPolicy = field(default_factory=_FakeReconnectPolicy)
+    _stopping: bool = False
 
 
 class FakeQuotex:
@@ -1438,3 +1460,188 @@ async def test_executor_no_ticker_suggestion_when_alias_target_missing_from_cata
 
     assert emitted is False
     assert captured == []
+
+
+# ---------------------------------------------------------------------------
+# Reviewer follow-up (2026-05-13) — Critical #1 + #2
+# ---------------------------------------------------------------------------
+#
+# Critical #1: in commit 027663e the halt path only set
+# ``policy.enabled = False``. That's a no-op on the running supervisor task
+# because the inner ``_reconnect_with_backoff`` loop in pyquotex only
+# checks ``_stopping``, not ``policy.enabled``, and it catches every
+# exception from ``_attempt_reconnect`` — so our ``QuotexManagerError``
+# never escaped the loop and the supervisor kept generating PIN emails.
+#
+# Critical #2: a fast ``_do_connect`` ``except Exception`` clobbered the
+# manager state to ``error`` even when ``_halt_for_otp_exhaustion`` had
+# just set it to ``awaiting_manual_recovery``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manager_halt_actually_stops_pyquotex_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION (Critical #1, 2026-05-13): the halt path must flip
+    ``supervisor._stopping = True`` in addition to ``policy.enabled =
+    False``. Without ``_stopping``, the supervisor's inner backoff loop
+    (in :func:`pyquotex.utils.reconnect.ReconnectSupervisor._reconnect_with_backoff`)
+    will swallow our ``QuotexManagerError`` via its broad ``except`` and
+    retry forever — regenerating PIN emails on every iteration."""
+    from autotrader.config import settings  # noqa: PLC0415
+    from autotrader.services.quotex_manager import (  # noqa: PLC0415
+        QuotexManager,
+        QuotexManagerError,
+    )
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    mgr = QuotexManager(root_path=".")
+    relay = _FakeOTPRelay()
+    mgr.set_otp_relay(relay)
+
+    # Use the REAL fake supervisor so this test fails before the fix
+    # (the previous SimpleNamespace-based test never modelled
+    # ``_stopping``, so it couldn't catch the bug).
+    fake_client = FakeQuotex(email="u@v.com", password="pw")
+    fake_client.api.reconnect_supervisor = _FakeReconnectSupervisor()
+    mgr._client = fake_client  # type: ignore[assignment]
+    supervisor = fake_client.api.reconnect_supervisor
+
+    cap = settings.otp_max_attempts
+    # Pre-seed as if `cap` prior timeouts had bumped the counter — the
+    # next callback invocation will be over the cap.
+    mgr._consecutive_otp_failures = cap
+
+    with pytest.raises(QuotexManagerError, match="otp.*exhausted|exhausted.*otp"):
+        await mgr._on_otp_callback("over-cap prompt")
+
+    # Critical #1: BOTH must be set so the supervisor actually exits.
+    assert supervisor._stopping is True, (
+        "manager did not flip supervisor._stopping=True — pyquotex's "
+        "_reconnect_with_backoff loop will keep retrying forever"
+    )
+    assert supervisor.policy.enabled is False, (
+        "manager did not flip policy.enabled=False (belt-and-braces for "
+        "the outer _run loop)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_preserves_awaiting_manual_recovery_through_do_connect_except(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION (Critical #2, 2026-05-13): when ``_on_otp_callback``
+    raises ``QuotexManagerError("otp_attempts_exhausted")`` from inside
+    ``client.connect()``, the ``except Exception`` in ``_do_connect``
+    must NOT overwrite the ``awaiting_manual_recovery`` state that
+    ``_halt_for_otp_exhaustion`` just set. The original commit 027663e
+    clobbered it to ``error``, sending the manager back to the
+    "transient blip" UI even though the supervisor was permanently
+    halted."""
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    FakeQuotex.behavior = "needs_otp"
+
+    mgr = QuotexManager(root_path=".")
+    relay = _FakeOTPRelay()
+    mgr.set_otp_relay(relay)
+    mgr.set_credentials("u@v.com", "pw", "PRACTICE")
+
+    # Pre-seed the failure counter to the cap so the FIRST callback
+    # invocation from inside FakeQuotex.connect() is already over-cap.
+    from autotrader.config import settings  # noqa: PLC0415
+    mgr._consecutive_otp_failures = settings.otp_max_attempts
+
+    mgr.begin_connect()
+    # Wait for the connect task to settle (it will raise + the except
+    # branch runs).
+    task = mgr._connect_task
+    assert task is not None
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    # The state must NOT be 'error' — the halt path set it to
+    # awaiting_manual_recovery and the except block must preserve it.
+    assert mgr.status().state == "awaiting_manual_recovery", (
+        f"_do_connect's except clobbered awaiting_manual_recovery state; "
+        f"got state={mgr.status().state!r} last_error={mgr._last_error!r}"
+    )
+    # And the operator-facing error message stays the exhausted-cap one,
+    # not the QuotexManagerError repr from the except branch.
+    assert mgr._last_error and "exhausted" in mgr._last_error.lower(), (
+        f"expected last_error to mention exhausted; got {mgr._last_error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_otp_callback_rechecks_cap_after_relay_await(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Important #3 (2026-05-13): if the operator runs /reconnect during
+    the relay's Telegram round-trip (which resets
+    ``_consecutive_otp_failures`` to 0), the over-cap path must NOT
+    raise — it must fall through to the normal future-await so the
+    operator-supplied code reaches the broker.
+
+    Race window: ``_on_otp_callback`` reads ``_consecutive_otp_failures``,
+    awaits ``relay.on_otp_required(...)``, then raises. During the await
+    a /reconnect coroutine may have flipped the counter back to 0. We
+    re-check immediately before the raise.
+    """
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        "autotrader.services.quotex_manager.Quotex",
+        FakeQuotex,
+    )
+
+    mgr = QuotexManager(root_path=".")
+
+    # A relay that resets the manager's counter while inside on_otp_required.
+    # Models the race: /reconnect ran during the Telegram round-trip.
+    class _ResettingRelay:
+        async def on_otp_required(self, prompt: str, attempt: int) -> None:
+            # Simulate the operator's /reconnect command running while
+            # we're inside the relay await.
+            mgr._consecutive_otp_failures = 0
+
+        async def on_otp_resolved(self) -> None:
+            return None
+
+        async def on_otp_timeout(self) -> None:
+            return None
+
+    mgr.set_otp_relay(_ResettingRelay())
+
+    from autotrader.config import settings  # noqa: PLC0415
+    cap = settings.otp_max_attempts
+    mgr._consecutive_otp_failures = cap  # over-cap on entry
+
+    # Drive the callback in a task so we can resolve the future from
+    # outside (modelling submit_otp).
+    cb_task = asyncio.create_task(mgr._on_otp_callback("racy prompt"))
+    # Wait until the callback parks on the future (proves it took the
+    # under-cap fall-through and didn't raise).
+    for _ in range(50):
+        if mgr._otp_future is not None and not mgr._otp_future.done():
+            break
+        await asyncio.sleep(0)
+    assert mgr._otp_future is not None and not mgr._otp_future.done(), (
+        "callback raised instead of re-checking cap after the relay "
+        "await — the race window is still open"
+    )
+
+    # Resolve so the task doesn't leak.
+    mgr._otp_future.set_result("123456")
+    result = await asyncio.wait_for(cb_task, timeout=1.0)
+    assert result == "123456"

@@ -377,8 +377,22 @@ class QuotexManager:
                 log.info("broker.connect.cancelled")
                 raise
             except Exception as exc:
-                self._state = "error"
-                self._last_error = f"{type(exc).__name__}: {exc}"
+                # Preserve the ``awaiting_manual_recovery`` state set by
+                # ``_halt_for_otp_exhaustion`` — when the OTP cap is
+                # exhausted, ``_on_otp_callback`` raises
+                # ``QuotexManagerError("otp_attempts_exhausted")`` from
+                # inside ``client.connect()``. That exception propagates
+                # up to here, but the manager state machine has ALREADY
+                # been advanced to ``awaiting_manual_recovery`` with a
+                # human-readable ``_last_error``. Overwriting both back
+                # to ``error`` here would tell the operator they hit a
+                # transient blip and a retry might fix it — which is the
+                # exact opposite of true: the supervisor is permanently
+                # halted until /reconnect is run. See Critical #2 in the
+                # 2026-05-13 reviewer follow-up.
+                if self._state != "awaiting_manual_recovery":
+                    self._state = "error"
+                    self._last_error = f"{type(exc).__name__}: {exc}"
                 self._reset_otp()
                 # Same rationale as the CancelledError branch — a
                 # pyquotex crash inside connect() must not leave a
@@ -742,10 +756,30 @@ class QuotexManager:
                 log.warning("broker.otp.relay_required_failed", error=str(exc))
 
         if over_cap:
-            # Halt pyquotex's supervisor and bail out of the connect.
-            self._halt_for_otp_exhaustion()
-            self._reset_otp(keep_state=True)
-            raise QuotexManagerError("otp_attempts_exhausted")
+            # Important #3 (2026-05-13) — narrow race window: while
+            # we were inside the ``relay.on_otp_required`` await above,
+            # the operator may have run /reconnect, which calls
+            # ``reset_for_manual_reconnect`` and zeroes
+            # ``_consecutive_otp_failures``. Re-read it RIGHT BEFORE
+            # raising — if the operator reset us between the entry-
+            # point check and now, fall through to the normal future-
+            # await path so their fresh code reaches the broker.
+            #
+            # We don't need a lock because both writers (here and
+            # ``reset_for_manual_reconnect``) run on the asyncio loop,
+            # serialised by ``await`` boundaries. The race is purely
+            # between two coroutines, not threads.
+            if self._consecutive_otp_failures < cap:
+                log.info(
+                    "broker.otp.exhaustion_canceled_by_reset",
+                    failures_now=self._consecutive_otp_failures,
+                    cap=cap,
+                )
+            else:
+                # Halt pyquotex's supervisor and bail out of the connect.
+                self._halt_for_otp_exhaustion()
+                self._reset_otp(keep_state=True)
+                raise QuotexManagerError("otp_attempts_exhausted")
 
         try:
             return await asyncio.wait_for(self._otp_future, timeout=_OTP_TIMEOUT_SECONDS)
@@ -785,16 +819,45 @@ class QuotexManager:
             f"OTP attempts exhausted ({self._consecutive_otp_failures}/{cap})"
             f" — awaiting /reconnect"
         )
-        # Disable the supervisor so its retry loop stops issuing PIN
-        # emails. Best-effort: log at warning level if anything is
-        # None or missing so we can diagnose in production. The
-        # client / api objects may be absent in tests or before the
-        # first successful connect.
+        # Halt the supervisor so its retry loop stops issuing PIN
+        # emails. We flip TWO flags belt-and-braces:
+        #
+        # * ``_stopping = True`` — exits the INNER backoff loop
+        #   (``_reconnect_with_backoff``) on its very next iteration.
+        #   This is the critical one: that loop is the hot path that
+        #   was regenerating PIN emails forever. It only checks
+        #   ``_stopping``, NOT ``policy.enabled``, and it catches every
+        #   exception from ``_attempt_reconnect`` via a broad ``except``
+        #   so the ``QuotexManagerError`` we raise here would be
+        #   swallowed and the loop would retry forever otherwise.
+        # * ``policy.enabled = False`` — exits the OUTER ``_run`` loop
+        #   the next time the supervisor sees a clean disconnect/
+        #   reconnect cycle. Belt-and-braces for the path where the
+        #   inner loop happens to exit by some other means.
+        #
+        # Why ``_stopping = True`` instead of ``await supervisor.stop()``?
+        # ``stop()`` awaits the supervisor's task — but right now we
+        # are CURRENTLY RUNNING inside that task chain (pyquotex called
+        # us via the ``on_otp_callback`` hook). Awaiting our own task
+        # would deadlock. Setting the flag and re-raising lets the
+        # supervisor's loops exit cleanly on their own clock, with no
+        # cross-coroutine cancellation gymnastics.
+        #
+        # ``_stopping`` is a private attribute on pyquotex's
+        # ReconnectSupervisor. Touching it is a deliberate cross-
+        # module assertion — we're working AROUND the upstream
+        # library's broad-except-in-backoff-loop limitation. If
+        # pyquotex ever grows a public ``halt()`` we should switch to
+        # that. See production incident 2026-05-12.
         try:
-            self._client.api.reconnect_supervisor.policy.enabled = False  # type: ignore[union-attr]
+            supervisor = self._client.api.reconnect_supervisor  # type: ignore[union-attr]
+            if supervisor is not None:
+                supervisor._stopping = True
+                supervisor.policy.enabled = False
+                log.info("broker.otp.supervisor_halted")
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                "broker.otp.supervisor_disable_failed",
+                "broker.otp.supervisor_halt_failed",
                 error=str(exc),
             )
 
@@ -839,8 +902,14 @@ class QuotexManager:
                     )
         # Re-enable pyquotex's supervisor — without this, the next
         # connect's transient WS drops would never auto-recover.
+        # We clear BOTH ``_stopping`` and ``policy.enabled`` because
+        # ``_halt_for_otp_exhaustion`` flips both (see the matching
+        # halt path for the rationale).
         try:
-            self._client.api.reconnect_supervisor.policy.enabled = True  # type: ignore[union-attr]
+            supervisor = self._client.api.reconnect_supervisor  # type: ignore[union-attr]
+            if supervisor is not None:
+                supervisor._stopping = False
+                supervisor.policy.enabled = True
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "broker.otp.supervisor_reenable_skipped",
