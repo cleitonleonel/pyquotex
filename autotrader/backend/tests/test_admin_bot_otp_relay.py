@@ -331,12 +331,17 @@ async def test_on_otp_timeout_edits_to_expired_and_clears_cycle(
 
 
 @pytest.mark.asyncio
-async def test_attempts_cap_exhausted_edits_terminal_and_stops_accepting(
+async def test_attempts_cap_exhausted_sends_terminal_and_stops_accepting(
     fake_bot: FakeAdminBot, fake_manager: FakeManager,
 ) -> None:
-    """After ``max_attempts`` re-prompts in a row, the relay edits to
-    a terminal '/reconnect to retry' message and refuses further
-    replies until a fresh cycle (attempt=1) starts."""
+    """After ``max_attempts`` re-prompts in a row, the relay fires a
+    terminal '/reconnect' alert and refuses further replies until a
+    fresh cycle starts via /reconnect.
+
+    Note: the entry-point cap check (Fix A, 2026-05-12) fires a fresh
+    ``send`` rather than editing the active message — the operator's
+    inbox should see the loud "gave up" alert as a NEW message, and
+    the previous prompt edits become inert."""
     relay = _relay(fake_bot, fake_manager)  # default max_attempts=3
     await relay.on_otp_required("p1", attempt=1)
     active_id = fake_bot.sent[0].message_id
@@ -345,11 +350,13 @@ async def test_attempts_cap_exhausted_edits_terminal_and_stops_accepting(
     # The 4th prompt — beyond the cap — must lock down the cycle.
     await relay.on_otp_required("p4", attempt=4)
 
-    # Last edit is the terminal message.
-    last_edit = fake_bot.edits[-1]
-    assert last_edit.message_id == active_id
-    assert "/reconnect" in last_edit.text.lower()
-    # And replies are now dropped.
+    # Terminal alert arrives as a fresh send (not an edit of the
+    # active prompt). It names the cap and asks for /reconnect.
+    assert len(fake_bot.sent) == 2  # initial prompt + exhaustion alert
+    terminal = fake_bot.sent[-1]
+    assert "/reconnect" in terminal.text.lower()
+    assert "gave up" in terminal.text.lower()
+    # And replies targeting the dead prompt are now dropped.
     fake_manager.submitted.clear()
     await relay.handle_reply(_reply("123456", target_id=active_id))
     assert fake_manager.submitted == []
@@ -360,9 +367,7 @@ async def test_max_attempts_env_var_changes_cap(
     fake_bot: FakeAdminBot, fake_manager: FakeManager,
 ) -> None:
     """With max_attempts=5, attempts 4 and 5 are still soft retries —
-    only attempt=6 triggers the terminal edit."""
-    relay = _relay(fake_bot, fake_manager)
-    # Replace with a higher cap.
+    only attempt=6 triggers the terminal exhaustion alert (send)."""
     from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay  # noqa: PLC0415
     relay = AdminBotOTPRelay(
         manager=fake_manager,
@@ -375,34 +380,44 @@ async def test_max_attempts_env_var_changes_cap(
     for n in range(2, 6):
         await relay.on_otp_required("p", attempt=n)
 
-    # Attempts 1..5 are within the cap → no '/reconnect' edit yet.
+    # Attempts 1..5 are within the cap → no exhaustion send yet.
+    assert len(fake_bot.sent) == 1
     edits_so_far = " | ".join(e.text for e in fake_bot.edits)
-    assert "/reconnect" not in edits_so_far
+    assert "gave up" not in edits_so_far.lower()
 
     await relay.on_otp_required("p", attempt=6)
-    assert "/reconnect" in fake_bot.edits[-1].text.lower()
+    # Now the exhaustion alert lands as a fresh send.
+    assert len(fake_bot.sent) == 2
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+    assert "/reconnect" in fake_bot.sent[-1].text.lower()
 
 
 @pytest.mark.asyncio
 async def test_fresh_attempt_1_after_terminal_replaces_cycle(
     fake_bot: FakeAdminBot, fake_manager: FakeManager,
 ) -> None:
-    """After the operator hits /reconnect and the manager triggers a
-    fresh begin_connect → fresh on_otp_required(attempt=1) — the relay
+    """After the operator hits /reconnect (which calls
+    :meth:`reset_exhaustion`) and the manager triggers a fresh
+    begin_connect → fresh on_otp_required(attempt=1) — the relay
     sends a NEW message rather than editing the dead one."""
     relay = _relay(fake_bot, fake_manager)
     await relay.on_otp_required("p", attempt=1)
-    # Force the terminal edit via exhausted attempts.
+    # Force the terminal exhaustion alert.
     for n in range(2, 5):
         await relay.on_otp_required("p", attempt=n)
-    assert "/reconnect" in fake_bot.edits[-1].text.lower()
+    assert "gave up" in fake_bot.sent[-1].text.lower()
 
     first_sent = fake_bot.sent[0].message_id
+    sends_at_exhaustion = len(fake_bot.sent)
+
+    # /reconnect clears the latch via reset_exhaustion (the public hook
+    # the manager's reset_for_manual_reconnect drives).
+    relay.reset_exhaustion()
 
     # Fresh cycle.
     await relay.on_otp_required("fresh prompt", attempt=1)
-    assert len(fake_bot.sent) == 2
-    assert fake_bot.sent[1].message_id != first_sent
+    assert len(fake_bot.sent) == sends_at_exhaustion + 1
+    assert fake_bot.sent[-1].message_id != first_sent
 
 
 @pytest.mark.asyncio
@@ -505,3 +520,151 @@ async def test_relay_picks_up_bound_user_id_after_start_command(
     # Now the relay picks up the new binding.
     assert len(bot.sent) == 1
     assert bot.sent[0].chat_id == 42
+
+
+# ---------------------------------------------------------------------------
+# Fix A — broker-disconnect blindness: tight OTP-attempt cap at the entry
+# point. The old cap-check lived inside ``_bump_existing_cycle`` and was
+# bypassed whenever a 180s timeout cleared ``_active``, because the next
+# prompt then routed through ``_start_new_cycle`` (which never checked
+# the cap). Production incident 2026-05-12: five OTP emails in 13min.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_sends_single_exhaustion_alert_then_goes_quiet(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """When the cumulative attempt counter exceeds ``max_attempts``, the
+    relay must fire ONE final 'gave up' alert to the operator and then
+    suppress every subsequent prompt until the cycle is reset.
+
+    Models the production failure mode where pyquotex's internal
+    supervisor regenerates a fresh PIN email on every retry. After we
+    stop relaying, the manager (Fix C) halts the supervisor — so the
+    relay's silence is what keeps the operator's inbox from drowning.
+    """
+    relay = _relay(fake_bot, fake_manager)  # default max_attempts=3
+
+    # Drive each attempt as if it were a separate broker challenge —
+    # mimics the production path where every OTP timeout drops
+    # ``_active`` to None, so the next prompt routes through
+    # ``_start_new_cycle``. We simulate that by clearing _active
+    # between attempts (which is exactly what ``on_otp_timeout`` does).
+    for n in range(1, 4):
+        await relay.on_otp_required(f"prompt {n}", attempt=n)
+        await relay.on_otp_timeout()
+
+    # 3 sends + 3 timeout-edits so far. Snapshot before the cap fires.
+    sends_so_far = len(fake_bot.sent)
+    edits_so_far = len(fake_bot.edits)
+    assert sends_so_far == 3
+
+    # Attempt 4 — over the cap. Must trigger exactly ONE exhaustion
+    # alert (via send, since _active was cleared) and no new prompt.
+    await relay.on_otp_required("prompt 4", attempt=4)
+    assert len(fake_bot.sent) == sends_so_far + 1, (
+        "expected exactly one extra send for the exhaustion alert; "
+        f"got sends={fake_bot.sent[sends_so_far:]}"
+    )
+    alert = fake_bot.sent[-1]
+    assert "gave up" in alert.text.lower()
+    assert "3" in alert.text  # the cap value is named
+    assert "/reconnect" in alert.text.lower()
+
+    # Attempt 5 — must be silently suppressed.
+    await relay.on_otp_required("prompt 5", attempt=5)
+    assert len(fake_bot.sent) == sends_so_far + 1, (
+        "attempt 5 should be silent — got new sends "
+        f"{fake_bot.sent[sends_so_far + 1:]}"
+    )
+    assert len(fake_bot.edits) == edits_so_far, (
+        "attempt 5 should be silent — got new edits "
+        f"{fake_bot.edits[edits_so_far:]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_relay_exhaustion_resets_on_resolved(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """A successful resolve clears the exhaustion latch — verified
+    here by triggering exhaustion, calling on_otp_resolved (terminal
+    edit), and then re-triggering exhaustion to confirm the latch fires
+    a SECOND alert (it wouldn't if the latch had stayed set)."""
+    relay = _relay(fake_bot, fake_manager)
+    # Trigger exhaustion.
+    for n in range(1, 4):
+        await relay.on_otp_required(f"p{n}", attempt=n)
+        await relay.on_otp_timeout()
+    await relay.on_otp_required("p4", attempt=4)
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+    sends_at_first_exhaustion = len(fake_bot.sent)
+
+    # While still latched, another over-cap call must be silent.
+    await relay.on_otp_required("p5", attempt=5)
+    assert len(fake_bot.sent) == sends_at_first_exhaustion
+
+    # Resolve clears the latch (and there's no active cycle, so the
+    # method short-circuits without an edit — that's fine).
+    await relay.on_otp_resolved()
+    # Now another over-cap call should fire a fresh alert (latch cleared).
+    await relay.on_otp_required("p6", attempt=4)
+    assert len(fake_bot.sent) == sends_at_first_exhaustion + 1
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_relay_exhaustion_resets_on_explicit_reset(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """``reset_exhaustion()`` is the public hook the manager's
+    :meth:`reset_for_manual_reconnect` calls. It must clear the latch
+    so a follow-up over-cap call fires a fresh alert."""
+    relay = _relay(fake_bot, fake_manager)
+    for n in range(1, 4):
+        await relay.on_otp_required(f"p{n}", attempt=n)
+        await relay.on_otp_timeout()
+    await relay.on_otp_required("p4", attempt=4)
+    sends_at_exhaustion = len(fake_bot.sent)
+
+    # While still latched, over-cap calls are silent.
+    await relay.on_otp_required("p5", attempt=5)
+    assert len(fake_bot.sent) == sends_at_exhaustion
+
+    relay.reset_exhaustion()
+
+    await relay.on_otp_required("p6", attempt=4)
+    assert len(fake_bot.sent) == sends_at_exhaustion + 1
+    assert "gave up" in fake_bot.sent[-1].text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Fix B — stale-OTP guidance in every prompt
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_otp_prompt_includes_timestamp_and_stale_warning(
+    fake_bot: FakeAdminBot, fake_manager: FakeManager,
+) -> None:
+    """Each OTP prompt (initial + retry) must call out the UTC timestamp
+    and warn the operator to only reply to the latest message. Without
+    this, an operator with 5 unread OTP emails has no way to tell which
+    code is current — that's how a 03:58 UTC disconnect spiralled into
+    five invalidated PINs."""
+    relay = _relay(fake_bot, fake_manager)
+    await relay.on_otp_required("p", attempt=1)
+    assert len(fake_bot.sent) == 1
+    initial_text = fake_bot.sent[0].text
+    assert "UTC" in initial_text
+    assert "⚠️" in initial_text
+    assert "latest" in initial_text.lower()
+
+    # Retry path edits the existing message — same suffix must appear.
+    await relay.on_otp_required("p", attempt=2)
+    assert len(fake_bot.edits) == 1
+    retry_text = fake_bot.edits[0].text
+    assert "UTC" in retry_text
+    assert "⚠️" in retry_text
+    assert "latest" in retry_text.lower()

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -81,13 +81,29 @@ class AdminBotOTPRelay:
         # directly.
         self._max_attempts = max_attempts
         self._active: _ActiveCycle | None = None
+        # Latch: when True we've already fired the "gave up after N OTP
+        # attempts" alert for this disconnect window. Every subsequent
+        # ``on_otp_required`` no-ops until the operator runs /reconnect
+        # (which calls :meth:`reset_exhaustion`) or a fresh connect
+        # succeeds (which calls :meth:`on_otp_resolved`). Prevents the
+        # 03:58-UTC-incident scenario where pyquotex's internal
+        # supervisor regenerates a PIN email every 180s forever.
+        self._exhausted_window: bool = False
 
     # ------------------------------------------------------------------
     # Entry points called by QuotexManager
     # ------------------------------------------------------------------
 
     async def on_otp_required(self, prompt: str, attempt: int) -> None:
-        """Broker just challenged. Send (attempt=1) or edit (attempt>1)."""
+        """Broker just challenged. Send (attempt=1) or edit (attempt>1).
+
+        The cap check lives HERE (the entry point) rather than inside
+        ``_bump_existing_cycle`` because the timeout path clears
+        ``_active`` between attempts — so every fresh prompt was
+        previously routing back through ``_start_new_cycle`` and
+        bypassing the cap entirely. See production incident
+        2026-05-12 (5 PIN emails in 13min).
+        """
         if not self._can_relay():
             log.info("otp_relay.skipped.bot_unavailable", attempt=attempt)
             return
@@ -96,10 +112,59 @@ class AdminBotOTPRelay:
             log.info("otp_relay.skipped.no_bound_user", attempt=attempt)
             return
 
+        if attempt > self._max_attempts:
+            await self._handle_exhaustion(
+                attempt=attempt, bound_user_id=bound_user_id,
+            )
+            return
+
         if attempt <= 1 or self._active is None:
             await self._start_new_cycle(prompt=prompt, bound_user_id=bound_user_id)
         else:
             await self._bump_existing_cycle(prompt=prompt, attempt=attempt)
+
+    async def _handle_exhaustion(
+        self, *, attempt: int, bound_user_id: int,
+    ) -> None:
+        """Fire the terminal 'gave up' Telegram alert exactly once per
+        disconnect window. Subsequent calls are silent until
+        :meth:`reset_exhaustion` or :meth:`on_otp_resolved` clears
+        the latch."""
+        if self._exhausted_window:
+            log.info(
+                "otp_relay.suppressed_after_exhaustion",
+                attempt=attempt,
+                max_attempts=self._max_attempts,
+            )
+            return
+        text = (
+            f"❌ Gave up after {self._max_attempts} OTP attempts. "
+            f"No reply received. Run /reconnect when you're ready and "
+            f"I'll restart the cycle with a fresh code."
+        )
+        try:
+            await self._admin_bot.send(bound_user_id, text)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "otp_relay.exhaustion_alert_send_failed", error=str(exc),
+            )
+        self._exhausted_window = True
+        # Any lingering in-flight cycle is now meaningless — clear it
+        # so a future stray reply doesn't hit a dead message_id.
+        self._active = None
+        log.info(
+            "otp_relay.exhausted_alert_sent",
+            attempt=attempt,
+            max_attempts=self._max_attempts,
+        )
+
+    def reset_exhaustion(self) -> None:
+        """Clear the exhaustion latch. Called by /reconnect (via
+        :meth:`QuotexManager.reset_for_manual_reconnect`) so the next
+        OTP cycle can relay normally."""
+        if self._exhausted_window:
+            log.info("otp_relay.exhaustion_reset")
+        self._exhausted_window = False
 
     def owns_reply(self, message: Any) -> bool:
         """Returns True iff this message is a reply targeting the
@@ -152,7 +217,10 @@ class AdminBotOTPRelay:
 
     async def on_otp_resolved(self) -> None:
         """Connect completed successfully. Edit to terminal '✅' and
-        clear the cycle."""
+        clear the cycle. Also clears the exhaustion latch (a successful
+        connect is the clean "fresh start" signal — operator may not
+        run /reconnect explicitly)."""
+        self._exhausted_window = False
         if self._active is None:
             return
         await self._edit_with("✅ Connected.")
@@ -269,10 +337,26 @@ class AdminBotOTPRelay:
         return (
             f"🔐 Broker needs OTP — reply to this message with the "
             f"code we just emailed you ({_OTP_WINDOW_SECONDS}s)."
+            f"{self._format_stale_suffix()}"
         )
 
     def _format_retry_prompt(self, *, attempt: int) -> str:
         return (
             f"❌ Wrong code — reply with the new code we just "
             f"emailed you (attempt {attempt}/{self._max_attempts})."
+            f"{self._format_stale_suffix()}"
+        )
+
+    def _format_stale_suffix(self) -> str:
+        """Common suffix appended to every OTP prompt (initial + retry).
+
+        The timestamp + warning tells an operator with multiple unread
+        PIN emails which one is current — every retry invalidates the
+        previous code, so without this they'd guess. See production
+        incident 2026-05-12 (5 PIN emails in 13min, operator asleep)."""
+        now = datetime.now(UTC).strftime("%H:%M:%S")
+        return (
+            f"\n⏰ Issued {now} UTC."
+            f"\n⚠️ Only reply to the LATEST OTP message — "
+            f"older codes are now invalid."
         )
