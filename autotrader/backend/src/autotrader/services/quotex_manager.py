@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -187,6 +189,35 @@ class QuotexManager:
         # is reached.
         self._lock = asyncio.Lock()
 
+    # Phase 0 instrumentation threshold (audit 2026-05-13, H2). Awaits
+    # longer than this are logged as ``broker.lock.contention`` so we
+    # can measure the real-world blast radius of the wide ``_do_connect``
+    # critical section before splitting it in Phase 3a.
+    _LOCK_CONTENTION_THRESHOLD_SECONDS: float = 0.5
+
+    @contextlib.asynccontextmanager
+    async def _timed_lock(self, site: str) -> AsyncIterator[None]:
+        """``async with self._timed_lock("site"):`` — same semantics as
+        ``async with self._lock:`` plus a structured-log warning when
+        the wait to acquire exceeds
+        :attr:`_LOCK_CONTENTION_THRESHOLD_SECONDS`.
+
+        ``site`` is a short, stable string (the calling method) so a
+        contention log line tells the operator *which* lock-holder is
+        the slow one. Pure observability — never raises and never
+        changes lock semantics.
+        """
+        start = time.monotonic()
+        async with self._lock:
+            waited_s = time.monotonic() - start
+            if waited_s >= self._LOCK_CONTENTION_THRESHOLD_SECONDS:
+                log.warning(
+                    "broker.lock.contention",
+                    site=site,
+                    waited_ms=int(waited_s * 1000),
+                )
+            yield
+
     # ------------------------------------------------------------------
     # Status / introspection
     # ------------------------------------------------------------------
@@ -310,7 +341,7 @@ class QuotexManager:
             await asyncio.sleep(0.025)
 
     async def _do_connect(self) -> None:
-        async with self._lock:
+        async with self._timed_lock("do_connect"):
             try:
                 assert self._email is not None
                 assert self._password is not None
@@ -475,7 +506,7 @@ class QuotexManager:
         # watcher itself may briefly contend on it via callbacks and
         # we want a clean cancel before the client object disappears.
         await self._stop_status_watcher()
-        async with self._lock:
+        async with self._timed_lock("disconnect"):
             if self._client is None:
                 self._state = "idle"
                 return
@@ -987,7 +1018,7 @@ class QuotexManager:
         """Hot-swap accounts. Hits the broker only when connected."""
         self._enforce_live_gate(mode)
 
-        async with self._lock:
+        async with self._timed_lock("set_account_mode"):
             self._account_mode = mode
             if self._client is None:
                 return
@@ -1041,7 +1072,7 @@ class QuotexManager:
         """Force-refresh the asset cache. Returns the new snapshot."""
         if self._client is None:
             raise QuotexManagerError("not connected")
-        async with self._lock:
+        async with self._timed_lock("refresh_assets"):
             await self._refresh_assets_locked()
         return self._assets
 

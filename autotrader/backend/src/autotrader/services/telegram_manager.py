@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -134,6 +135,13 @@ class TelegramManager:
     # never lands on disk — the encrypted session string in the DB is
     # the source of truth.
     _CLIENT_NAME = "autotrader"
+
+    # Phase 0 instrumentation threshold (audit 2026-05-13, M1): logins
+    # that take longer than this still succeed but warrant a warning —
+    # phone-code SMS delivery is typically sub-second from MTProto's
+    # perspective (the SMS itself takes longer but that's after our
+    # call returns). A 5 s round-trip means MTProto is wedged.
+    _SLOW_LOGIN_THRESHOLD_SECONDS: float = 5.0
 
     def __init__(self, *, event_bus: Any | None = None) -> None:
         self._event_bus = event_bus
@@ -303,8 +311,26 @@ class TelegramManager:
 
             client = self._new_client()
             try:
+                # Phase 0 instrumentation (audit 2026-05-13, M1): MTProto
+                # ``connect`` + ``send_code`` round-trip with no timeout
+                # today, so a hung Telegram peer wedges this coroutine
+                # silently. Time both and warn when the wall clock
+                # crosses ``_SLOW_LOGIN_THRESHOLD_SECONDS`` even if the
+                # call ultimately succeeds. Phase 1 will wrap both in
+                # ``asyncio.wait_for`` so the hang becomes a bounded
+                # ``TelegramManagerError`` instead of a silent stall.
+                _t0 = time.monotonic()
                 await client.connect()
+                _t_connect = time.monotonic() - _t0
                 sent = await client.send_code(phone)
+                _t_total = time.monotonic() - _t0
+                if _t_total >= self._SLOW_LOGIN_THRESHOLD_SECONDS:
+                    log.warning(
+                        "telegram.login.slow",
+                        elapsed_seconds=round(_t_total, 3),
+                        connect_seconds=round(_t_connect, 3),
+                        phone_masked=_mask_phone(phone),
+                    )
             except PhoneNumberInvalid as exc:
                 self._state = "error"
                 self._last_error = "invalid phone number"

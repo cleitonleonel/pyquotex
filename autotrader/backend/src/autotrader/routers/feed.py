@@ -17,10 +17,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
 from autotrader.auth import _decode  # type: ignore[attr-defined]
 from autotrader.dependencies import EventBusDep
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/feed", tags=["feed"])
 
@@ -33,11 +36,23 @@ async def feed_ws(
 ) -> None:
     """Stream trade-row events as JSON until the client disconnects."""
     if not token:
+        # Phase 0 instrumentation (audit 2026-05-13, M4): operators
+        # report "WS won't connect" with no log breadcrumb. Emit a
+        # structured warning at every rejection point — Phase 1 will
+        # narrow the ``except`` clause below so unexpected exceptions
+        # surface as ``log.exception`` instead of being silently
+        # swallowed.
+        log.warning("feed.ws.auth_rejected", reason="no_token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:
         _decode(token)
-    except Exception:
+    except Exception as exc:
+        log.warning(
+            "feed.ws.auth_rejected",
+            reason=type(exc).__name__,
+            detail=str(exc),
+        )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

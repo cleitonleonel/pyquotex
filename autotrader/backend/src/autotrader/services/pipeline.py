@@ -14,9 +14,10 @@ when a config row is updated or deleted via the router.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -111,6 +112,29 @@ class Pipeline:
         # same channel doesn't race the stateful parsers (Aggregator,
         # PrepTriggerParser).
         self._chat_locks: dict[int, asyncio.Lock] = {}
+        # Phase 0 instrumentation (audit 2026-05-13, H1): track recent
+        # message fingerprints per chat so a Pyrogram replay (or any
+        # other source of duplicate delivery) surfaces in the log
+        # **without** changing dispatch behaviour. Phase 2 replaces
+        # this with a real ``(chat_id, message_id)`` dedup gate that
+        # short-circuits the duplicate; Phase 0 just measures whether
+        # it actually happens in production.
+        #
+        # Fingerprint = ``(text[:200], sender_id)``. Two messages with
+        # the same text from the same sender within
+        # ``_DUPLICATE_WINDOW`` are flagged. False-positive risk: a
+        # channel that legitimately posts the same content twice
+        # (e.g. a repeated daily greeting) will fire one alert per
+        # repeat — acceptable signal-to-noise for an observation pass.
+        self._recent_fingerprints: dict[
+            int, OrderedDict[tuple[str, int], datetime],
+        ] = {}
+
+    # Tuning constants for the Phase 0 duplicate detector. Sized so
+    # the per-chat memory stays bounded under a chatty channel: 200
+    # entries * ~250B/entry ≈ 50KB worst case per active chat.
+    _DUPLICATE_WINDOW: timedelta = timedelta(minutes=10)
+    _DUPLICATE_FINGERPRINT_CAP: int = 200
 
     # ------------------------------------------------------------------
     # Decision feed
@@ -234,7 +258,55 @@ class Pipeline:
         async with self._chat_locks.setdefault(message.chat_id, asyncio.Lock()):
             await self._dispatch_locked(message)
 
+    def _check_duplicate_candidate(self, message: RawMessage) -> None:
+        """Phase 0 instrumentation: log ``pipeline.duplicate_candidate``
+        when ``message`` looks like a replay of one we recently dispatched
+        for the same chat. Side-effect: updates the per-chat fingerprint
+        LRU. Does **not** suppress the message — Phase 2 will do that
+        once we know how often this actually fires in production.
+
+        Runs synchronously under the per-chat dispatch lock, so the
+        check and update are atomic for this chat.
+        """
+        key = ((message.text or "")[:200], message.sender_id)
+        now = datetime.now(UTC)
+        seen = self._recent_fingerprints.setdefault(message.chat_id, OrderedDict())
+        # Evict entries older than the window. ``OrderedDict`` preserves
+        # insertion order so this is O(1) per evicted item.
+        cutoff = now - self._DUPLICATE_WINDOW
+        while seen:
+            oldest_key, oldest_ts = next(iter(seen.items()))
+            if oldest_ts >= cutoff:
+                break
+            seen.pop(oldest_key)
+        prior = seen.get(key)
+        if prior is not None:
+            log.warning(
+                "pipeline.duplicate_candidate",
+                chat_id=message.chat_id,
+                sender_id=message.sender_id,
+                elapsed_seconds=round((now - prior).total_seconds(), 3),
+                text_preview=(message.text or "")[:120],
+            )
+        # Refresh / insert with the latest timestamp. ``move_to_end`` on
+        # the existing key would keep the *prior* timestamp; we want the
+        # most-recent-seen so the next replay is timed against this one.
+        if key in seen:
+            seen.pop(key)
+        seen[key] = now
+        # Bound memory per chat. Eviction is FIFO by insertion order
+        # (== seen order) which approximates LRU well enough for a
+        # short-window cache.
+        while len(seen) > self._DUPLICATE_FINGERPRINT_CAP:
+            seen.popitem(last=False)
+
     async def _dispatch_locked(self, message: RawMessage) -> None:
+        # Phase 0 instrumentation runs FIRST so duplicate replay is
+        # observed regardless of whether the message ultimately matches
+        # a parser. The check is cheap (O(1) dict ops, one log emit on
+        # hit) and side-effect-free outside the per-chat fingerprint
+        # cache.
+        self._check_duplicate_candidate(message)
         async with AsyncSessionLocal() as session:
             # Drop the message early when it comes from a chat the
             # operator hasn't opted into. Pyrogram's MessageHandler

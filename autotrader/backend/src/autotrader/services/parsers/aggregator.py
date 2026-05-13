@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+import structlog
+
 from autotrader.services.parsers.base import (
     ParsedSignal,
     ParseError,
@@ -32,6 +34,8 @@ from autotrader.services.parsers.base import (
     RawMessage,
 )
 
+log = structlog.get_logger(__name__)
+
 _DEFAULT_MAX_BUFFERS: Final = 1024  # bound memory: keys evicted LRU-style
 
 
@@ -39,6 +43,14 @@ _DEFAULT_MAX_BUFFERS: Final = 1024  # bound memory: keys evicted LRU-style
 class _Buffer:
     messages: list[RawMessage]
     expires_at: datetime
+    # Phase 0 instrumentation (audit 2026-05-13, H3): the timestamp of
+    # the message that opened this buffer. Used to detect "window has
+    # been extended past the configured ``window_seconds``" — a chatty
+    # channel can keep the buffer alive indefinitely today because
+    # ``expires_at`` is reset on every ``feed()``. Phase 3b will cap
+    # the buffer at ``first_seen_at + window * 3``; for Phase 0 we
+    # just log when the extension happens so we can measure it.
+    first_seen_at: datetime
 
 
 class Aggregator:
@@ -80,11 +92,30 @@ class Aggregator:
         key = (message.chat_id, message.sender_id)
         buf = self._buffers.get(key)
         if buf is None:
-            buf = _Buffer(messages=[], expires_at=now + self._window)
+            buf = _Buffer(
+                messages=[],
+                expires_at=now + self._window,
+                first_seen_at=now,
+            )
             self._buffers[key] = buf
         else:
             # Keep this key as MRU.
             self._buffers.move_to_end(key)
+            # Phase 0 instrumentation: the buffer has been alive longer
+            # than the configured window because earlier messages kept
+            # pushing ``expires_at`` forward. Logged at WARNING so a
+            # chatty channel surfaces during the observation window
+            # — Phase 3b will cap this at ``first_seen_at + window``.
+            age = now - buf.first_seen_at
+            if age >= self._window:
+                log.warning(
+                    "aggregator.window_extended",
+                    chat_id=message.chat_id,
+                    sender_id=message.sender_id,
+                    age_seconds=round(age.total_seconds(), 3),
+                    window_seconds=int(self._window.total_seconds()),
+                    buffered_messages=len(buf.messages),
+                )
 
         buf.messages.append(message)
         buf.expires_at = now + self._window
