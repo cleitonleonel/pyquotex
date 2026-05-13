@@ -669,7 +669,14 @@ async def handle_reconnect(_message: Any, _bot: Any) -> Reply:
     Used by the OTP-relay recovery path: after an OTP timeout or an
     attempts-exhausted terminal state, the relay's message tells the
     operator to '/reconnect'. The new cycle starts with attempt=1 and
-    sends a fresh OTP message (no edit of the dead one)."""
+    sends a fresh OTP message (no edit of the dead one).
+
+    Calls :meth:`QuotexManager.reset_for_manual_reconnect` first so the
+    OTP-failure gate (Fix C, 2026-05-12) is cleared, the relay's
+    exhaustion latch (Fix A) is cleared, and pyquotex's internal
+    supervisor is re-enabled. Without this reset, a manager that hit
+    the OTP cap during the prior disconnect would refuse to relay the
+    fresh prompt."""
     from autotrader.services.admin_bot_state import get_quotex  # noqa: PLC0415
     qx = get_quotex()
     if qx is None:
@@ -680,12 +687,26 @@ async def handle_reconnect(_message: Any, _bot: Any) -> Reply:
         return Reply(
             text="No broker credentials stored. Set them via the dashboard first.",
         )
+    # Reset counters + supervisor before kicking the connect. Best-effort:
+    # if the manager doesn't expose the method (older test stubs), proceed
+    # without it.
+    reset = getattr(qx, "reset_for_manual_reconnect", None)
+    if callable(reset):
+        try:
+            reset()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("admin_bot.reconnect.reset_failed", error=str(exc))
     try:
         qx.begin_connect()
     except Exception as exc:  # noqa: BLE001
         log.exception("admin_bot.reconnect_failed")
         return Reply(text=f"Reconnect failed to start: {type(exc).__name__}: {exc}")
-    return Reply(text="Reconnect triggered — watch for an OTP message in a few seconds.")
+    return Reply(
+        text=(
+            "Reconnect triggered — counters reset, watch for a fresh OTP "
+            "message in a few seconds."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------
