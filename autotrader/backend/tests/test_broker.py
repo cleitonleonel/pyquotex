@@ -1049,6 +1049,40 @@ async def test_executor_skips_swap_suggestion_when_inverse_missing() -> None:
     assert captured == []
 
 
+@pytest.mark.asyncio
+async def test_executor_swap_suggestion_uses_case_fold_match() -> None:
+    """REGRESSION: when the broker carries the inverse pair with a casing
+    quirk (e.g. ``BrlUsd_otc`` instead of ``BRLUSD_otc``), the swap
+    suggestion must still fire AND the alert detail must name the broker's
+    actual casing so the operator copies it correctly into their parser
+    config. Locks down case-fold parity with ``_maybe_emit_ticker_suggestion``."""
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    captured: list[tuple[str, dict]] = []
+
+    class _SpyBus:
+        def publish(self, event_type: str, payload: dict) -> None:
+            captured.append((event_type, payload))
+
+    # Broker carries the inverse with a case-quirk — uppercase symbol would
+    # miss on literal `in`, must hit via case-fold.
+    manager = _StubManager(assets=("BrlUsd_otc",))
+    manager.refresh_result = manager._assets
+
+    executor = TradeExecutor.__new__(TradeExecutor)
+    executor._manager = manager  # type: ignore[attr-defined]
+    executor._event_bus = _SpyBus()  # type: ignore[attr-defined]
+
+    emitted = executor._maybe_emit_swap_suggestion("USDBRL_otc", "call")
+
+    assert emitted is True, "swap suggestion must fire on case-fold inverse hit"
+    assert len(captured) == 1
+    _, payload = captured[0]
+    # Detail names the broker's casing, not the upper-cased synthetic inverse.
+    assert "BrlUsd_otc" in payload["detail"]
+    assert "BRLUSD_otc" not in payload["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Case-insensitive auto-fix + ticker-alias "did you mean?" suggestion
 # (USCRUDE→USCrude case-fold, RIPPLE→XRPUSD ticker alias, etc.)
@@ -1064,6 +1098,7 @@ async def test_executor_case_corrects_asset() -> None:
 
     executor = TradeExecutor.__new__(TradeExecutor)
     executor._manager = mgr  # type: ignore[attr-defined]
+    executor._event_bus = None  # type: ignore[attr-defined]
 
     resolved = await executor._resolve_asset("USCRUDE_otc")
 
@@ -1080,6 +1115,7 @@ async def test_resolve_asset_returns_literal_when_exact() -> None:
 
     executor = TradeExecutor.__new__(TradeExecutor)
     executor._manager = mgr  # type: ignore[attr-defined]
+    executor._event_bus = None  # type: ignore[attr-defined]
 
     resolved = await executor._resolve_asset("EURUSD_otc")
 
@@ -1097,6 +1133,7 @@ async def test_resolve_asset_returns_none_when_truly_missing() -> None:
 
     executor = TradeExecutor.__new__(TradeExecutor)
     executor._manager = mgr  # type: ignore[attr-defined]
+    executor._event_bus = None  # type: ignore[attr-defined]
 
     resolved = await executor._resolve_asset("USDCOP_otc")
 

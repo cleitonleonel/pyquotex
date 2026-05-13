@@ -662,20 +662,25 @@ class TradeExecutor:
         inverse = _inverse_currency_pair(asset)
         if inverse is None:
             return False
-        if inverse not in self._manager.assets:
+        # Case-fold parity with `_maybe_emit_ticker_suggestion` — if the
+        # broker happens to carry the inverse with a casing quirk (e.g.
+        # `BrlUsd_otc`), we still want to alert AND report the operator
+        # the broker's actual casing so they copy it correctly.
+        canonical = _match_case_fold(inverse, self._manager.assets)
+        if canonical is None:
             return False
         flipped = "put" if direction.lower() == "call" else "call"
         detail = (
-            f"Broker lists this pair inverted as '{inverse}', not "
+            f"Broker lists this pair inverted as '{canonical}', not "
             f"'{asset}'. To trade the same direction, update your signal "
-            f"channel/parser to emit '{inverse}' with direction='{flipped}' "
+            f"channel/parser to emit '{canonical}' with direction='{flipped}' "
             f"(inverted from '{direction}'). The trade was rejected — no "
             f"auto-swap (would silently invert direction)."
         )
         log.warning(
             "executor.asset.suggested_swap",
             original=asset,
-            suggested=inverse,
+            suggested=canonical,
             original_direction=direction,
             suggested_direction=flipped,
         )
