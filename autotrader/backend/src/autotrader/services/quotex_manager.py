@@ -354,7 +354,22 @@ class QuotexManager:
             await asyncio.sleep(0.025)
 
     async def _do_connect(self) -> None:
-        async with self._timed_lock("do_connect"):
+        # Phase 3a (audit 2026-05-13, H2): the broker login round-trip
+        # takes 2–30s against Cloudflare; holding ``self._lock`` for
+        # that whole window blocked every other broker method
+        # (disconnect, set_account_mode, refresh_assets, status
+        # introspection paths that lock-snapshot). The fix is to keep
+        # the lock for SETUP and FINALIZE only — release it for the
+        # slow ``await client.connect()`` in the middle. The pre-
+        # ``connecting`` state check in ``begin_connect`` already
+        # single-flights this method, so two ``_do_connect`` coroutines
+        # can't race; everything else just becomes responsive again.
+        # M3 (the ``_status_watcher_task`` spawn race) closes for free
+        # because ``_start_status_watcher`` runs inside the FINALIZE
+        # critical section.
+
+        # ── Phase A: lock-held setup. Fast, in-memory + one disk read.
+        async with self._timed_lock("do_connect:setup"):
             try:
                 assert self._email is not None
                 assert self._password is not None
@@ -407,20 +422,42 @@ class QuotexManager:
                             "broker.session.loaded",
                             token_present=bool(cached.get("token")),
                         )
-                ok, reason = await client.connect()
-            except asyncio.CancelledError:
-                # User-initiated cancel. ``cancel_connect`` is the
-                # one that resolves the final state — we just bail
-                # cleanly so the lock unwinds.
-                self._reset_otp()
-                # Reset attempt counter so the NEXT begin_connect
-                # starts at attempt=1, sending a fresh Telegram
-                # OTP message instead of editing the dead one
-                # from the cancelled cycle.
-                self._otp_attempt = 0
-                log.info("broker.connect.cancelled")
-                raise
             except Exception as exc:
+                # Setup failures (missing creds, Quotex() ctor blew up
+                # — neither expected in steady-state) flip the state
+                # machine to ``error`` while still under the lock.
+                self._state = "error"
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                log.exception("broker.connect.setup_failed")
+                return
+
+        # ── Phase B: LOCK-FREE. The blast-radius reduction.
+        # While pyquotex is doing its TLS handshake / login POST /
+        # WebSocket handshake / OTP wait, every other broker method
+        # gets a fast lock acquire. ``_on_otp_callback`` runs inside
+        # this await but only touches its own fields (``_otp_future``,
+        # ``_otp_prompt``, ``_otp_attempt``, ``_consecutive_otp_failures``,
+        # ``_state``) — none of which the lock was protecting either.
+        try:
+            ok, reason = await client.connect()
+        except asyncio.CancelledError:
+            # User-initiated cancel. ``cancel_connect`` is the one
+            # that resolves the visible state — we just bail cleanly.
+            self._reset_otp()
+            # Reset attempt counter so the NEXT begin_connect
+            # starts at attempt=1, sending a fresh Telegram
+            # OTP message instead of editing the dead one
+            # from the cancelled cycle.
+            self._otp_attempt = 0
+            log.info("broker.connect.cancelled")
+            raise
+        except Exception as exc:
+            # Same error rationale as before. Re-acquire the lock to
+            # write terminal state — the ``awaiting_manual_recovery``
+            # preservation has to be inside the critical section
+            # because ``_halt_for_otp_exhaustion`` (which sets it)
+            # races otherwise.
+            async with self._timed_lock("do_connect:error"):
                 # Preserve the ``awaiting_manual_recovery`` state set by
                 # ``_halt_for_otp_exhaustion`` — when the OTP cap is
                 # exhausted, ``_on_otp_callback`` raises
@@ -442,9 +479,11 @@ class QuotexManager:
                 # pyquotex crash inside connect() must not leave a
                 # stale OTP attempt counter on the next try.
                 self._otp_attempt = 0
-                log.exception("broker.connect.error")
-                return
+            log.exception("broker.connect.error")
+            return
 
+        # ── Phase C: lock-held finalize.
+        async with self._timed_lock("do_connect:finalize"):
             if ok:
                 self._client = client
                 self._connected_at = utc_now()
