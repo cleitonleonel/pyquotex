@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,11 +91,48 @@ class Settings(BaseSettings):
     # issue is being investigated, the postmortem payload is large.
     debug_broker_wire: bool = False
 
+    # ── Tier-0 broker reliability (audit 2026-05-14) ─────────────
+    #
+    # curl_cffi impersonate profile used by pyquotex's HTTP login
+    # path. Currently hardcoded at quotex_manager.py:405; exposing
+    # it lets the operator rotate profiles without a redeploy when
+    # Cloudflare's bot scoring shifts. Sweep candidates with the
+    # probe in RUNBOOK §B.
+    broker_curl_cffi_profile: str = "firefox144"
+
+    # Pre-trade WS health gate (Task 5 / spec §3.4). If the latest
+    # tick for the asset is older than this, the executor refuses
+    # to send the order and marks the attempt ``broker_error``. The
+    # martingale ladder is NOT advanced on a health-gate block —
+    # the trade never reached the broker.
+    broker_stale_feed_max_age_seconds: int = Field(default=10, ge=1, le=300)
+
+    # Hard reconnect ceiling (Task 4 / spec §3.3). After this many
+    # consecutive failed reconnect attempts, the manager stops the
+    # pyquotex supervisor, disconnects cleanly, and flips state to
+    # ``awaiting_manual_recovery``. Operator must run /reconnect.
+    # Must be > _SOFT_DOWNGRADE_AFTER_ATTEMPTS (= 10) so the operator
+    # sees the 'transient → outage' notification before the auto-halt.
+    broker_reconnect_hard_ceiling: int = Field(default=20, ge=11, le=200)
+
     @cached_property
     def cors_origins_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":
             return ["*"]
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _check_hard_ceiling(self) -> "Settings":
+        # Field(ge=11) covers most cases, but pydantic emits a
+        # cryptic "Input should be greater than or equal to 11"
+        # without naming the config knob. Re-check here for the
+        # cleaner error.
+        if self.broker_reconnect_hard_ceiling <= 10:
+            raise ValueError(
+                "broker_reconnect_hard_ceiling must exceed the "
+                "soft-downgrade threshold (10); set >= 11"
+            )
+        return self
 
 
 class TelegramSettings(BaseSettings):
