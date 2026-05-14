@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     # it lets the operator rotate profiles without a redeploy when
     # Cloudflare's bot scoring shifts. Sweep candidates with the
     # probe in RUNBOOK §B.
-    broker_curl_cffi_profile: str = "firefox144"
+    broker_curl_cffi_profile: str = Field(default="firefox144", min_length=1)
 
     # Pre-trade WS health gate (Task 5 / spec §3.4). If the latest
     # tick for the asset is older than this, the executor refuses
@@ -111,8 +111,11 @@ class Settings(BaseSettings):
     # consecutive failed reconnect attempts, the manager stops the
     # pyquotex supervisor, disconnects cleanly, and flips state to
     # ``awaiting_manual_recovery``. Operator must run /reconnect.
-    # Must be > _SOFT_DOWNGRADE_AFTER_ATTEMPTS (= 10) so the operator
-    # sees the 'transient → outage' notification before the auto-halt.
+    # Must be > the soft-downgrade threshold (10 — the point at which
+    # quotex_manager.py downgrades the admin-bot tone from "transient"
+    # to "outage") so the operator sees that transition before the
+    # auto-halt fires. Task 4 of the Tier-0 plan introduces the
+    # constant that codifies this number.
     broker_reconnect_hard_ceiling: int = Field(default=20, ge=11, le=200)
 
     @cached_property
@@ -120,19 +123,6 @@ class Settings(BaseSettings):
         if self.cors_origins.strip() == "*":
             return ["*"]
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    @model_validator(mode="after")
-    def _check_hard_ceiling(self) -> "Settings":
-        # Field(ge=11) covers most cases, but pydantic emits a
-        # cryptic "Input should be greater than or equal to 11"
-        # without naming the config knob. Re-check here for the
-        # cleaner error.
-        if self.broker_reconnect_hard_ceiling <= 10:
-            raise ValueError(
-                "broker_reconnect_hard_ceiling must exceed the "
-                "soft-downgrade threshold (10); set >= 11"
-            )
-        return self
 
 
 class TelegramSettings(BaseSettings):

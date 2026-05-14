@@ -51,11 +51,15 @@ def test_env_overrides_work(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_hard_ceiling_below_soft_downgrade_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Setting the hard ceiling lower than the soft-downgrade threshold
-    (10, see quotex_manager._SOFT_DOWNGRADE_AFTER_ATTEMPTS) is a config
-    error: the operator would never see the 'transient → outage'
-    notification transition before the auto-halt fires."""
+    """Field(ge=11) rejects values <= 10 — the operator gets a
+    pydantic ValidationError that names the field. The intent is
+    that the hard ceiling must exceed the soft-downgrade threshold
+    (10) so the operator sees the 'transient → outage' notification
+    transition before the auto-halt fires."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
     monkeypatch.setenv("AUTOTRADER_BROKER_RECONNECT_HARD_CEILING", "5")
     from autotrader.config import Settings  # noqa: PLC0415
-    with pytest.raises(ValueError, match="hard_ceiling"):
+
+    with pytest.raises(ValidationError, match="broker_reconnect_hard_ceiling"):
         Settings()  # type: ignore[call-arg]
