@@ -1463,7 +1463,7 @@ class QuotexManager:
             _state = getattr(_api, "state", None)
             _auth = getattr(_state, "auth_status", None)
             _authed = (_auth == AuthStatus.AUTHENTICATED)
-        except Exception as _exc:  # noqa: BLE001 — null-safe; never let this leak
+        except Exception as _exc:  # null-safe: an auth-probe error must never leak
             log.warning(
                 "broker.assert_live.auth_probe_failed",
                 error=str(_exc),
