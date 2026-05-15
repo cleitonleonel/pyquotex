@@ -539,6 +539,7 @@ class QuotexManager:
         # this await but only touches its own fields (``_otp_future``,
         # ``_otp_prompt``, ``_otp_attempt``, ``_consecutive_otp_failures``,
         # ``_state``) — none of which the lock was protecting either.
+        _connect_start_monotonic = time.monotonic()
         try:
             ok, reason = await client.connect()
         except asyncio.CancelledError:
@@ -553,6 +554,23 @@ class QuotexManager:
             log.info("broker.connect.cancelled")
             raise
         except Exception as exc:
+            # Spec §3.2: forensic capture for future M6 taxonomy.
+            _elapsed_ms = int(
+                (time.monotonic() - _connect_start_monotonic) * 1000
+            )
+            _api = getattr(client, "api", None)
+            log.warning(
+                "broker.connect.rejection_probe",
+                raw_error=str(exc),
+                error_class=type(exc).__name__,
+                elapsed_ms=_elapsed_ms,
+                auth_status=getattr(_api, "auth_status", None),
+                ssid_loaded=bool(getattr(_api, "ssid", None)) if _api else False,
+                is_authenticated=getattr(_api, "is_authenticated", None),
+                ws_url=getattr(_api, "ws_url", None),
+                impersonate_profile=settings.broker_curl_cffi_profile,
+                consecutive_otp_failures=self._consecutive_otp_failures,
+            )
             # Same error rationale as before. Re-acquire the lock to
             # write terminal state — the ``awaiting_manual_recovery``
             # preservation has to be inside the critical section
@@ -632,6 +650,25 @@ class QuotexManager:
                 except Exception as exc:  # pragma: no cover - depends on broker
                     log.warning("broker.assets.refresh_failed", error=str(exc))
             else:
+                # Spec §3.2: forensic capture for future M6 taxonomy.
+                # ``raw_error`` is ``str(reason)`` (pyquotex's string)
+                # — no credentials there by inspection.
+                _elapsed_ms = int(
+                    (time.monotonic() - _connect_start_monotonic) * 1000
+                )
+                _api = getattr(client, "api", None)
+                log.warning(
+                    "broker.connect.rejection_probe",
+                    raw_error=str(reason),
+                    error_class="connect_returned_false",
+                    elapsed_ms=_elapsed_ms,
+                    auth_status=getattr(_api, "auth_status", None),
+                    ssid_loaded=bool(getattr(_api, "ssid", None)) if _api else False,
+                    is_authenticated=getattr(_api, "is_authenticated", None),
+                    ws_url=getattr(_api, "ws_url", None),
+                    impersonate_profile=settings.broker_curl_cffi_profile,
+                    consecutive_otp_failures=self._consecutive_otp_failures,
+                )
                 self._state = "error"
                 self._last_error = reason
                 log.warning("broker.connect.rejected", reason=reason)
