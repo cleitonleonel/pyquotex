@@ -229,3 +229,44 @@ signal silently dropping.
    baseline being stable-red is more useful for the audit's
    verification than partial-green would be. Promote only when
    blocked.
+
+---
+
+## F. Tier-0 spec drift (audit 2026-05-14) — do NOT copy the spec pseudocode
+
+The Tier-0 production-readiness work
+(`docs/superpowers/specs/2026-05-14-production-ready-tier0-design.md`)
+shipped with two places where the spec's illustrative pseudocode
+diverged from what was actually implemented (the implementation is
+correct; the spec was not updated — it is a frozen design artifact).
+A maintainer copying the spec pseudocode verbatim would reintroduce a
+real defect. Flagged by the final branch-level review; recorded here
+so the next person isn't misled.
+
+### F1. Spec §3.4 / §3.2 — `is_authenticated` is a METHOD, not a bool
+**Spec pseudocode says.** `not getattr(client.api, "is_authenticated", False)`
+(and a `is_authenticated` field on the rejection probe in §3.2).
+
+**Reality.** pyquotex's `client.api.is_authenticated` is a bound
+*method* — always truthy — so that check never fires. The shipped
+code (`quotex_manager.py` `assert_live` + the rejection probe) uses
+`client.api.state.auth_status == AuthStatus.AUTHENTICATED` instead and
+documents the trap inline. **Use `state.auth_status`; ignore the spec's
+`is_authenticated`.** (Caught twice during implementation — Tasks 3
+and 5 — because the spec carried the wrong path.)
+
+### F2. Spec §3.5 — `wait_for_pendings` is NOT a `list_pending` poll
+**Spec pseudocode says.** Poll `list_pending()` every 2s until empty
+or timeout.
+
+**Reality.** That design conflated live trades (real broker outcome
+coming — must wait) with `reconcile_pending` give-up timers (no
+outcome — must not wait) and caused a 300s shutdown hang. Superseded
+(commit `36020a9`) by an event-driven `asyncio.wait` over a dedicated
+`TradeExecutor._result_watchers` snapshot. **Read the
+`wait_for_pendings` docstring in `executor.py`, not spec §3.5.**
+
+**Trigger to promote either.** Only if the spec doc is ever revived as
+a live design reference; otherwise these are inert (the code is
+correct and self-documenting). Cheap fix if wanted: a one-line
+"superseded — see &lt;file&gt;" annotation at §3.4/§3.5.
