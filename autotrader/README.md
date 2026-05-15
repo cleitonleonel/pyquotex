@@ -103,7 +103,7 @@ for sample configs.
 cd autotrader/backend
 uv sync                                # creates .venv and installs deps
 uv run uvicorn autotrader.main:app --reload --loop uvloop --http httptools
-uv run pytest                          # 195 tests, ~14s
+uv run pytest                          # 492 tests (pytest-asyncio)
 uv run ruff check src tests            # lint
 ```
 
@@ -218,6 +218,21 @@ A couple of subtleties worth knowing:
 template / regex / prep+trigger / batch reference, the direction-token
 table, and the "why isn't my parser firing?" troubleshooting checklist.
 
+## Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | How it all fits: subsystem map, signal data flow, risk logic, the invariants that keep it safe. **Start here to understand the system.** |
+| [`backend/README.md`](backend/README.md) | Backend dev setup, run/test commands, code map. |
+| [`frontend/README.md`](frontend/README.md) | Frontend dev setup, structure, backend integration. |
+| [`docs/PARSERS.md`](docs/PARSERS.md) | Parser authoring reference (template / regex / prep+trigger / batch). |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Production deployment: TLS/`wss` proxy configs, SQLite backup + restore. |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Failure-mode triage: OTP timeouts, broker reconnect, cache tuning, Sentry. |
+| [`docs/admin-bot.md`](docs/admin-bot.md) | The optional Telegram remote-control bot: setup, commands, recovery. |
+
+The exact HTTP contract is generated from the code — run the backend and
+open <http://localhost:8000/docs>.
+
 ## Project layout
 
 ```
@@ -232,16 +247,22 @@ autotrader/
 │   │   ├── models/                # SQLModel tables (parser_config, settings, trade_attempt, …)
 │   │   ├── routers/               # FastAPI routers (auth, broker, telegram, parsers, pipeline, risk, stats, feed)
 │   │   └── services/              # quotex_manager, telegram_manager, parsers/, pipeline, risk_gate, executor, event_bus, backups
-│   ├── tests/                     # 195 tests — pytest-asyncio
+│   ├── tests/                     # 492 tests — pytest-asyncio
 │   ├── pyproject.toml             # uv-managed; depends on sibling pyquotex via path
-│   └── Dockerfile                 # multi-stage, non-root, healthcheck
+│   ├── Dockerfile                 # multi-stage, non-root, healthcheck
+│   └── README.md                  # backend dev guide
 ├── frontend/                      # Next.js 15 app
-│   ├── app/dashboard/             # broker, telegram, parsers, pipeline pages
+│   ├── app/dashboard/             # overview, analytics, trades, decisions, pipeline, telegram, broker, parsers
 │   ├── components/ui/             # shadcn primitives
 │   ├── lib/                       # api client, use-trade-feed hook
-│   └── Dockerfile                 # Next standalone output, non-root Node
+│   ├── Dockerfile                 # Next standalone output, non-root Node
+│   └── README.md                  # frontend dev guide
 ├── docs/
-│   └── DEPLOY.md                  # production deployment runbook
+│   ├── PARSERS.md                 # parser authoring reference
+│   ├── DEPLOY.md                  # production deployment runbook
+│   ├── RUNBOOK.md                 # failure-mode triage
+│   └── admin-bot.md               # remote-control Telegram bot
+├── ARCHITECTURE.md                # system architecture + invariants
 ├── docker-compose.yml             # base — local dev / single-host prod
 ├── docker-compose.prod.yml        # production overlay (logs, memory, backups)
 └── .env.example

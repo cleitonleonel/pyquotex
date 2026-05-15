@@ -83,8 +83,21 @@ or [docs/en/API_REFERENCE.md](docs/en/API_REFERENCE.md).
 git clone https://github.com/iahmedani/pyquotex.git
 cd pyquotex
 poetry install
-poetry run python app.py
+
+# Run the end-to-end library demo:
+poetry run python examples/private_features.py
+
+# …or launch the bundled REST + WebSocket server (v1.4.0+):
+poetry install --extras webapi
+poetry run python -m pyquotex.webapi          # serves http://localhost:8000
 ```
+
+> There is no `app.py` entry point. Use `pyquotex` as a library (see the
+> [usage example](#-exemplo-de-uso) below), run a script from
+> [`examples/`](examples/), or start the bundled server with
+> `python -m pyquotex.webapi` — see [Web API](docs/en/13.%20Web%20API.md).
+
+Or add it as a dependency of your own project:
 
 ```bash
 poetry add git+https://github.com/iahmedani/pyquotex.git
