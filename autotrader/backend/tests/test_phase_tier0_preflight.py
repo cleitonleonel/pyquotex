@@ -48,8 +48,12 @@ async def test_preflight_403_blocks_and_logs(
         MagicMock(return_value=_FakeResp(status=403, body=b"<html>cf</html>")),
     )
 
-    with pytest.raises(BrokerPreflightFailed, match="cloudflare 403"):
+    with capture_logs() as logs, pytest.raises(BrokerPreflightFailed, match="cloudflare 403"):
         await mgr._preflight_check()
+
+    assert any(
+        r["event"] == "broker.preflight.cloudflare_403" for r in logs
+    ), logs
 
 
 @pytest.mark.asyncio

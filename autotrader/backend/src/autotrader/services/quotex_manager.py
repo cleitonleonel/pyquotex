@@ -53,7 +53,12 @@ log = structlog.get_logger(__name__)
 
 def _curl_get(url: str, *, impersonate: str, timeout: float) -> Any:
     """Module-level indirection so tests can monkeypatch the HTTP
-    call without mocking ``curl_cffi.requests.get`` globally."""
+    call without mocking ``curl_cffi.requests.get`` globally.
+
+    Note: ``curl_cffi.requests.get`` constructs and tears down a
+    one-shot ``Session`` per call — fine for a single pre-flight
+    probe, but a caller must not put this in a hot loop.
+    """
     return _curl_requests.get(url, impersonate=impersonate, timeout=timeout)
 
 AccountMode = Literal["PRACTICE", "REAL"]
@@ -394,13 +399,10 @@ class QuotexManager:
                 impersonate_profile=profile,
             )
             return
-        except TimeoutError as exc:
-            log.warning(
-                "broker.preflight.network_error",
-                detail=f"timeout: {exc}",
-                impersonate_profile=profile,
-            )
-            return
+        # No separate TimeoutError branch: curl_cffi maps every curl
+        # timeout to requests.errors.Timeout (a RequestsError subclass),
+        # caught above. We don't wrap in asyncio.wait_for, so no bare
+        # asyncio TimeoutError can surface here either.
 
         status = int(resp.status_code)
         if status == 403:
@@ -440,7 +442,23 @@ class QuotexManager:
         # because ``_start_status_watcher`` runs inside the FINALIZE
         # critical section.
 
-        # ── Phase A: lock-held setup. Fast, in-memory + one disk read.
+        # ── Phase A: lock-held setup. Runs ``_preflight_check()`` (≤5s
+        # network probe, bounded by ``_PREFLIGHT_TIMEOUT_SECONDS``) plus
+        # the in-memory Quotex() construction and one disk read for
+        # session hydration.
+        #
+        # Why hold the lock over a 5s network call? The H2 fix (Phase
+        # 3a) was specifically about the *unbounded* 2-30s login wait
+        # inside ``client.connect()`` — holding the lock for that window
+        # blocked every other broker method for up to 30s. The preflight
+        # probe is different: it is *bounded* at 5s and it fails fast
+        # (raising ``BrokerPreflightFailed``) when the broker is hard-
+        # down. That 5s bound is an acceptable tradeoff: a probe that
+        # aborts immediately prevents the Phase B login from burning
+        # ~30s of OTP-supervisor retry budget on a dead broker, which is
+        # a net win even if it briefly delays a concurrent caller by up
+        # to 5s. On the happy path the probe latency precedes work that
+        # would happen inside Phase B anyway.
         async with self._timed_lock("do_connect:setup"):
             # Spec §3.1: short HTTP probe before pyquotex burns OTP
             # budget on a broker-side hard failure.
