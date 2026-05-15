@@ -38,6 +38,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+import curl_cffi.requests as _curl_requests
 import structlog
 from pyquotex.global_value import AuthStatus, WebsocketStatus
 from pyquotex.stable_api import Quotex
@@ -48,6 +49,12 @@ from autotrader.config import settings
 from autotrader.models.base import utc_now
 
 log = structlog.get_logger(__name__)
+
+
+def _curl_get(url: str, *, impersonate: str, timeout: float) -> Any:
+    """Module-level indirection so tests can monkeypatch the HTTP
+    call without mocking ``curl_cffi.requests.get`` globally."""
+    return _curl_requests.get(url, impersonate=impersonate, timeout=timeout)
 
 AccountMode = Literal["PRACTICE", "REAL"]
 ConnectState = Literal[
@@ -88,6 +95,14 @@ _STATUS_POLL_INTERVAL = 0.1
 
 class QuotexManagerError(Exception):
     """Raised for caller-visible failures (auth rejected, REAL gate, etc.)."""
+
+
+class BrokerPreflightFailed(RuntimeError):
+    """Raised by :meth:`QuotexManager._preflight_check` when the
+    broker sign-in page returns a hard error (Cloudflare 403,
+    upstream 5xx) before pyquotex even tries to connect. Caught
+    by ``_do_connect:SETUP`` and converted to ``last_error``.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +367,64 @@ class QuotexManager:
                 return
             await asyncio.sleep(0.025)
 
+    _PREFLIGHT_URL = "https://qxbroker.com/en/sign-in"
+    _PREFLIGHT_TIMEOUT_SECONDS = 5.0
+
+    async def _preflight_check(self) -> None:
+        """Spec §3.1. Short HTTP probe to catch broker hard-failures
+        before pyquotex burns OTP-supervisor retry budget on them.
+
+        Falls through silently on network-level errors — the probe
+        isn't conclusive in that case, so pyquotex still gets a turn.
+        Raises :class:`BrokerPreflightFailed` only when the broker
+        explicitly answers with 403 or 5xx.
+        """
+        profile = settings.broker_curl_cffi_profile
+        try:
+            resp = await asyncio.to_thread(
+                _curl_get,
+                self._PREFLIGHT_URL,
+                impersonate=profile,
+                timeout=self._PREFLIGHT_TIMEOUT_SECONDS,
+            )
+        except _curl_requests.RequestsError as exc:
+            log.warning(
+                "broker.preflight.network_error",
+                detail=str(exc),
+                impersonate_profile=profile,
+            )
+            return
+        except TimeoutError as exc:
+            log.warning(
+                "broker.preflight.network_error",
+                detail=f"timeout: {exc}",
+                impersonate_profile=profile,
+            )
+            return
+
+        status = int(resp.status_code)
+        if status == 403:
+            log.error(
+                "broker.preflight.cloudflare_403",
+                impersonate_profile=profile,
+                body_bytes=len(getattr(resp, "content", b"") or b""),
+            )
+            raise BrokerPreflightFailed(
+                "cloudflare 403 — fingerprint regression suspected; "
+                "see RUNBOOK §B (rotate curl_cffi profile)"
+            )
+        if 500 <= status < 600:
+            log.error(
+                "broker.preflight.upstream_5xx",
+                status=status,
+                impersonate_profile=profile,
+            )
+            raise BrokerPreflightFailed(
+                f"broker upstream returned {status} — "
+                "check brokerstatus + retry in 5 min"
+            )
+        log.info("broker.preflight.ok", status=status)
+
     async def _do_connect(self) -> None:
         # Phase 3a (audit 2026-05-13, H2): the broker login round-trip
         # takes 2–30s against Cloudflare; holding ``self._lock`` for
@@ -369,6 +442,16 @@ class QuotexManager:
 
         # ── Phase A: lock-held setup. Fast, in-memory + one disk read.
         async with self._timed_lock("do_connect:setup"):
+            # Spec §3.1: short HTTP probe before pyquotex burns OTP
+            # budget on a broker-side hard failure.
+            try:
+                await self._preflight_check()
+            except BrokerPreflightFailed as exc:
+                self._state = "error"
+                self._last_error = str(exc)
+                log.warning("broker.connect.preflight_failed", detail=str(exc))
+                return
+
             try:
                 assert self._email is not None
                 assert self._password is not None
