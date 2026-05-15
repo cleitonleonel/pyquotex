@@ -212,6 +212,13 @@ class TradeExecutor:
         self._live_env = live_trading_enabled_env
         # Track in-flight result-watchers so we can await them on shutdown.
         self._watchers: set[asyncio.Task[None]] = set()
+        # Result-watchers only (live broker-outcome waiters). A
+        # SUBSET of _watchers — _spawn_deferred_reconcile timers are
+        # deliberately excluded: they carry no incoming broker
+        # outcome, so the graceful drain (wait_for_pendings) must not
+        # block on them. _watchers stays the superset that shutdown()
+        # cancels.
+        self._result_watchers: set[asyncio.Task[None]] = set()
         # Live dashboard fan-out. Optional so unit tests that don't
         # care about the feed can leave it ``None``.
         self._event_bus = event_bus
@@ -285,29 +292,27 @@ class TradeExecutor:
         return await self._place(attempt, signal, decision)
 
     async def wait_for_pendings(self, *, timeout: float) -> int:  # noqa: ASYNC109
-        """Spec §3.5 / Task 6. Poll list_pending() every 2s. Return 0
-        once drained, or the remaining count on timeout. Called by the
-        lifespan BEFORE shutdown() so in-flight trades settle naturally
-        instead of becoming reconcile_pending work (which intentionally
-        does NOT advance the martingale ladder, leaving it stale).
+        """Spec §3.5 / Task 6. Wait (up to ``timeout`` s) for in-flight
+        RESULT-watchers to finish so a planned-deploy mid-trade lets the
+        broker outcome land instead of becoming reconcile_pending work
+        (which intentionally does NOT advance the martingale ladder,
+        leaving it stale). Deliberately ignores _spawn_deferred_reconcile
+        give-up timers — they have no incoming outcome to wait for.
 
-        Honors ``timeout`` promptly: the sleep is capped to the
-        remaining budget so the loop never overshoots by a full poll
-        interval."""
-        deadline = asyncio.get_running_loop().time() + float(timeout)
-        poll_interval = 2.0
-        while True:
-            async with AsyncSessionLocal() as session:
-                remaining = await list_pending(session)
-            if not remaining:
-                log.info("lifespan.drain.complete")
-                return 0
-            now = asyncio.get_running_loop().time()
-            if now >= deadline:
-                log.warning("lifespan.drain.timeout", remaining=len(remaining))
-                return len(remaining)
-            sleep_for = min(poll_interval, max(0.0, deadline - now))
-            await asyncio.sleep(sleep_for)
+        Safe to snapshot: the lifespan calls pipeline.start_draining()
+        BEFORE this, so no new dispatch -> no new result-watcher is
+        spawned during the drain.
+        """
+        watchers = [t for t in self._result_watchers if not t.done()]
+        if not watchers:
+            log.info("lifespan.drain.complete")
+            return 0
+        _done, pending = await asyncio.wait(watchers, timeout=timeout)
+        if pending:
+            log.warning("lifespan.drain.timeout", remaining=len(pending))
+            return len(pending)
+        log.info("lifespan.drain.complete")
+        return 0
 
     async def shutdown(self) -> None:
         """Cancel and await in-flight watchers so the lifespan exits cleanly.
@@ -436,6 +441,11 @@ class TradeExecutor:
         )
         self._watchers.add(task)
         task.add_done_callback(self._watchers.discard)
+        # Also track in the result-watchers-only subset so
+        # wait_for_pendings can drain on real broker outcomes without
+        # blocking on _spawn_deferred_reconcile give-up timers.
+        self._result_watchers.add(task)
+        task.add_done_callback(self._result_watchers.discard)
 
     async def _mark_reconciled(self, attempt_id: int, message: str) -> None:
         async with AsyncSessionLocal() as session:

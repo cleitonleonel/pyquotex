@@ -9,6 +9,8 @@ Tests adapted from plan pseudocode accordingly; intent is identical.
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 from structlog.testing import capture_logs
 
@@ -60,58 +62,67 @@ async def test_dispatch_refuses_when_draining() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_pendings_returns_when_drained(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The poll loop returns 0 the moment list_pending() is empty.
+async def test_wait_for_pendings_returns_when_drained() -> None:
+    """When _result_watchers is empty (or all tasks are already done),
+    wait_for_pendings returns 0 and logs lifespan.drain.complete.
 
     Uses ``TradeExecutor`` (the real class name; plan pseudocode wrote
     ``Executor`` which doesn't exist in this codebase).
     """
-    import autotrader.services.executor as executor_module  # noqa: PLC0415
+    import asyncio  # noqa: PLC0415
+
     from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
 
-    calls = {"count": 0}
-
-    async def _list_pending_stub(_session: object) -> list[object]:
-        calls["count"] += 1
-        return []
-
-    monkeypatch.setattr(executor_module, "list_pending", _list_pending_stub)
-
+    # Case 1: completely empty set.
     instance = TradeExecutor.__new__(TradeExecutor)
-    remaining = await instance.wait_for_pendings(timeout=5.0)
-
+    instance._result_watchers = set()
+    with capture_logs() as logs:
+        remaining = await instance.wait_for_pendings(timeout=5.0)
     assert remaining == 0
-    assert calls["count"] == 1
+    assert any(r["event"] == "lifespan.drain.complete" for r in logs), logs
+
+    # Case 2: set contains an already-completed task — the not t.done()
+    # filter must treat it as if the set were empty.
+    completed_task = asyncio.create_task(asyncio.sleep(0))
+    await completed_task  # let it finish
+    instance2 = TradeExecutor.__new__(TradeExecutor)
+    instance2._result_watchers = {completed_task}
+    with capture_logs() as logs2:
+        remaining2 = await instance2.wait_for_pendings(timeout=5.0)
+    assert remaining2 == 0
+    assert any(r["event"] == "lifespan.drain.complete" for r in logs2), logs2
 
 
 @pytest.mark.asyncio
-async def test_wait_for_pendings_times_out_with_remaining_log(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When pendings never drain, the helper returns the remaining
-    count and logs ``lifespan.drain.timeout``.
+async def test_wait_for_pendings_times_out_with_remaining_log() -> None:
+    """When a result-watcher never finishes, wait_for_pendings returns the
+    remaining count and logs lifespan.drain.timeout within the timeout budget.
 
     Uses ``TradeExecutor`` (the real class name; plan pseudocode wrote
     ``Executor`` which doesn't exist in this codebase).
     """
-    import autotrader.services.executor as executor_module  # noqa: PLC0415
+    import asyncio  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
     from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
 
-    class _FakeRow:
-        id = 99
+    never_finishing = asyncio.create_task(asyncio.sleep(3600))
+    try:
+        instance = TradeExecutor.__new__(TradeExecutor)
+        instance._result_watchers = {never_finishing}
 
-    async def _list_pending_stub(_session: object) -> list[object]:
-        return [_FakeRow(), _FakeRow()]
+        start = time.monotonic()
+        with capture_logs() as logs:
+            remaining = await instance.wait_for_pendings(timeout=0.2)
+        elapsed = time.monotonic() - start
 
-    monkeypatch.setattr(executor_module, "list_pending", _list_pending_stub)
-
-    instance = TradeExecutor.__new__(TradeExecutor)
-    with capture_logs() as logs:
-        remaining = await instance.wait_for_pendings(timeout=0.5)
-
-    assert remaining == 2
-    timeouts = [r for r in logs if r["event"] == "lifespan.drain.timeout"]
-    assert timeouts, logs
-    assert timeouts[0]["remaining"] == 2
+        assert remaining == 1
+        timeouts = [r for r in logs if r["event"] == "lifespan.drain.timeout"]
+        assert timeouts, logs
+        assert timeouts[0]["remaining"] == 1
+        # Timeout must be honored — wall time well under 1s.
+        assert elapsed < 1.0, f"timeout not honored; elapsed={elapsed:.2f}s"
+    finally:
+        never_finishing.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await never_finishing
