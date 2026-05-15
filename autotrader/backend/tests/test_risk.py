@@ -461,6 +461,108 @@ async def test_martingale_auto_recovery_off_falls_back_to_stake_mul_only(
     )
 
 
+async def test_martingale_auto_recovery_fires_live_when_parser_pinned_scheduled(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """Auto-recovery must fire as a live trade even when the parser is
+    pinned to ``trade_mode="scheduled"``.
+
+    Pre-fix bug (visible on the dashboard as a ``rejected`` row with
+    error ``trade_mode=scheduled but signal has no fire_at``): the
+    executor's ``_fire_auto_recovery`` synthesises a signal with
+    ``fire_at=None`` (the recovery is meant to fire NOW, the original
+    schedule is past), but the risk gate refused it because the
+    parser config still says ``scheduled``. Net effect: martingale
+    recovery never reached the broker.
+
+    Channels phrase their guidance as *"IF LOSS TAKE 1 STEP MTG (Same
+    Direction Double Amount)"* — they don't repost the signal at a new
+    schedule, they expect the bot to fire ASAP. This test pins that
+    contract: parser pin gates *channel-emitted* signals; auto-recovery
+    is a synthesised signal and is always live.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    parser_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        trade_mode="scheduled",
+        template="{DIRECTION} {ASSET} {DURATION} at {TIME}",
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 2,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    # Original loses → recovery fires live → recovery wins.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0), ("win", 18.0)]
+    fire_at = (datetime.now(UTC) + timedelta(minutes=2)).strftime("%H:%M")
+    await _dispatch(
+        async_client, chat_id=-1001, text=f"BUY EURUSD 1m at {fire_at}",
+    )
+    # First settle drains the parent's watcher (the loss); the recovery
+    # registers its own watcher *during* that settlement, so we settle
+    # again to drain it.
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+
+    # Original was scheduled — should be in pending_calls at base stake.
+    pending_amounts = [c["amount"] for c in WatcherFakeQuotex.pending_calls]
+    assert pending_amounts == [10.0], (
+        f"original scheduled trade should fire via open_pending at base "
+        f"stake; got pending_calls={pending_amounts}"
+    )
+
+    # Recovery must have fired LIVE (buy, not open_pending) at 2× stake.
+    buy_amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert buy_amounts == [20.0], (
+        "auto-recovery on a scheduled-pinned parser must fire live "
+        "(open_pending would re-defer it past its useful window). "
+        f"Expected one live buy at 20.0; got buy_calls={buy_amounts}"
+    )
+
+    # Belt-and-braces: no rejected rows in the DB. The pre-fix bug
+    # created a ``rejected`` row with reason ``trade_mode=scheduled but
+    # signal has no fire_at`` — guard against that exact regression.
+    rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
+    rejected = [r for r in rows if r["status"] == "rejected"]
+    assert rejected == [], (
+        f"auto-recovery should not be rejected; got rejected rows: "
+        f"{[(r['error'], r['trade_mode']) for r in rejected]}"
+    )
+
+    # Recovery row must be persisted with trade_mode="live", not the
+    # parser's "scheduled" pin — anything else means we left the cfg
+    # pin in place and the executor would re-defer the recovery onto a
+    # past schedule. The recovery is identifiable as the only live row
+    # at the doubled stake.
+    recoveries = [
+        r for r in rows
+        if r["trade_mode"] == "live" and r["stake"] == 20.0
+    ]
+    assert len(recoveries) == 1, (
+        f"expected exactly one recovery row (trade_mode=live, stake=20); "
+        f"got rows={rows}"
+    )
+
+    # Streak resets after the recovery wins.
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        state = await s.get(MartingaleState, parser_id)
+    assert state is not None
+    assert state.current_streak == 0
+    assert state.last_outcome == "won"
+
+
 async def test_martingale_max_streak_one_takes_one_recovery_step(
     async_client: httpx.AsyncClient,
 ) -> None:

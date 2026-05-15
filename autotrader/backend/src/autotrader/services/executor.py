@@ -273,7 +273,10 @@ class TradeExecutor:
         async with AsyncSessionLocal() as session:
             attempt = await insert_attempt(session, attempt)
 
-        self._publish(attempt)
+        # Initial-insert publish. The bot notifier ignores this one
+        # (it gates PLACED on ``placed_at is not None``); the dashboard
+        # picks it up so the operator sees the row appear immediately.
+        self._publish(attempt, parser_config=parser_config, decision=decision)
 
         if not decision.allowed:
             log.info(
@@ -297,7 +300,7 @@ class TradeExecutor:
             return attempt
 
         # Attempt is in DB; place the trade.
-        return await self._place(attempt, signal, decision)
+        return await self._place(attempt, signal, decision, parser_config)
 
     def start_draining(self) -> None:
         """One-way latch (spec §3.5). After this, executor-internal
@@ -493,6 +496,13 @@ class TradeExecutor:
         merge it into the existing list by ``id`` without re-fetching.
         Datetimes are ISO-8601 strings (the wire format the REST
         endpoint already uses).
+
+        ``parser_config`` and ``decision`` are optional — when they're
+        in scope (the ``submit`` → ``_place`` path), they layer on the
+        parser name and martingale ladder context the admin Telegram
+        bot uses for richer PLACED messages. Settlement-time and
+        reconcile-time publishes don't have them in scope and just emit
+        the base payload, which is fine: the formatter degrades cleanly.
         """
         if self._event_bus is None:
             return
@@ -533,6 +543,7 @@ class TradeExecutor:
         attempt: TradeAttempt,
         signal: ParsedSignal,
         decision: RiskDecision,
+        parser_config: ParserConfig,
     ) -> TradeAttempt:
         """Dispatch to ``buy`` (live) or ``open_pending`` (scheduled).
 
@@ -681,7 +692,11 @@ class TradeExecutor:
         if updated is None:  # pragma: no cover - row was just inserted
             return attempt
         attempt = updated
-        self._publish(attempt)
+        # Broker-confirmed publish. ``placed_at`` is now set, which is
+        # what the bot notifier uses to dedupe PLACED messages — only
+        # this publish (not the initial-insert one) fires a Telegram
+        # notification.
+        self._publish(attempt, parser_config=parser_config, decision=decision)
 
         if ok and order_id:
             # Fire-and-forget result watcher. Live trades use the
@@ -1125,6 +1140,12 @@ class TradeExecutor:
             raw_text=f"[auto-recovery for trade #{original.id}]",
             parser_id=f"cfg-{fresh_cfg.id}-recovery-{streak}",
             asset_raw=original.asset_raw,
+            # Tells the risk gate to bypass the parser's
+            # ``trade_mode=scheduled`` pin — recoveries are always live
+            # because the original schedule is already past. Without
+            # this, the gate would refuse the signal for missing
+            # ``fire_at`` and the recovery would never reach the broker.
+            is_auto_recovery=True,
         )
         # Auto-recovery is by definition immediate — the next ladder
         # step has to fire NOW, not at the channel's scheduled time.

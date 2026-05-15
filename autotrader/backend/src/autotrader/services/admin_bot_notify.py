@@ -313,7 +313,17 @@ async def _consume(self: "AdminBotNotifier", bus: Any) -> None:
             try:
                 if event.type == "trade.upserted":
                     status = event.payload.get("status")
-                    if status == "pending":
+                    placed_at = event.payload.get("placed_at")
+                    # The executor publishes ``trade.upserted`` *twice*
+                    # for every successful trade — once after the row
+                    # is inserted (status=pending, placed_at=None) and
+                    # once after the broker confirms placement
+                    # (status=pending, placed_at=set). Filtering on
+                    # status alone fires PLACED twice for one trade —
+                    # an operator-visible duplicate. The broker-confirm
+                    # publish always carries a non-None placed_at, so
+                    # gate on that to dedupe.
+                    if status == "pending" and placed_at is not None:
                         await self.notify("placed", format_trade_placed(event.payload))
                     elif status in ("won", "lost", "refund"):
                         await self.notify("settled", format_trade_settled(event.payload))

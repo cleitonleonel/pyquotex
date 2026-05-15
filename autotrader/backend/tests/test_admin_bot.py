@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -1078,12 +1079,17 @@ def test_notifier_subscribes_and_renders_trade_upserted() -> None:
         # Give the subscriber loop a tick to register.
         await asyncio.sleep(0.01)
 
-        # Pending -> placed
+        # Pending -> placed. ``placed_at`` is set because we're
+        # modelling the *broker-confirmed* publish; the prior
+        # initial-insert publish (placed_at=None) is intentionally
+        # silenced to avoid the duplicate-PLACED bug.
         bus.publish("trade.upserted", {
             "id": 1, "asset": "EURUSD_otc", "direction": "call",
             "duration_seconds": 60, "stake": 20.0, "status": "pending",
             "profit": None, "parser_config_id": 4, "trade_mode": "live",
             "martingale_step": 1, "base_stake": 10.0,
+            "placed_at": "2026-05-09T01:00:00+00:00",
+            "broker_order_id": "order-1",
         })
         # Won -> settled
         bus.publish("trade.upserted", {
@@ -1091,6 +1097,8 @@ def test_notifier_subscribes_and_renders_trade_upserted() -> None:
             "duration_seconds": 60, "stake": 20.0, "status": "won",
             "profit": 18.4, "parser_config_id": 4, "trade_mode": "live",
             "martingale_step": 1, "base_stake": 10.0,
+            "placed_at": "2026-05-09T01:00:00+00:00",
+            "broker_order_id": "order-1",
         })
 
         # Allow the subscriber to drain.
@@ -1109,6 +1117,191 @@ def test_notifier_subscribes_and_renders_trade_upserted() -> None:
         assert any("WON" in s for s in sent), sent  # settled notification
     finally:
         _reset_notifier_settings()
+
+
+def test_notifier_fires_placed_once_per_trade_not_twice() -> None:
+    """Regression for the duplicate-PLACED bug.
+
+    The executor calls ``_publish`` twice for every successful trade:
+    once after ``insert_attempt`` (status=pending, placed_at=None) and
+    once after the broker confirms placement (status=pending, placed_at
+    set). The notifier was firing PLACED on *both* publishes because
+    its only filter was ``status == "pending"`` — operators saw two
+    identical messages for one trade.
+
+    The fix: gate "placed" on ``placed_at is not None`` so the
+    initial-insert publish is silenced and only the broker-confirmed
+    publish notifies."""
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.settings import GlobalSettings  # noqa: PLC0415
+    from autotrader.services.admin_bot_notify import AdminBotNotifier  # noqa: PLC0415
+    from autotrader.services.event_bus import TradeEventBus  # noqa: PLC0415
+
+    bot, fake = _make_bound_bot()
+    bus = TradeEventBus()
+    notifier = AdminBotNotifier(bot=bot)
+
+    async def _run() -> list[str]:
+        from autotrader.db import init_db  # noqa: PLC0415
+
+        # Ensure schema exists when this test runs in isolation.
+        await init_db()
+        async with AsyncSessionLocal() as s:
+            gs = await s.get(GlobalSettings, 1) or GlobalSettings(id=1)
+            gs.admin_telegram_user_id = 555
+            gs.admin_notify_placed = True
+            s.add(gs); await s.commit()
+        await bot.start()
+        task = asyncio.create_task(notifier.run(bus))
+        await asyncio.sleep(0.01)
+
+        # First publish: post-insert, before broker placement. This is
+        # the one that must NOT fire a notification — the trade isn't
+        # actually at the broker yet.
+        bus.publish("trade.upserted", {
+            "id": 1, "asset": "AUDJPY_otc", "direction": "call",
+            "duration_seconds": 300, "stake": 50.0, "status": "pending",
+            "trade_mode": "scheduled", "placed_at": None,
+            "broker_order_id": None,
+        })
+        # Second publish: same row, broker has confirmed placement.
+        # This is the one that should fire PLACED.
+        bus.publish("trade.upserted", {
+            "id": 1, "asset": "AUDJPY_otc", "direction": "call",
+            "duration_seconds": 300, "stake": 50.0, "status": "pending",
+            "trade_mode": "scheduled",
+            "placed_at": "2026-05-09T01:00:00+00:00",
+            "broker_order_id": "pending-1",
+        })
+
+        await asyncio.sleep(0.05)
+        await notifier.shutdown()
+        try:
+            task.cancel()
+            await task
+        except asyncio.CancelledError:
+            pass
+        return [t for _, t, _ in fake.sent_messages]
+
+    try:
+        sent = asyncio.new_event_loop().run_until_complete(_run())
+        placed_msgs = [s for s in sent if "PLACED" in s]
+        assert len(placed_msgs) == 1, (
+            f"expected exactly one PLACED message per trade; got "
+            f"{len(placed_msgs)}: {placed_msgs}"
+        )
+    finally:
+        _reset_notifier_settings()
+
+
+def test_format_trade_placed_renders_parser_step_fire_at_ticket() -> None:
+    """The PLACED message must surface enough context for the operator
+    to know *which parser*, *which martingale step*, *when it fires*
+    (for scheduled), and *which broker ticket* — without leaving
+    Telegram to dig through the dashboard."""
+    from autotrader.services.admin_bot_notify import format_trade_placed  # noqa: PLC0415
+
+    text = format_trade_placed({
+        "asset": "AUDJPY_otc",
+        "direction": "call",
+        "duration_seconds": 300,
+        "stake": 100.0,
+        "base_stake": 25.0,
+        "martingale_step": 2,
+        "trade_mode": "scheduled",
+        "fire_at": "2026-05-09T01:30:00+00:00",
+        "broker_order_id": "pending-42",
+        "parser_name": "Big Boys VIP",
+    })
+    # Header line is unchanged so existing operator habits still work.
+    assert "PLACED  AUDJPY_otc - CALL - 300s" in text
+    # Step annotation surfaces the ladder position.
+    assert "step 2" in text and "x4.0" in text
+    # Mode + fire_at appear together so the operator sees *when*.
+    assert "scheduled" in text
+    assert "01:30" in text
+    # Parser identifies which channel triggered the trade.
+    assert "Big Boys VIP" in text
+    # Ticket lets the operator cross-reference broker history.
+    assert "pending-42" in text
+
+
+def test_executor_publishes_parser_name_and_martingale_step_on_place() -> None:
+    """End-to-end wiring: when the executor confirms a placement, the
+    ``trade.upserted`` event must carry the parser name (so the bot can
+    say *which* channel triggered the trade) and martingale_step /
+    base_stake (so the formatter can render the ladder annotation).
+
+    This pins the contract between executor.py and admin_bot_notify.py
+    so a future refactor of either side can't quietly drop the extra
+    fields and have the formatter silently fall back to the bare
+    message — which is exactly the gap that left the bug invisible
+    long enough for an operator to notice and ask.
+    """
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+    from autotrader.services.executor import _attempt_to_payload  # noqa: PLC0415
+    from autotrader.services.risk_gate import RiskDecision  # noqa: PLC0415
+
+    cfg = ParserConfig(id=42, chat_id=-100, name="Big Boys VIP")
+    decision = RiskDecision(
+        outcome="allow", reason="passed",
+        stake=40.0, trade_mode="scheduled",
+        martingale_step=2, base_stake=10.0,
+    )
+    # No DB persistence — ``_attempt_to_payload`` is a pure function on
+    # the row's attributes; persisting would leak state into sibling
+    # tests that assume a clean ``trade_attempts`` table.
+    attempt = TradeAttempt(
+        chat_id=-100, parser_config_id=42,
+        asset="AUDJPY_otc", asset_raw="AUDJPY_otc",
+        direction="call", duration_seconds=300,
+        stake=40.0, trade_mode="scheduled",
+        status="pending", broker_order_id="pending-7",
+        placed_at=datetime(2026, 5, 9, 1, 0, 0, tzinfo=UTC),
+    )
+
+    payload = _attempt_to_payload(
+        attempt, parser_config=cfg, decision=decision,
+    )
+
+    # The new fields are the bot-formatter contract.
+    assert payload["parser_name"] == "Big Boys VIP"
+    assert payload["martingale_step"] == 2
+    assert payload["base_stake"] == 10.0
+    # The base wire shape must remain a drop-in replacement for
+    # /pipeline/trades — anything missing here would break the dashboard.
+    for key in ("id", "asset", "direction", "stake", "trade_mode",
+               "status", "broker_order_id", "placed_at"):
+        assert key in payload, f"base payload missing {key}"
+    # Bus payload omits the optional context when not provided —
+    # settlement-time publishes don't pass decision and shouldn't
+    # carry ladder fields.
+    bare = _attempt_to_payload(attempt)
+    assert "parser_name" not in bare
+    assert "martingale_step" not in bare
+
+
+def test_format_trade_placed_no_extra_fields_on_live_trade() -> None:
+    """When the optional context isn't present (live trade with no
+    martingale ladder, no parser_name plumbed), the formatter degrades
+    cleanly — header + stake + mode is enough."""
+    from autotrader.services.admin_bot_notify import format_trade_placed  # noqa: PLC0415
+
+    text = format_trade_placed({
+        "asset": "EURUSD",
+        "direction": "put",
+        "duration_seconds": 60,
+        "stake": 10.0,
+        "trade_mode": "live",
+    })
+    assert "PLACED  EURUSD - PUT - 60s" in text
+    assert "stake : $10.00" in text
+    assert "mode  : live" in text
+    # Belt-and-braces: nothing leaking from "(step …)" or "from  : ?"
+    assert "step" not in text
+    assert "from  :" not in text
+    assert "ticket" not in text
 
 
 def test_notifier_resets_backoff_on_admin_message() -> None:
