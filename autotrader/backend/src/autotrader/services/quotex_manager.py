@@ -717,6 +717,12 @@ class QuotexManager:
         # watcher itself may briefly contend on it via callbacks and
         # we want a clean cancel before the client object disappears.
         await self._stop_status_watcher()
+        # Stop any in-flight ceiling-halt task — if _halt_at_ceiling is
+        # mid-flight it will race into the finalize lock after we've set
+        # state="idle" and null _client, overwriting state back to
+        # awaiting_manual_recovery and emitting a stale event. Cancel it
+        # here, alongside the watcher stop, before we take the lock.
+        await self._stop_ceiling_halt_task()
         async with self._timed_lock("disconnect"):
             if self._client is None:
                 self._state = "idle"
@@ -756,6 +762,16 @@ class QuotexManager:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
         self._status_watcher_task = None
+
+    async def _stop_ceiling_halt_task(self) -> None:
+        task = self._ceiling_halt_task
+        if task is None or task.done():
+            self._ceiling_halt_task = None
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        self._ceiling_halt_task = None
 
     async def _status_watcher(self) -> None:
         """Mirror the underlying WS health into our state machine.
@@ -838,6 +854,8 @@ class QuotexManager:
 
     def _on_ws_dropped(self, state: Any) -> None:
         """Called once per CONNECTED → not-CONNECTED edge."""
+        if self._state == "awaiting_manual_recovery":
+            return  # terminal — operator must /reconnect; watcher must not un-stick it
         self._disconnected_at = utc_now()
         self._state = "reconnecting"
         reason = (
@@ -889,7 +907,9 @@ class QuotexManager:
             recoverable=not is_outage,
         )
 
-        if at_ceiling:
+        if at_ceiling and (
+            self._ceiling_halt_task is None or self._ceiling_halt_task.done()
+        ):
             log.error(
                 "broker.reconnect_ceiling_reached",
                 failed_attempts=failed_count,
@@ -907,6 +927,18 @@ class QuotexManager:
         if self._state == "awaiting_manual_recovery":
             return  # already halted (e.g. OTP exhaustion got there first)
 
+        # I3-A: stop the status watcher before tearing down the connection.
+        # The watcher mirrors WS state — its next tick after WS closes would
+        # call _on_ws_dropped and clobber the awaiting_manual_recovery state
+        # we're about to set. Cancel it here, exactly as disconnect() does,
+        # before supervisor.stop() / client.disconnect().
+        #
+        # Deadlock safety: _halt_at_ceiling runs as its own asyncio.Task
+        # (spawned via asyncio.create_task in _on_reconnect_attempt_failed).
+        # _stop_status_watcher cancels+awaits _status_watcher_task, which is
+        # a DIFFERENT task. There is no self-cancellation — safe to await.
+        await self._stop_status_watcher()
+
         client = self._client
         if client is not None:
             supervisor = getattr(
@@ -915,14 +947,14 @@ class QuotexManager:
             if supervisor is not None:
                 try:
                     await supervisor.stop()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning(
                         "broker.reconnect_ceiling.stop_failed",
                         error=str(exc),
                     )
             try:
                 await client.disconnect()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.warning(
                     "broker.reconnect_ceiling.disconnect_failed",
                     error=str(exc),

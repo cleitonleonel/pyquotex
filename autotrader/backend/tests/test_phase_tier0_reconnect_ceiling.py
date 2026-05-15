@@ -52,9 +52,8 @@ async def test_hard_ceiling_disconnects_and_flips_state() -> None:
     mgr._client.disconnect = AsyncMock()  # type: ignore[union-attr]
 
     mgr._on_reconnect_attempt_failed(20)
-    # _halt_at_ceiling runs as a task — give it a tick to drain.
-    for _ in range(5):
-        await asyncio.sleep(0)
+    assert mgr._ceiling_halt_task is not None
+    await asyncio.wait_for(mgr._ceiling_halt_task, timeout=1.0)
 
     mgr._client.api.reconnect_supervisor.stop.assert_awaited_once()  # type: ignore[union-attr]
     mgr._client.disconnect.assert_awaited_once()  # type: ignore[union-attr]
