@@ -538,15 +538,30 @@ class TradeExecutor:
         # ladder is NOT advanced because the trade never reached the
         # broker and treating a stale-feed block as a loss would corrupt
         # the recovery sequence.
+        #
+        # Health gate runs AFTER _resolve_asset: assert_live looks the
+        # asset up in pyquotex's realtime_price dict, which is keyed by
+        # the resolved broker symbol. Moving this above resolution would
+        # make a fresh-boot/empty-cache path look up the wrong key and
+        # spuriously raise no_tick_seen. Keep it here.
         from autotrader.services.quotex_manager import BrokerNotLive  # noqa: PLC0415
         try:
             await self._manager.assert_live(signal.asset)
         except BrokerNotLive as exc:
+            # Filter reserved kwargs before spreading exc.detail so a
+            # future BrokerNotLive(..., reason=...) or
+            # BrokerNotLive(..., attempt_id=...) can't collide with the
+            # fixed positional kwargs and TypeError the gate into an
+            # unhandled _place crash.
+            _safe_detail = {
+                k: v for k, v in exc.detail.items()
+                if k not in {"reason", "attempt_id"}
+            }
             log.warning(
                 "executor.healthgate_blocked",
                 attempt_id=attempt.id,
                 reason=exc.reason,
-                **exc.detail,
+                **_safe_detail,
             )
             return await self._mark_error(
                 attempt,
