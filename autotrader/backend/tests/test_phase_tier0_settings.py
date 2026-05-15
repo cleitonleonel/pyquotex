@@ -63,3 +63,16 @@ def test_hard_ceiling_below_soft_downgrade_rejected(
 
     with pytest.raises(ValidationError, match="broker_reconnect_hard_ceiling"):
         Settings()  # type: ignore[call-arg]
+
+
+def test_whitespace_only_profile_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """broker_curl_cffi_profile must not be blank after stripping whitespace
+    (Task 1 deferred minor). A value of '   ' passes min_length=1 but must
+    be rejected before it reaches curl_cffi."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    monkeypatch.setenv("AUTOTRADER_BROKER_CURL_CFFI_PROFILE", "   ")
+    from autotrader.config import Settings  # noqa: PLC0415
+
+    with pytest.raises(ValidationError, match="broker_curl_cffi_profile"):
+        Settings()  # type: ignore[call-arg]

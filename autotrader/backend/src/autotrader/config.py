@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     # Cloudflare's bot scoring shifts. Sweep candidates with the
     # probe in RUNBOOK §B.
     broker_curl_cffi_profile: str = Field(default="firefox144", min_length=1)
+
+    @field_validator("broker_curl_cffi_profile", mode="after")
+    @classmethod
+    def _profile_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            msg = "broker_curl_cffi_profile must not be blank or whitespace-only"
+            raise ValueError(msg)
+        return v
 
     # Pre-trade WS health gate (Task 5 / spec §3.4). If the latest
     # tick for the asset is older than this, the executor refuses
