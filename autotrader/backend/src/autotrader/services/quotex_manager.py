@@ -907,7 +907,7 @@ class QuotexManager:
             recoverable=not is_outage,
         )
 
-        if at_ceiling and (
+        if at_ceiling and self._state != "awaiting_manual_recovery" and (
             self._ceiling_halt_task is None or self._ceiling_halt_task.done()
         ):
             log.error(

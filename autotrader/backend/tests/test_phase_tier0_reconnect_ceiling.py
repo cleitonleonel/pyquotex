@@ -71,3 +71,86 @@ def test_successful_reconnect_resets_counter() -> None:
     mgr._on_ws_recovered()
 
     assert mgr._consecutive_failed_reconnects == 0
+
+
+def test_on_ws_dropped_does_not_unstick_manual_recovery() -> None:
+    """I3-B: once the manager is in the terminal awaiting_manual_recovery
+    state, a status-watcher WS-drop edge must NOT flip it back to
+    reconnecting — the operator must run /reconnect to leave it.
+
+    _on_ws_dropped's guard (line 857) is the FIRST statement in the
+    method, before any access to attributes on the ``state`` argument,
+    so a bare MagicMock satisfies the call without crashing.
+    """
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    mgr = QuotexManager()
+    mgr._state = "awaiting_manual_recovery"  # type: ignore[assignment]
+    mgr._disconnected_at = None  # type: ignore[assignment]
+
+    # The guard `if self._state == "awaiting_manual_recovery": return`
+    # is the very first line of _on_ws_dropped, so it returns before
+    # reading any attribute off `state`.  A plain MagicMock is the
+    # minimal faithful stub: it exercises the real guard without
+    # crashing on attribute access that never reaches this path.
+    mgr._on_ws_dropped(MagicMock())
+
+    assert mgr._state == "awaiting_manual_recovery"
+    assert mgr._disconnected_at is None  # early-return skipped the mutation
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cancels_in_flight_ceiling_halt() -> None:
+    """I1: if _halt_at_ceiling is mid-flight when disconnect() is
+    called, _stop_ceiling_halt_task cancels it so it can't race into
+    the finalize lock and resurrect awaiting_manual_recovery after
+    disconnect() set state=idle.
+
+    Wiring choice: we call ``mgr._stop_ceiling_halt_task()`` directly
+    rather than the full ``disconnect()`` path.  Rationale: ``disconnect()``
+    calls ``cancel_connect()`` → ``_stop_status_watcher()`` →
+    ``_stop_ceiling_halt_task()`` → takes the lock → calls
+    ``self._client.close()``.  The assertion we care about (I1) is
+    satisfied entirely by ``_stop_ceiling_halt_task`` — it cancels and
+    awaits the task then sets ``_ceiling_halt_task = None``.  Driving
+    the full ``disconnect()`` would require mocking ``_client.close``
+    (AsyncMock) AND ensuring ``cancel_connect`` / ``_stop_status_watcher``
+    don't interfere, adding setup noise unrelated to I1.  Calling
+    ``_stop_ceiling_halt_task`` directly is both the narrower and more
+    deterministic test of the invariant.
+    """
+    import asyncio  # noqa: PLC0415
+
+    from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
+
+    mgr = QuotexManager()
+    mgr._state = "reconnecting"  # type: ignore[assignment]
+    mgr._client = MagicMock()  # type: ignore[assignment]
+
+    # Make supervisor.stop() hang so the halt task is reliably
+    # in-flight (suspended) when we cancel it.
+    started = asyncio.Event()
+
+    async def _hang() -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    mgr._client.api.reconnect_supervisor.stop = AsyncMock(side_effect=_hang)
+    mgr._client.disconnect = AsyncMock()
+
+    # Spawn the halt task directly (bypassing the failed-count path so
+    # the test is deterministic) and wait until it's parked in stop().
+    mgr._ceiling_halt_task = asyncio.create_task(
+        mgr._halt_at_ceiling(20, 20),
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    # Cancel the in-flight task via the same helper disconnect() uses.
+    await mgr._stop_ceiling_halt_task()
+
+    assert mgr._ceiling_halt_task is None
+    # The halt task was cancelled before it could reach the finalize
+    # lock, so it did NOT write awaiting_manual_recovery.
+    assert mgr._state != "awaiting_manual_recovery"
