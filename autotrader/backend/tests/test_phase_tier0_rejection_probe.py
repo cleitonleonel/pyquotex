@@ -51,7 +51,7 @@ async def test_rejection_probe_fires_when_pyquotex_returns_false(
     mgr.set_credentials("user@example.com", "pw")  # type: ignore[attr-defined]
 
     monkeypatch.setattr(
-        QuotexManager, "_preflight_check", AsyncMock(return_value=None),
+        mgr, "_preflight_check", AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         "autotrader.services.quotex_manager.Quotex", _FakePyqClient,
@@ -67,7 +67,8 @@ async def test_rejection_probe_fires_when_pyquotex_returns_false(
     assert p["ssid_loaded"] is False
     assert "elapsed_ms" in p
     assert p["impersonate_profile"] == settings.broker_curl_cffi_profile
-    assert "auth_status" in p
+    assert p["auth_status"] == 0           # reads _state.auth_status; flat-path revert → None
+    assert p["is_authenticated"] is False  # 0 != AuthStatus.AUTHENTICATED; revert → None
     assert "ws_url" in p and p["ws_url"] is not None and "qxbroker" in p["ws_url"]
 
 
@@ -85,7 +86,7 @@ async def test_rejection_probe_silent_on_successful_connect(
     mgr = QuotexManager()
     mgr.set_credentials("user@example.com", "pw")  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        QuotexManager, "_preflight_check", AsyncMock(return_value=None),
+        mgr, "_preflight_check", AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         "autotrader.services.quotex_manager.Quotex", _OkClient,
