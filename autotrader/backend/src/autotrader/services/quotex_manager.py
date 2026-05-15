@@ -166,6 +166,7 @@ class QuotexManager:
         # while we're idle/connecting/error; populated on the way out
         # of ``_do_connect`` if the login succeeded.
         self._status_watcher_task: asyncio.Task[None] | None = None
+        self._ceiling_halt_task: asyncio.Task[None] | None = None
         self._disconnected_at: datetime | None = None
         self._consecutive_failed_reconnects: int = 0
 
@@ -864,47 +865,81 @@ class QuotexManager:
             downtime_s=round(downtime_s, 2) if downtime_s is not None else None,
         )
 
-    # When the supervisor has racked up this many failed reconnect
-    # attempts in a row, the watcher flips the event's ``recoverable``
-    # flag to ``False`` so the admin notifier formats it as a hard
-    # outage rather than a transient blip. Keeping recoverable=True
-    # before this lets the operator tell apart "we're working it" from
-    # "this isn't going to fix itself."
-    _HARD_OUTAGE_AFTER_ATTEMPTS = 10
+    # ── Reconnect escalation ladder (Task 4 / spec §3.3) ─────────
+    # Step 1 — at this many failures, downgrade the admin-bot tone
+    # from "transient" to "outage". The supervisor KEEPS RUNNING.
+    _SOFT_DOWNGRADE_AFTER_ATTEMPTS = 10
+    # Step 2 — env-overridable hard ceiling. Default 20.
+    # See settings.broker_reconnect_hard_ceiling.
 
     def _on_reconnect_attempt_failed(self, failed_count: int) -> None:
         """Called each time pyquotex's supervisor counts a failed retry.
 
-        **Policy: LOUD** (chosen for real-money trading, 2026-05-12).
-
-        Every failed reconnect attempt past the initial drop fires a
-        ``broker.recover_stalled`` event onto the bus. The initial drop
-        itself is already announced by :meth:`_on_ws_dropped` as
-        ``broker.disconnected``, so the operator sees a clean two-event
-        sequence per outage:
-
-          1. ``broker.disconnected`` — "WS just died, supervisor taking over"
-          2. ``broker.recover_stalled`` (1..N) — "retry #N failed, still trying"
-
-        Trade-off acknowledged: this maximises visibility at the cost
-        of inbox noise. The ``admin_bot_notify`` layer already
-        suppresses bursts via its own backoff (see
-        ``admin_bot_notify.py:_backoff_state``), so the wire-level
-        Telegram message count is bounded even when the bus is loud.
-        Picked over the quieter alternatives because the cost of a
-        silent gap during real-money trading is strictly worse than
-        the cost of a few extra pings.
+        Spec §3.3 / Task 4: split the old cosmetic
+        ``_HARD_OUTAGE_AFTER_ATTEMPTS`` into a soft downgrade (tone
+        change) and a hard ceiling (auto-halt).
         """
-        # Past ``_HARD_OUTAGE_AFTER_ATTEMPTS`` failures, downgrade
-        # ``recoverable`` so the admin bot formats this as an outage
-        # rather than a transient hiccup. The supervisor keeps trying
-        # regardless — this only affects the operator-facing tone.
-        is_hard_outage = failed_count >= self._HARD_OUTAGE_AFTER_ATTEMPTS
+        hard_ceiling = settings.broker_reconnect_hard_ceiling
+        is_outage = failed_count >= self._SOFT_DOWNGRADE_AFTER_ATTEMPTS
+        at_ceiling = failed_count >= hard_ceiling
+
         self._emit_system_error(
             kind="broker.recover_stalled",
             detail=f"reconnect attempt {failed_count} failed; still trying",
-            recoverable=not is_hard_outage,
+            recoverable=not is_outage,
         )
+
+        if at_ceiling:
+            log.error(
+                "broker.reconnect_ceiling_reached",
+                failed_attempts=failed_count,
+                ceiling=hard_ceiling,
+            )
+            self._ceiling_halt_task = asyncio.create_task(
+                self._halt_at_ceiling(failed_count, hard_ceiling),
+            )
+
+    async def _halt_at_ceiling(
+        self, failed_count: int, ceiling: int,
+    ) -> None:
+        """Stop the pyquotex supervisor and flip state machine.
+        Idempotent — guarded by the state check."""
+        if self._state == "awaiting_manual_recovery":
+            return  # already halted (e.g. OTP exhaustion got there first)
+
+        client = self._client
+        if client is not None:
+            supervisor = getattr(
+                getattr(client, "api", None), "reconnect_supervisor", None,
+            )
+            if supervisor is not None:
+                try:
+                    await supervisor.stop()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "broker.reconnect_ceiling.stop_failed",
+                        error=str(exc),
+                    )
+            try:
+                await client.disconnect()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "broker.reconnect_ceiling.disconnect_failed",
+                    error=str(exc),
+                )
+
+        async with self._timed_lock("ceiling_halt:finalize"):
+            self._state = "awaiting_manual_recovery"
+            self._last_error = (
+                f"auto reconnect ceiling reached after {failed_count} "
+                f"attempts (limit {ceiling}); check account + IP, then "
+                f"run /reconnect"
+            )
+            self._emit_system_error(
+                kind="broker.reconnect_ceiling_reached",
+                detail=self._last_error,
+                recoverable=False,
+            )
 
     async def cancel_connect(self) -> None:
         """Abort an in-flight connect (e.g. user closed the OTP dialog).
