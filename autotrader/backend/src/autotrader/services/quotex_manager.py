@@ -559,15 +559,25 @@ class QuotexManager:
                 (time.monotonic() - _connect_start_monotonic) * 1000
             )
             _api = getattr(client, "api", None)
+            _state = getattr(_api, "state", None)
+            _auth = getattr(_state, "auth_status", None)
+            # auth_status enum → its .name for grep-friendly logs;
+            # falls back to the raw value if it's not an enum.
+            _auth_name = getattr(_auth, "name", _auth)
+            _ssid_loaded = bool(getattr(_state, "SSID", None))
+            _is_authed = (
+                _auth == AuthStatus.AUTHENTICATED
+                if _auth is not None else None
+            )
             log.warning(
                 "broker.connect.rejection_probe",
                 raw_error=str(exc),
                 error_class=type(exc).__name__,
                 elapsed_ms=_elapsed_ms,
-                auth_status=getattr(_api, "auth_status", None),
-                ssid_loaded=bool(getattr(_api, "ssid", None)) if _api else False,
-                is_authenticated=getattr(_api, "is_authenticated", None),
-                ws_url=getattr(_api, "ws_url", None),
+                auth_status=_auth_name,
+                ssid_loaded=_ssid_loaded,
+                is_authenticated=_is_authed,
+                ws_url=getattr(_api, "wss_url", None),
                 impersonate_profile=settings.broker_curl_cffi_profile,
                 consecutive_otp_failures=self._consecutive_otp_failures,
             )
@@ -657,15 +667,25 @@ class QuotexManager:
                     (time.monotonic() - _connect_start_monotonic) * 1000
                 )
                 _api = getattr(client, "api", None)
+                _state = getattr(_api, "state", None)
+                _auth = getattr(_state, "auth_status", None)
+                # auth_status enum → its .name for grep-friendly logs;
+                # falls back to the raw value if it's not an enum.
+                _auth_name = getattr(_auth, "name", _auth)
+                _ssid_loaded = bool(getattr(_state, "SSID", None))
+                _is_authed = (
+                    _auth == AuthStatus.AUTHENTICATED
+                    if _auth is not None else None
+                )
                 log.warning(
                     "broker.connect.rejection_probe",
                     raw_error=str(reason),
                     error_class="connect_returned_false",
                     elapsed_ms=_elapsed_ms,
-                    auth_status=getattr(_api, "auth_status", None),
-                    ssid_loaded=bool(getattr(_api, "ssid", None)) if _api else False,
-                    is_authenticated=getattr(_api, "is_authenticated", None),
-                    ws_url=getattr(_api, "ws_url", None),
+                    auth_status=_auth_name,
+                    ssid_loaded=_ssid_loaded,
+                    is_authenticated=_is_authed,
+                    ws_url=getattr(_api, "wss_url", None),
                     impersonate_profile=settings.broker_curl_cffi_profile,
                     consecutive_otp_failures=self._consecutive_otp_failures,
                 )

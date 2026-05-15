@@ -8,15 +8,20 @@ client state. No behavior change — pure observation.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 from structlog.testing import capture_logs
 
 
+class _FakeState:
+    auth_status = 0          # not AuthStatus.AUTHENTICATED
+    SSID = None
+
+
 class _FakePyqApi:
-    auth_status = 0
-    is_authenticated = False
-    ssid = None
-    ws_url = "wss://ws2.qxbroker.com/socket.io/?EIO=4&transport=websocket"
+    state = _FakeState()
+    wss_url = "wss://ws2.qxbroker.com/socket.io/?EIO=4&transport=websocket"
 
 
 class _FakePyqClient:
@@ -32,10 +37,6 @@ class _FakePyqClient:
         pass
 
 
-async def _async_noop() -> None:
-    return None
-
-
 @pytest.mark.asyncio
 async def test_rejection_probe_fires_when_pyquotex_returns_false(
     monkeypatch: pytest.MonkeyPatch,
@@ -43,14 +44,14 @@ async def test_rejection_probe_fires_when_pyquotex_returns_false(
     """When ``client.connect()`` returns ``(False, reason)``, the
     probe fires with raw_error=reason, ssid_loaded=False, and the
     impersonate profile."""
+    from autotrader.config import settings  # noqa: PLC0415
     from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
 
     mgr = QuotexManager()
     mgr.set_credentials("user@example.com", "pw")  # type: ignore[attr-defined]
 
     monkeypatch.setattr(
-        QuotexManager, "_preflight_check",
-        lambda self: _async_noop(),
+        QuotexManager, "_preflight_check", AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         "autotrader.services.quotex_manager.Quotex", _FakePyqClient,
@@ -65,7 +66,9 @@ async def test_rejection_probe_fires_when_pyquotex_returns_false(
     assert "Websocket connection rejected" in str(p["raw_error"])
     assert p["ssid_loaded"] is False
     assert "elapsed_ms" in p
-    assert p["impersonate_profile"] == "firefox144"
+    assert p["impersonate_profile"] == settings.broker_curl_cffi_profile
+    assert "auth_status" in p
+    assert "ws_url" in p and p["ws_url"] is not None and "qxbroker" in p["ws_url"]
 
 
 @pytest.mark.asyncio
@@ -82,8 +85,7 @@ async def test_rejection_probe_silent_on_successful_connect(
     mgr = QuotexManager()
     mgr.set_credentials("user@example.com", "pw")  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        QuotexManager, "_preflight_check",
-        lambda self: _async_noop(),
+        QuotexManager, "_preflight_check", AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         "autotrader.services.quotex_manager.Quotex", _OkClient,
