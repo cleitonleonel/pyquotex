@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from autotrader.auth import require_auth
-from autotrader.dependencies import SessionDep, TelegramDep
+from autotrader.dependencies import PipelineDep, SessionDep, TelegramDep
 from autotrader.models.telegram_session import (
     delete_session,
     upsert_session,
@@ -267,6 +267,8 @@ async def watched_endpoint(session: SessionDep) -> list[DialogResponse]:
 async def watch_endpoint(
     body: WatchRequest,
     session: SessionDep,
+    manager: TelegramDep,
+    pipeline: PipelineDep,
 ) -> OkResponse:
     await upsert_watch(
         session,
@@ -276,6 +278,35 @@ async def watch_endpoint(
         username=body.username,
         enabled=body.enabled,
     )
+    # Force the live Pyrogram client to subscribe the new chat's
+    # update stream. Without this, ``UpdateNewChannelMessage`` events
+    # for chats added after login are silently dropped until the next
+    # process restart re-runs ``_prime_peer_cache`` — i.e. trades from
+    # the new channel never fire even though the row is correct.
+    #
+    # Subscribing AFTER ``upsert_watch`` so when Pyrogram's catch-up
+    # ``getDifference`` runs the WatchedChannel row is already there
+    # for ``Pipeline._dispatch_locked`` to find. We only subscribe
+    # when ``enabled=True`` so an operator can save a draft disabled
+    # watch row without paying the MTProto round-trip.
+    if body.enabled:
+        try:
+            await manager.subscribe_chat(body.chat_id)
+        except TelegramManagerError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"chat saved but subscribe failed: {exc}",
+            ) from exc
+        # Prebuild any parsers already configured for this chat so
+        # the first signal that arrives via the freshly-subscribed
+        # update stream lands in the cache without a build round-trip.
+        from autotrader.models.parser_config import (  # noqa: PLC0415
+            list_configs as _list_chat_configs,
+        )
+        chat_configs = await _list_chat_configs(session, chat_id=body.chat_id)
+        for cfg in chat_configs:
+            if cfg.enabled:
+                pipeline.prebuild(cfg)
     return OkResponse()
 
 
@@ -283,8 +314,14 @@ async def watch_endpoint(
 async def unwatch_endpoint(
     chat_id: int,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> OkResponse:
     await remove_watch(session, chat_id)
+    # Drop cached parsers for this chat. Dispatch already filters
+    # via ``WatchedChannel.enabled`` so behaviour was correct
+    # without this — but cached parsers leaked memory until a
+    # signature-drift rebuild.
+    pipeline.invalidate_for_chat(chat_id)
     return OkResponse()
 
 

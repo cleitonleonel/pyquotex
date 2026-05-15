@@ -59,7 +59,7 @@ export function FilterBar() {
   );
 
   return (
-    <Card className="flex flex-wrap items-center gap-2 p-2">
+    <Card className="flex flex-row flex-wrap items-center gap-2 p-2 py-2">
       <FilterPillRange />
       <FilterPillMultiSelect
         label="Channels"

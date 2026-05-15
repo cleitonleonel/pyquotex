@@ -47,6 +47,11 @@ class StreakRow(BaseModel):
     last_outcome: str
     last_stake: float
     updated_at: datetime | None = None
+    # Winning-streak ladder.
+    winning_streak_enabled: bool = False
+    winning_streak_max_level: int = 2
+    current_win_streak: int = 0
+    last_payout: float = 0.0
 
 
 class RiskOverview(BaseModel):
@@ -104,6 +109,10 @@ async def overview_endpoint(session: SessionDep) -> RiskOverview:
             last_outcome=(states[cfg.id].last_outcome if cfg.id in states else ""),
             last_stake=(states[cfg.id].last_stake if cfg.id in states else 0.0),
             updated_at=(states[cfg.id].updated_at if cfg.id in states else None),
+            winning_streak_enabled=cfg.winning_streak_enabled,
+            winning_streak_max_level=cfg.winning_streak_max_level,
+            current_win_streak=(states[cfg.id].current_win_streak if cfg.id in states else 0),
+            last_payout=(states[cfg.id].last_payout if cfg.id in states else 0.0),
         )
         for cfg in cfgs
     ]

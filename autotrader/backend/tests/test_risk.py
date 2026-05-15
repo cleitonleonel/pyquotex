@@ -18,6 +18,31 @@ import pytest
 
 from tests.test_broker import FakeQuotex
 
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (5.0, 5),
+        (5.5, 6),
+        (9.25, 10),       # base $5 + 85% payout
+        (10.0, 10),
+        (18.50, 19),      # $10 base + 85%
+        (37.0, 37),
+        (37.01, 38),      # ceiling, never round-down
+        (0.0, 0),
+        (0.99, 1),
+    ],
+)
+def test_round_stake_ceils_to_int_for_quotex(value: float, expected: int) -> None:
+    """Quotex's stake field is integer-only; rounding-up is the
+    correct safety direction (never under-stake the operator's
+    intended risk). Helper test stays pure / synchronous so it runs
+    fast and shows up high in the pytest report."""
+    from autotrader.services.risk_gate import _round_stake  # noqa: PLC0415
+
+    assert _round_stake(value) == expected
+
+
 # ---------------------------------------------------------------------------
 # A FakeQuotex that lets tests dial the next ``wait_for_order_close``
 # outcome explicitly so the martingale watcher gets predictable input.
@@ -185,6 +210,33 @@ async def _create_parser(
     r = await client.post("/parsers/configs", headers=headers, json=body)
     assert r.status_code == 201, r.text
     return r.json()["id"]
+
+
+def _disable_parser_payload(cfg_id: int) -> dict[str, object]:
+    """Minimal PUT body to flip enabled=False without changing other
+    fields. Mirrors the ConfigPayload shape from routers/parsers.py."""
+    _ = cfg_id
+    return {
+        "name": "p",
+        "priority": 100,
+        "parser_type": "template",
+        "parser_config": {"template": "{DIRECTION} {ASSET}"},
+        "timezone": "UTC",
+        "timezone_offset_minutes": 0,
+        "asset_aliases": {},
+        "aggregate_window_seconds": 0,
+        "default_stake": 10.0,
+        "default_duration_seconds": 60,
+        "trade_mode": "live",
+        "martingale": {
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 3,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        "enabled": False,
+    }
 
 
 async def _activate() -> None:
@@ -555,15 +607,19 @@ async def test_martingale_disabled_uses_flat_stake(
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
     await _add_watch(async_client, headers, -1001)
-    await _create_parser(async_client, headers, chat_id=-1001, default_stake=7.5)
+    # Use an integer-valued base stake. _round_stake() is now applied on
+    # every path (Quotex requires integer stakes); a non-integer base
+    # would be ceiled at evaluation time, so this test uses 8.0 to keep
+    # the assertion straightforward.
+    await _create_parser(async_client, headers, chat_id=-1001, default_stake=8.0)
     await _activate()
 
     for _ in range(3):
-        WatcherFakeQuotex.next_outcomes = [("loss", -7.5)]
+        WatcherFakeQuotex.next_outcomes = [("loss", -8.0)]
         await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
         await _settle_watchers(async_client)
 
-    assert all(c["amount"] == 7.5 for c in WatcherFakeQuotex.buy_calls)
+    assert all(c["amount"] == 8.0 for c in WatcherFakeQuotex.buy_calls)
 
 
 # ===========================================================================
@@ -727,6 +783,7 @@ async def _insert_pending(
     *,
     broker_order_id: str | None,
     placed_at: datetime | None = None,
+    placed_at_none: bool = False,
     fire_at: datetime | None = None,
     trade_mode: str = "scheduled",
     duration_seconds: int = 60,
@@ -734,6 +791,9 @@ async def _insert_pending(
     from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
     from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
 
+    resolved_placed_at = (
+        None if placed_at_none else (placed_at or datetime.now(UTC))
+    )
     row = TradeAttempt(
         chat_id=-1001,
         parser_config_id=1,
@@ -746,7 +806,7 @@ async def _insert_pending(
         fire_at=fire_at,
         status="pending",
         broker_order_id=broker_order_id,
-        placed_at=placed_at or datetime.now(UTC),
+        placed_at=resolved_placed_at,
     )
     async with AsyncSessionLocal() as s:
         s.add(row)
@@ -755,28 +815,37 @@ async def _insert_pending(
     return row.id or 0
 
 
-async def test_reconcile_expires_all_pending_rows(
+async def test_reconcile_buckets_pending_rows_three_ways(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """Every pending row at startup gets expired with a clear note.
+    """Pending rows at startup land in one of three buckets.
 
-    Background: pyquotex resets ``_active_pending`` on each connect, so
-    even a real ticket from the previous process can't be tied back to
-    its close event. The honest behaviour is to expire every pending
-    row on restart so the concurrency cap doesn't silently lock the
-    pipeline.
+    * ``placed_at is None`` -> expire immediately (broker never got
+      the order); legacy "watcher lost on restart" note.
+    * ``placed_at + duration + slack <= now`` -> expire immediately
+      with the clearer "settle window passed" note.
+    * ``placed_at + duration + slack > now`` -> stay pending; a
+      deferred task will mark it expired once the natural window
+      closes.
     """
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
-    bad_id = await _insert_pending(broker_order_id="True")
+    # Bucket 1: placed_at None — broker never accepted.
+    never_placed_id = await _insert_pending(
+        broker_order_id=None,
+        placed_at_none=True,
+    )
+    # Bucket 2: settle window long past.
     past_id = await _insert_pending(
         broker_order_id="real-ticket-1",
         placed_at=datetime.now(UTC) - timedelta(hours=1),
         trade_mode="live",
     )
+    # Bucket 3: still in flight (placed just now, 60s window + 60s slack).
     inflight_id = await _insert_pending(
         broker_order_id="real-ticket-2",
+        placed_at=datetime.now(UTC),
         fire_at=datetime.now(UTC) + timedelta(minutes=10),
     )
 
@@ -786,10 +855,20 @@ async def test_reconcile_expires_all_pending_rows(
 
     rows = (await async_client.get("/pipeline/trades", headers=headers)).json()
     by_id = {r["id"]: r for r in rows}
-    for attempt_id in (bad_id, past_id, inflight_id):
-        row = by_id[attempt_id]
-        assert row["status"] == "expired"
-        assert "watcher lost on restart" in (row["error"] or "").lower()
+
+    never_row = by_id[never_placed_id]
+    assert never_row["status"] == "expired"
+    assert "watcher lost on restart" in (never_row["error"] or "").lower()
+
+    past_row = by_id[past_id]
+    assert past_row["status"] == "expired"
+    assert "settle window passed" in (past_row["error"] or "").lower()
+
+    inflight_row = by_id[inflight_id]
+    assert inflight_row["status"] == "pending", (
+        f"in-flight row must stay pending; got "
+        f"status={inflight_row['status']!r}, error={inflight_row['error']!r}"
+    )
 
 
 async def test_reconcile_is_idempotent(
@@ -799,7 +878,12 @@ async def test_reconcile_is_idempotent(
     headers = await _login(async_client)
     await _connect_broker(async_client, headers)
 
-    attempt_id = await _insert_pending(broker_order_id="True")
+    # Use a placed_at in the past so the row falls into the immediate-
+    # expire bucket — keeps the assertion deterministic.
+    attempt_id = await _insert_pending(
+        broker_order_id="True",
+        placed_at=datetime.now(UTC) - timedelta(hours=1),
+    )
 
     from autotrader.main import app  # noqa: PLC0415
 
@@ -834,3 +918,369 @@ async def test_watcher_marks_expired_when_broker_disconnected(
     row = next(r for r in rows if r["id"] == attempt_id)
     assert row["status"] == "expired"
     assert "broker disconnected" in (row["error"] or "").lower()
+
+
+async def test_martingale_auto_recovery_skips_when_parser_disabled_mid_streak(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """If the operator disables the parser between the loss settle
+    and the recovery dispatch, the recovery must NOT fire — the
+    user has explicitly told the bot to stop trading on this parser.
+    Today the recovery path uses a stale ``cfg`` snapshot captured
+    at submit time and never refetches; this test pins the fix that
+    re-reads the row inside ``_fire_auto_recovery`` and bails on
+    ``enabled=False``."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 3,
+            "reset_on_win": True,
+            "auto_recovery": True,
+        },
+        default_stake=10.0,
+    )
+    await _activate()
+
+    # Original signal loses; before the recovery fires, disable the
+    # parser. The settle path runs synchronously inside _settle_watchers
+    # so we disable BEFORE that drain.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+
+    # Disable the parser. The original trade is still pending in
+    # WatcherFakeQuotex's queue — its settle will then attempt to
+    # fire a recovery that should now be blocked.
+    r = await async_client.put(
+        f"/parsers/configs/{cfg_id}",
+        headers=headers,
+        json=_disable_parser_payload(cfg_id),
+    )
+    assert r.status_code == 200, r.text
+
+    await _settle_watchers(async_client)
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert amounts == [10.0], (
+        "auto_recovery must skip when the parser was disabled mid-streak; "
+        f"got buy_calls={amounts}"
+    )
+
+    # The refactor short-circuits BEFORE risk_gate.evaluate runs,
+    # so no phantom 'rejected' TradeAttempt row should exist for
+    # the recovery. Without the refactor, _fire_auto_recovery would
+    # have entered submit() and written a rejected row before
+    # risk_gate blocked. With the refactor, it bails BEFORE submit()
+    # so the only row in the DB is the original (settled lost).
+    from sqlmodel import select  # noqa: PLC0415
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.trade_attempt import TradeAttempt  # noqa: PLC0415
+
+    async def _count_rejected() -> int:
+        async with AsyncSessionLocal() as s:
+            result = await s.exec(
+                select(TradeAttempt).where(TradeAttempt.status == "rejected"),
+            )
+            return len(list(result.all()))
+
+    rejected_count = await _count_rejected()
+    assert rejected_count == 0, (
+        "_fire_auto_recovery must short-circuit BEFORE submit() so no "
+        "rejected TradeAttempt is written for the recovery; "
+        f"got {rejected_count} rejected rows"
+    )
+
+
+# ===========================================================================
+# Winning-streak (Paroli) runtime
+# ===========================================================================
+
+
+async def test_winning_streak_advances_on_win_and_resets_on_loss(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """When winning_streak is enabled, a win advances current_win_streak
+    and records last_payout (= stake + profit). A loss resets both."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # T1: win — streak ticks to 1, last_payout = stake + profit.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async def _read() -> tuple[int, float]:
+        async with AsyncSessionLocal() as s:
+            row = await s.get(MartingaleState, 1)
+            assert row is not None
+            return row.current_win_streak, row.last_payout
+
+    win, payout = await _read()
+    assert win == 1
+    assert payout == pytest.approx(9.25)  # 5.0 stake + 4.25 profit
+
+    # T2: loss — streak resets, last_payout cleared.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    win, payout = await _read()
+    assert win == 0
+    assert payout == 0.0
+
+
+async def test_winning_streak_resets_at_max_level(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """current_win_streak >= max_level after a win triggers reset to 0
+    and clears last_payout — next channel signal goes back to base."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 2,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # Two wins in a row hit max=2 → reset.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    WatcherFakeQuotex.next_outcomes = [("win", 8.50)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+    from autotrader.models.martingale_state import MartingaleState  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as s:
+        row = await s.get(MartingaleState, 1)
+        assert row is not None
+        assert row.current_win_streak == 0, "max hit → reset"
+        assert row.last_payout == 0.0
+
+
+async def test_winning_streak_sizes_next_channel_signal_at_ceil_payout(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """After a winning trade, the NEXT channel signal must stake at
+    ceil(last_payout) instead of base. Quotex integer constraint —
+    9.25 → 10."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": False,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # T1 wins — primes last_payout = 5 + 4.25 = 9.25.
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # T2 channel signal — must stake at ceil(9.25) = 10, not base 5.
+    WatcherFakeQuotex.next_outcomes = [("win", 8.50)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    amounts = [c["amount"] for c in WatcherFakeQuotex.buy_calls]
+    assert amounts == [5, 10], (
+        f"second trade must size at ceil(last_payout)=10; got {amounts}"
+    )
+
+
+# ===========================================================================
+# StreakRow API fields + reset endpoint
+# ===========================================================================
+
+
+async def test_streak_row_includes_win_streak_fields(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """GET /risk/overview must include current_win_streak + last_payout
+    per parser so the dashboard can render both ladders."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 2,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    r = await async_client.get("/risk/overview", headers=headers)
+    body = r.json()
+    rows = body["streaks"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["current_win_streak"] == 1
+    assert row["last_payout"] == pytest.approx(9.25)
+
+
+async def test_reset_streak_clears_both_ladders(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """POST /risk/streaks/{id}/reset must zero current_streak,
+    current_win_streak, last_payout, and last_stake atomically."""
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    await _activate()
+
+    # Prime both counters: a win then a loss (loss won't fully clear
+    # win_streak in record_outcome — actually it WILL, but we want
+    # both ladders to have *had* state so the reset is meaningful).
+    WatcherFakeQuotex.next_outcomes = [("win", 4.25)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # Re-prime current_streak by losing.
+    WatcherFakeQuotex.next_outcomes = [("loss", -10.0)]
+    await _dispatch(async_client, chat_id=-1001, text="BUY EURUSD 1m")
+    await _settle_watchers(async_client)
+
+    # Hit reset.
+    r = await async_client.post(
+        f"/risk/streaks/{cfg_id}/reset", headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = await async_client.get("/risk/overview", headers=headers)
+    row = next(
+        s for s in r.json()["streaks"] if s["parser_config_id"] == cfg_id
+    )
+    assert row["current_streak"] == 0
+    assert row["current_win_streak"] == 0
+    assert row["last_payout"] == 0.0
+    assert row["last_stake"] == 0.0
+
+
+async def test_reset_streak_no_op_for_untraded_parser(
+    async_client: httpx.AsyncClient,
+) -> None:
+    """POST /risk/streaks/{id}/reset on a parser that has never traded
+    must return 200 and produce no DB row. The endpoint must not
+    upsert a MartingaleState row just because the operator clicked
+    Reset on a never-traded parser — that would surface a phantom
+    row in /risk/overview's join.
+    """
+    headers = await _login(async_client)
+    await _connect_broker(async_client, headers)
+    await _add_watch(async_client, headers, -1001)
+    cfg_id = await _create_parser(
+        async_client,
+        headers,
+        chat_id=-1001,
+        martingale={
+            "enabled": True,
+            "multiplier": 2.0,
+            "max_streak": 5,
+            "reset_on_win": True,
+            "auto_recovery": False,
+            "winning_streak_enabled": True,
+            "winning_streak_max_level": 3,
+        },
+        default_stake=5.0,
+    )
+    # Note: do NOT activate or dispatch — parser has never traded.
+
+    r = await async_client.post(
+        f"/risk/streaks/{cfg_id}/reset", headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    # Confirm the row in /risk/overview shows zero state (defaults from
+    # the StreakRow ternaries — there's no MartingaleState row to read).
+    r = await async_client.get("/risk/overview", headers=headers)
+    row = next(
+        s for s in r.json()["streaks"] if s["parser_config_id"] == cfg_id
+    )
+    assert row["current_streak"] == 0
+    assert row["current_win_streak"] == 0
+    assert row["last_payout"] == 0.0
+    assert row["last_stake"] == 0.0
+    assert row["last_outcome"] == ""

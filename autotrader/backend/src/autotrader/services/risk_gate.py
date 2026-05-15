@@ -4,10 +4,18 @@ Decision engine sitting between the parser pipeline and the trade
 executor. Phase 5 expanded the bare-minimum sanity checks from
 Phase 4 with:
 
-* Martingale runtime — the stake is computed as
-  ``base * multiplier ** current_streak``, with the streak read from
-  :class:`MartingaleState`. The gate is the only place that decides
-  the executable stake; the executor never overrides it.
+* Martingale runtime — the recovery stake is computed as
+  ``last_stake * multiplier`` (``last_stake`` being the trade that
+  just lost) so a loss on a win-streak-elevated trade recovers
+  relative to that elevated amount, not back to base. ``last_stake``
+  is read from :class:`MartingaleState`, falling back to
+  ``base_stake`` only on a never-settled parser. The gate is the
+  only place that decides the executable stake; the executor never
+  overrides it.
+* Winning-streak (Paroli) runtime — when ``winning_streak_enabled``,
+  the stake advances to ``ceil(state.last_payout)`` after each win
+  for the next channel signal, giving the Paroli compounding effect.
+  The two ladders are mutually exclusive at runtime.
 * Daily-loss circuit breaker — refuses new trades when realised P&L
   has already lost more than ``daily_max_loss`` today (UTC).
 * Daily-stake cap — refuses when the *committed* stake today
@@ -21,6 +29,7 @@ the dashboard can show why a trade didn't fire.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import Literal
@@ -42,6 +51,16 @@ Outcome = Literal["allow", "block"]
 # parser config or martingale ladder.
 _MIN_STAKE = 0.01
 _MAX_STAKE = 1000.0
+
+
+def _round_stake(value: float) -> int:
+    """Quotex requires integer stakes. Always round UP so the
+    operator never under-stakes their intended risk profile —
+    base $5 with 85% payout produces $9.25 next-step which we
+    must size as $10 (not $9). Mirrors how the dashboard label
+    'next $10' would show.
+    """
+    return math.ceil(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,20 +190,54 @@ async def evaluate(  # noqa: PLR0911, PLR0912  (one branch per failure mode)
         effective_mode = "scheduled" if signal.fire_at is not None else "live"
 
     # ------------------------------------------------------------------
-    # Stake — base from signal/config, then martingale-multiplied.
+    # Stake — base from signal/config, then ladder-shaped.
+    #
+    # Three priority order:
+    #   1. winning_streak active (current_win_streak > 0)
+    #          → ceil(state.last_payout)
+    #   2. martingale active (current_streak > 0 + martingale_enabled)
+    #          → base * multiplier^step
+    #   3. otherwise → base
+    # The two ladders are mutually exclusive at runtime (record_outcome
+    # resets the opposite counter on every settle), so this if/elif
+    # tree is total.
     # ------------------------------------------------------------------
     base_stake = (
         signal.stake if signal.stake is not None else parser_config.default_stake
     )
     martingale_step = 0
-    stake = base_stake
+    win_step = 0
+    stake: float = base_stake
 
-    if parser_config.martingale_enabled and parser_config.id is not None:
-        state = await get_state(session, parser_config.id)
+    parser_id = parser_config.id
+    needs_state = (
+        parser_config.martingale_enabled
+        or parser_config.winning_streak_enabled
+    ) and parser_id is not None
+    if needs_state and parser_id is not None:
+        state = await get_state(session, parser_id)
         martingale_step = state.current_streak
-        # Ladder: base * multiplier^step. Step 0 is base; step 1 is
-        # the first recovery trade after one loss; etc.
-        stake = base_stake * (parser_config.martingale_multiplier ** martingale_step)
+        win_step = state.current_win_streak
+
+        if (
+            parser_config.winning_streak_enabled
+            and win_step > 0
+            and state.last_payout > 0
+        ):
+            stake = float(_round_stake(state.last_payout))
+        elif parser_config.martingale_enabled and martingale_step > 0:
+            # Use the previously-placed stake as the doubling base so
+            # that a loss on a win-streak-elevated trade (e.g. $10 when
+            # base=$5) recovers at $20 rather than falling back to
+            # base*mult^1=$10.  When last_stake is 0 (degenerate state),
+            # fall back to base*multiplier.
+            ladder_base = state.last_stake if state.last_stake > 0 else base_stake
+            stake = ladder_base * parser_config.martingale_multiplier
+
+    # Final round-up: even when stake = base_stake, Quotex needs an
+    # integer. Operators typically configure base as an integer
+    # already; this is belt-and-braces.
+    stake = float(_round_stake(stake))
 
     if stake < _MIN_STAKE:
         return RiskDecision(

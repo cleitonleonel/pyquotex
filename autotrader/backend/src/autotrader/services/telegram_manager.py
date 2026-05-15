@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -118,6 +119,13 @@ class IncomingMessage:
     text: str
     media_kind: str         # "text" | "caption" | "sticker"
     received_at: datetime
+    # Phase 2 idempotency (audit 2026-05-13, H1). Telegram's per-chat
+    # ``msg.id`` — propagated end-to-end so the pipeline can dedup
+    # Pyrogram replays via the persisted ``(chat_id, tg_message_id)``
+    # key on ``TradeAttempt``. ``None`` when the source genuinely
+    # doesn't have one (very old Pyrogram message shapes, manual
+    # synthetic replays from tests).
+    message_id: int | None = None
 
 
 def _mask_phone(phone: str) -> str:
@@ -134,6 +142,22 @@ class TelegramManager:
     # never lands on disk — the encrypted session string in the DB is
     # the source of truth.
     _CLIENT_NAME = "autotrader"
+
+    # Phase 0 instrumentation threshold (audit 2026-05-13, M1): logins
+    # that take longer than this still succeed but warrant a warning —
+    # phone-code SMS delivery is typically sub-second from MTProto's
+    # perspective (the SMS itself takes longer but that's after our
+    # call returns). A 5 s round-trip means MTProto is wedged.
+    _SLOW_LOGIN_THRESHOLD_SECONDS: float = 5.0
+
+    # Phase 1 hard timeout (audit 2026-05-13, M1): each MTProto call
+    # in the login flow is wrapped in ``asyncio.wait_for(...)`` against
+    # this deadline so a hung Telegram peer turns into a bounded
+    # ``TelegramManagerError`` instead of stalling the manager lock
+    # forever. 20 s comfortably covers a healthy round-trip (usually
+    # < 2 s) plus DC migration. The HTTP layer wires this up too —
+    # operators see "login timed out, retry?" in the dashboard.
+    _LOGIN_TIMEOUT_SECONDS: float = 20.0
 
     def __init__(self, *, event_bus: Any | None = None) -> None:
         self._event_bus = event_bus
@@ -303,8 +327,45 @@ class TelegramManager:
 
             client = self._new_client()
             try:
-                await client.connect()
-                sent = await client.send_code(phone)
+                # Phase 1 (audit 2026-05-13, M1): hard timeout on each
+                # MTProto call. Without ``asyncio.wait_for`` a hung
+                # Telegram peer wedges this coroutine silently while
+                # holding ``self._lock`` — the operator's only signal
+                # is the dashboard "connecting…" spinner sitting there
+                # forever. Phase 0 added the soft-warning timer below;
+                # this is the bounded-failure version.
+                _t0 = time.monotonic()
+                await asyncio.wait_for(
+                    client.connect(),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                _t_connect = time.monotonic() - _t0
+                sent = await asyncio.wait_for(
+                    client.send_code(phone),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                _t_total = time.monotonic() - _t0
+                if _t_total >= self._SLOW_LOGIN_THRESHOLD_SECONDS:
+                    log.warning(
+                        "telegram.login.slow",
+                        elapsed_seconds=round(_t_total, 3),
+                        connect_seconds=round(_t_connect, 3),
+                        phone_masked=_mask_phone(phone),
+                    )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                log.warning(
+                    "telegram.send_code.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                    phone_masked=_mask_phone(phone),
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except PhoneNumberInvalid as exc:
                 self._state = "error"
                 self._last_error = "invalid phone number"
@@ -341,11 +402,30 @@ class TelegramManager:
             assert self._phone_code_hash is not None
 
             try:
-                await self._client.sign_in(
-                    self._phone,
-                    self._phone_code_hash,
-                    code,
+                # Phase 1 (audit 2026-05-13, M1): same hard-timeout
+                # rationale as ``begin_login``. Wraps the sign-in
+                # round-trip; the per-exception handling below stays
+                # intact so PhoneCodeInvalid / SessionPasswordNeeded
+                # still flow through their existing branches.
+                await asyncio.wait_for(
+                    self._client.sign_in(
+                        self._phone,
+                        self._phone_code_hash,
+                        code,
+                    ),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
                 )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                log.warning(
+                    "telegram.sign_in.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except SessionPasswordNeeded:
                 self._state = "awaiting_password"
                 log.info("telegram.sign_in.password_needed")
@@ -374,7 +454,22 @@ class TelegramManager:
             assert self._client is not None
 
             try:
-                await self._client.check_password(password)
+                # Phase 1 (audit 2026-05-13, M1): hard timeout.
+                await asyncio.wait_for(
+                    self._client.check_password(password),
+                    timeout=self._LOGIN_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                self._state = "error"
+                self._last_error = (
+                    f"telegram unreachable (timed out after "
+                    f"{self._LOGIN_TIMEOUT_SECONDS:.0f}s)"
+                )
+                log.warning(
+                    "telegram.check_password.timeout",
+                    timeout_seconds=self._LOGIN_TIMEOUT_SECONDS,
+                )
+                raise TelegramManagerError(self._last_error) from exc
             except PasswordHashInvalid as exc:
                 self._last_error = "invalid 2FA password"
                 raise TelegramManagerError(self._last_error) from exc
@@ -596,26 +691,130 @@ class TelegramManager:
         # Touch ``handlers`` to satisfy lint that the import is used.
         _ = handlers
 
+    async def _subscribe_channel_via_diff(self, chat_id: int) -> None:
+        """Subscribe a broadcast channel's update push stream by calling
+        ``updates.GetChannelDifference`` directly.
+
+        Pyrogram 2.x's ``client.handle_updates`` (see ``client.py:558-560``)
+        only ``log.info()``-s an ``UpdateChannelTooLong`` push from the
+        Telegram server — it does NOT call ``GetChannelDifference`` to
+        recover. Once a session's per-channel ``pts`` drifts outside the
+        incremental-recovery window, Telegram backs off pushing
+        ``UpdateNewChannelMessage`` events because the session never
+        acknowledged the catchup. The result: read receipts keep flowing
+        (those use the global update channel) but new posts go silent.
+
+        We work around the library bug by invoking ``GetChannelDifference``
+        ourselves at prime time. Calling it is itself the "I'm an active
+        subscriber" signal Telegram needs — Telegram resumes pushing
+        ``UpdateNewChannelMessage`` for this channel after the response.
+        We start from ``server_pts - 1`` (read via ``GetPeerDialogs``) so
+        the response is a normal ``ChannelDifference`` rather than a
+        ``ChannelDifferenceTooLong`` we'd then have to special-case.
+
+        Used for ``chat_type == 'channel'``. Groups (which ride the global
+        ``pts`` and so are kept fresh by ``get_dialogs`` automatically)
+        keep using ``get_chat_history(limit=1)``.
+        """
+        if self._client is None:
+            return
+        from pyrogram.raw.functions.messages import (  # noqa: PLC0415
+            GetPeerDialogs,
+        )
+        from pyrogram.raw.functions.updates import (  # noqa: PLC0415
+            GetChannelDifference,
+        )
+        from pyrogram.raw.types import (  # noqa: PLC0415
+            ChannelMessagesFilterEmpty,
+            InputChannel,
+            InputDialogPeer,
+        )
+        peer = await self._client.resolve_peer(chat_id)
+        # InputChannel needs (channel_id, access_hash). resolve_peer for
+        # a broadcast channel returns InputPeerChannel which has both.
+        input_channel = InputChannel(
+            channel_id=peer.channel_id, access_hash=peer.access_hash,
+        )
+        dialogs = await self._client.invoke(
+            GetPeerDialogs(peers=[InputDialogPeer(peer=peer)]),
+        )
+        server_pts = None
+        for dlg in getattr(dialogs, "dialogs", []) or []:
+            if hasattr(dlg, "pts") and dlg.pts:
+                server_pts = dlg.pts
+                break
+        start_pts = max(1, (server_pts or 1) - 1)
+        diff = await self._client.invoke(
+            GetChannelDifference(
+                channel=input_channel,
+                filter=ChannelMessagesFilterEmpty(),
+                pts=start_pts,
+                limit=100,
+                force=False,
+            ),
+            sleep_threshold=10,
+        )
+        # Critically: inject the diff's contents into Pyrogram's
+        # dispatcher queue so the updates flow through the normal
+        # processing path. This is what sends the implicit
+        # acknowledgement back to Telegram ("yes, my session has
+        # processed up to this pts"). Without this acknowledgement,
+        # Telegram considers the session "stuck" on the previous
+        # state and stops pushing new ``UpdateNewChannelMessage``
+        # events for the channel — which is the exact symptom we
+        # see for channels that have ``other_updates: 1`` pending
+        # but never receive a new post even after multiple restarts.
+        from pyrogram.raw.types import (  # noqa: PLC0415
+            UpdateNewChannelMessage,
+        )
+        users = {u.id: u for u in getattr(diff, "users", []) or []}
+        chats = {c.id: c for c in getattr(diff, "chats", []) or []}
+        diff_pts = getattr(diff, "pts", 0) or 0
+        injected = 0
+        for msg in getattr(diff, "new_messages", []) or []:
+            update = UpdateNewChannelMessage(
+                message=msg, pts=diff_pts, pts_count=1,
+            )
+            self._client.dispatcher.updates_queue.put_nowait(
+                (update, users, chats),
+            )
+            injected += 1
+        for upd in getattr(diff, "other_updates", []) or []:
+            self._client.dispatcher.updates_queue.put_nowait(
+                (upd, users, chats),
+            )
+            injected += 1
+        log.info(
+            "telegram.channel.subscribed_via_diff",
+            chat_id=chat_id,
+            server_pts=server_pts,
+            diff_kind=type(diff).__name__,
+            diff_pts=getattr(diff, "pts", None),
+            new_messages=len(getattr(diff, "new_messages", []) or []),
+            other_updates=len(getattr(diff, "other_updates", []) or []),
+            injected_into_dispatcher=injected,
+        )
+
     async def _prime_peer_cache(self, *, limit: int = 500) -> None:
         """Walk dialogs once so Pyrogram's session storage knows every
-        channel/group the user is a member of, then explicitly resolve
-        each watched channel so its update stream is subscribed.
+        channel/group the user is a member of, then explicitly subscribe
+        each watched chat to its live update stream.
 
         Two reasons this can't just be a single ``get_dialogs`` walk:
 
         1. Without *any* primer, update dispatch crashes with
            ``ValueError: Peer id invalid: -100…`` the moment a message
            arrives in a chat the in-memory session has never resolved.
-        2. With ``in_memory=True``, Pyrogram loses the per-channel
-           ``pts`` state on every restart. Pyrogram's update dispatcher
-           silently drops ``UpdateNewChannelMessage`` events for
-           channels it hasn't actively touched this session — even if
-           the channel appears in ``get_dialogs``. ``get_chat_history``
-           on each watched channel forces the resolve + ``getDifference``
-           handshake that subscribes the live update stream.
+        2. Subscription to per-chat update push is a separate handshake.
+           For broadcast channels, that handshake is
+           ``updates.GetChannelDifference`` — see
+           :meth:`_subscribe_channel_via_diff` for the gory details. For
+           groups, ``get_chat_history(limit=1)`` is enough because they
+           ride the global update stream that ``get_dialogs`` already
+           primes.
 
-        Cheap (the payload comes back over the same socket Pyrogram
-        keeps warm) and idempotent — re-running just no-ops.
+        Cheap (the payloads come back over the same socket Pyrogram keeps
+        warm) and idempotent — re-running just no-ops.
         """
         if self._client is None:
             return
@@ -629,10 +828,9 @@ class TelegramManager:
             self._emit_system_error(kind="peer_cache.failed", detail=str(exc))
             return
 
-        # Touch each watched channel/group so Pyrogram subscribes its
-        # update stream. We pull the list lazily (avoids a hard import
-        # cycle with the models package at module load) and ignore
-        # failures per chat — a single broken row shouldn't block
+        # Subscribe each watched chat. We pull the list lazily (avoids a
+        # hard import cycle with the models package at module load) and
+        # ignore failures per chat — a single broken row shouldn't block
         # subscription for the others.
         try:
             from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
@@ -646,20 +844,23 @@ class TelegramManager:
             subscribed = 0
             for w in enabled:
                 try:
-                    # ``get_chat_history(limit=1)`` is the cheapest call
-                    # that forces a peer resolve AND touches the channel's
-                    # pts state — exactly what the live update dispatcher
-                    # needs to start routing posts to MessageHandler.
-                    async for _ in self._client.get_chat_history(
-                        w.chat_id, limit=1
-                    ):
-                        break
+                    if w.chat_type == "channel":
+                        await self._subscribe_channel_via_diff(w.chat_id)
+                    else:
+                        # Groups / supergroups / users — global pts is
+                        # enough; a one-row history fetch resolves the
+                        # peer and is the cheapest call that does so.
+                        async for _ in self._client.get_chat_history(
+                            w.chat_id, limit=1,
+                        ):
+                            break
                     subscribed += 1
                 except Exception as exc:
                     log.warning(
                         "telegram.peer_cache.subscribe_failed",
                         chat_id=w.chat_id,
                         title=w.title,
+                        chat_type=w.chat_type,
                         error=f"{type(exc).__name__}: {exc}",
                     )
             self._subscribed_chat_count = subscribed
@@ -671,6 +872,69 @@ class TelegramManager:
         except Exception as exc:  # pragma: no cover - best-effort
             log.warning("telegram.peer_cache.subscribe_pass_failed",
                         error=f"{type(exc).__name__}: {exc}")
+
+    async def subscribe_chat(self, chat_id: int) -> None:
+        """Resolve + subscribe a single chat with the live update stream.
+
+        Mirrors what ``_prime_peer_cache`` does per chat at login.
+        Branches on chat type because broadcast channels need
+        ``updates.GetChannelDifference`` (see
+        :meth:`_subscribe_channel_via_diff`) while groups can use the
+        cheaper ``get_chat_history(limit=1)`` path.
+
+        Without this, a chat added via ``/telegram/watch`` after login
+        sits silently in the database — the row is correct but the
+        live client never delivers messages for it until the next
+        process restart re-runs ``_prime_peer_cache``.
+
+        Idempotent. Returns silently when not logged in (the watch
+        endpoint may be saving a draft row before the operator finishes
+        the Telegram login).
+        """
+        if not self.logged_in or self._client is None:
+            return
+        # Look up the chat's type so we know which subscription path to
+        # take. We fall back to ``get_chat_history`` if the row isn't in
+        # the watched table yet (e.g. tests that call ``subscribe_chat``
+        # directly without a watched row).
+        chat_type = None
+        try:
+            from autotrader.db import AsyncSessionLocal  # noqa: PLC0415
+            from autotrader.models.watched_channel import (  # noqa: PLC0415
+                list_watched,
+            )
+
+            async with AsyncSessionLocal() as session:
+                rows = await list_watched(session)
+            for w in rows:
+                if w.chat_id == chat_id:
+                    chat_type = w.chat_type
+                    break
+        except Exception:  # pragma: no cover - best-effort lookup
+            chat_type = None
+
+        try:
+            if chat_type == "channel":
+                await self._subscribe_channel_via_diff(chat_id)
+            else:
+                async for _ in self._client.get_chat_history(chat_id, limit=1):
+                    break
+        except Exception as exc:  # pragma: no cover - Pyrogram surfaces vary
+            self._emit_system_error(
+                kind="subscribe_failed",
+                detail=f"chat_id={chat_id}: {type(exc).__name__}: {exc}",
+            )
+            log.warning(
+                "telegram.subscribe.failed",
+                chat_id=chat_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise TelegramManagerError(
+                f"subscribe failed for chat {chat_id}: {exc}",
+            ) from exc
+
+        self._subscribed_chat_count += 1
+        log.info("telegram.subscribe.ok", chat_id=chat_id)
 
     async def _handle_incoming(self, msg: Any) -> None:
         """Convert a Pyrogram Message → IncomingMessage → callback."""
@@ -713,6 +977,15 @@ class TelegramManager:
             text_preview=text[:80],
         )
 
+        # Phase 2 (audit 2026-05-13, H1): plumb the per-chat Pyrogram
+        # message id through so the pipeline can dedup replays. Real
+        # Pyrogram exposes this as ``msg.id``; older shapes used
+        # ``message_id``. Fall back to ``None`` for synthetic test
+        # messages that don't set either — dedup just no-ops on those.
+        message_id: int | None = getattr(msg, "id", None)
+        if message_id is None:
+            legacy = getattr(msg, "message_id", None)
+            message_id = int(legacy) if legacy is not None else None
         try:
             await self._on_message(
                 IncomingMessage(
@@ -721,6 +994,7 @@ class TelegramManager:
                     text=text,
                     media_kind=kind,
                     received_at=date,
+                    message_id=message_id,
                 ),
             )
         except Exception as exc:  # pragma: no cover - consumer-side failure

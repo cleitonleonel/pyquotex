@@ -29,6 +29,12 @@ class RawMessage:
     chat_id: int = 0
     sender_id: int = 0
     received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Phase 2 idempotency (audit 2026-05-13, H1). Telegram's per-chat
+    # message id; the pipeline keys its dedup query on
+    # ``(chat_id, message_id)``. ``None`` for sources that don't carry
+    # one (parser test endpoint, batch aggregation passes) — those just
+    # opt out of dedup and fall back to the Phase 0 fingerprint warning.
+    message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -152,12 +152,23 @@ export default function ParserEditor() {
               {channel?.username ? ` · @${channel.username}` : ""}
             </p>
           </div>
-          <Link
-            href={`/dashboard/parsers/${chatId}`}
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            ← Channel parsers
-          </Link>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <a
+              href="https://github.com/iahmedani/pyquotex/blob/master/autotrader/docs/PARSERS.md"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-foreground"
+              title="Parser writing guide + troubleshooting"
+            >
+              📖 Parser guide
+            </a>
+            <Link
+              href={`/dashboard/parsers/${chatId}`}
+              className="hover:text-foreground"
+            >
+              ← Channel parsers
+            </Link>
+          </div>
         </div>
       </section>
 
@@ -527,6 +538,7 @@ function ConfigEditor({
         </div>
 
         <MartingaleBlock cfg={cfg} setMartingale={setMartingale} />
+        <WinningStreakBlock cfg={cfg} setMartingale={setMartingale} />
 
         <div className="space-y-2">
           <Label>Asset aliases (one per line, <code>raw = broker</code>)</Label>
@@ -631,6 +643,65 @@ function MartingaleBlock({
             Reset on win
           </Label>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WinningStreakBlock({
+  cfg,
+  setMartingale,
+}: {
+  cfg: ParserConfigPayload;
+  setMartingale: <K extends keyof ParserConfigPayload["martingale"]>(
+    key: K,
+    value: ParserConfigPayload["martingale"][K],
+  ) => void;
+}) {
+  const m = cfg.martingale;
+  return (
+    <div className="space-y-3 rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="flex items-center gap-2">
+          Winning streak (Paroli)
+          {m.winning_streak_enabled && <Badge variant="success">on</Badge>}
+        </Label>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={m.winning_streak_enabled}
+            onChange={(e) =>
+              setMartingale("winning_streak_enabled", e.target.checked)
+            }
+            className="h-4 w-4"
+          />
+          Enable
+        </label>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        On a win, the next channel signal stakes at{" "}
+        <code>ceil(prev_stake + prev_profit)</code>. Trades 1 through
+        max level are compounded; the trade <em>after</em> the
+        max-level win resets to base. A loss at any point also resets
+        to base. Stakes round up to the nearest integer (Quotex
+        constraint).
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Max win streak level"
+          value={m.winning_streak_max_level}
+          onChange={(v) =>
+            setMartingale(
+              "winning_streak_max_level",
+              Math.max(0, Math.min(20, Number(v) || 0)),
+            )
+          }
+          type="number"
+          help="0 = uncapped"
+          disabled={!m.winning_streak_enabled}
+        />
       </div>
     </div>
   );

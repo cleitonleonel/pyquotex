@@ -29,6 +29,16 @@ class MartingaleState(SQLModel, table=True):
     current_streak: int = Field(default=0, nullable=False)
     last_stake: float = Field(default=0.0, nullable=False)
     last_outcome: str = Field(default="", nullable=False)  # "" | "won" | "lost"
+    # Winning-streak (Paroli) state. ``current_win_streak`` ticks up
+    # on each winning settle; ``last_payout`` records ``stake +
+    # profit`` of that winning trade so the next channel signal can
+    # size at ``ceil(last_payout)``. Both reset to 0 on a loss or
+    # when ``current_win_streak >= winning_streak_max_level`` after
+    # a win. At runtime the two ladders are mutually exclusive
+    # (loss resets win_streak; win resets current_streak with
+    # reset_on_win), so ``current_streak > 0 ⇔ current_win_streak == 0``.
+    current_win_streak: int = Field(default=0, nullable=False)
+    last_payout: float = Field(default=0.0, nullable=False)
     updated_at: datetime = Field(default_factory=utc_now, nullable=False)
 
 
@@ -50,42 +60,66 @@ async def record_outcome(
     *,
     won: bool,
     last_stake: float,
+    last_profit: float,
     max_streak: int,
     reset_on_win: bool,
+    winning_streak_enabled: bool,
+    winning_streak_max_level: int,
 ) -> MartingaleState:
-    """Tick the streak counter after a settled trade.
+    """Tick the loss-recovery + winning-streak counters after a settle.
 
     Args:
         won: True for win, False for loss.
-        last_stake: the stake the executor actually placed.
-        max_streak: number of recovery steps the ladder is allowed to
-            climb before resetting to base. ``max_streak=1`` mirrors a
-            channel's *"TAKE 1 STEP MTG"* directive — one recovery
-            trade after a loss, then bail. ``max_streak=2`` allows two
-            recoveries (steps 1 and 2). ``0`` means uncapped.
-        reset_on_win: when True, a win clears the streak (the usual
-            behaviour); when False, the streak keeps climbing across
-            wins (rare, but channels exist).
+        last_stake: stake the executor placed on the trade we just settled.
+        last_profit: broker-reported profit (positive on win, negative
+            on loss). Used to compute ``last_payout = last_stake +
+            last_profit`` so the next streak step's stake is honest
+            about real broker payout rather than a flat multiplier.
+        max_streak: martingale recovery cap. Same semantic as before.
+        reset_on_win: when True, a win clears current_streak.
+        winning_streak_enabled: when True, advance current_win_streak
+            on win + record last_payout. When False, the win-side
+            counters stay at 0.
+        winning_streak_max_level: cap for current_win_streak. After
+            a win that hits the cap, reset to 0 and clear last_payout
+            so the next channel signal returns to base. ``0`` means
+            uncapped (rare).
 
-    Implementation note: the reset condition is ``current_streak >
-    max_streak`` (strictly greater), not ``>=``. The streak is
-    incremented *before* the check, so if we used ``>=`` the very
-    first loss would push streak from 0→1 and then reset it to 0 on
-    the same call — making ``max_streak=1`` a no-op (zero recoveries).
-    With ``>`` the streak survives long enough to be read by the
-    *next* trade's stake calculation, then resets only when a further
-    loss pushes it past the cap.
+    Implementation note: the martingale reset condition is
+    ``current_streak > max_streak`` (strictly greater) — this is
+    deliberate; see the existing comment block.
     """
     row = await get_state(session, parser_config_id)
     row.last_stake = last_stake
     row.last_outcome = "won" if won else "lost"
     if won:
+        # Martingale: existing reset-on-win path.
         if reset_on_win:
             row.current_streak = 0
+        # Winning-streak: advance + record payout, with max-level reset.
+        if winning_streak_enabled:
+            row.current_win_streak += 1
+            # Phase 4 (audit 2026-05-13, M5): round to broker-precision
+            # before persisting. ``last_payout`` carries forward into
+            # the next streak step's stake calculation (``ceil(payout)``
+            # in the risk gate), so float drift here can produce stake
+            # ladders that are 1¢ off across long winning streaks.
+            # The eventual money-column migration to Decimal is filed
+            # as a Phase 5 follow-up; this is the bounded fix for now.
+            row.last_payout = round(last_stake + last_profit, 2)
+            if (
+                winning_streak_max_level > 0
+                and row.current_win_streak >= winning_streak_max_level
+            ):
+                row.current_win_streak = 0
+                row.last_payout = 0.0
     else:
+        # Loss: martingale advances; winning-streak resets unconditionally.
         row.current_streak += 1
         if max_streak > 0 and row.current_streak > max_streak:
             row.current_streak = 0
+        row.current_win_streak = 0
+        row.last_payout = 0.0
     row.updated_at = utc_now()
     await session.commit()
     await session.refresh(row)
@@ -93,12 +127,15 @@ async def record_outcome(
 
 
 async def reset_state(session: AsyncSession, parser_config_id: int) -> None:
-    """Manual reset (for the dashboard)."""
+    """Manual reset (for the dashboard). Clears BOTH ladders so the
+    operator's "Reset" button is a single clean rewind."""
     row = await session.get(MartingaleState, parser_config_id)
     if row is None:
         return
     row.current_streak = 0
+    row.current_win_streak = 0
     row.last_stake = 0.0
+    row.last_payout = 0.0
     row.last_outcome = ""
     row.updated_at = utc_now()
     await session.commit()

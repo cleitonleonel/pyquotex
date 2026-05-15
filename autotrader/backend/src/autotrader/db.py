@@ -74,9 +74,19 @@ async def _create_indices(conn) -> None:  # type: ignore[no-untyped-def]
             "ON trade_attempts(received_at, parser_config_id)",
         ),
     )
+    # Phase 2 idempotency (audit 2026-05-13, H1): composite index that
+    # the dedup query keys on. Filtering by ``chat_id`` + equality on
+    # ``tg_message_id`` then bounded ``created_at >=`` is what the
+    # pipeline runs on the hot path of every incoming message.
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_trade_attempts_chat_tg_msg "
+            "ON trade_attempts(chat_id, tg_message_id)",
+        ),
+    )
 
 
-async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
+async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]  # noqa: PLR0912
     """One-off in-place migrations.
 
     SQLModel ``create_all`` only creates missing tables — it never
@@ -113,6 +123,20 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
             text(
                 "ALTER TABLE parser_configs ADD COLUMN "
                 "martingale_auto_recovery BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "winning_streak_enabled" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE parser_configs ADD COLUMN "
+                "winning_streak_enabled BOOLEAN NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "winning_streak_max_level" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE parser_configs ADD COLUMN "
+                "winning_streak_max_level INTEGER NOT NULL DEFAULT 2",
             ),
         )
 
@@ -187,6 +211,40 @@ async def _migrate_in_place(conn) -> None:  # type: ignore[no-untyped-def]
             text(
                 "ALTER TABLE global_settings ADD COLUMN "
                 "admin_notify_system_error BOOLEAN NOT NULL DEFAULT 1",
+            ),
+        )
+
+    # Phase 2 idempotency (audit 2026-05-13, H1): trade_attempts grew a
+    # ``tg_message_id`` column to dedup pyrogram replays. Legacy rows
+    # have no source message id; ``None`` (the SQLite NULL) is fine —
+    # the pipeline's dedup query simply won't match them. We also add
+    # a composite index on ``(chat_id, tg_message_id)`` because the
+    # dedup query keys on both.
+    cols = await conn.run_sync(_columns, "trade_attempts")
+    if cols and "tg_message_id" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE trade_attempts ADD COLUMN "
+                "tg_message_id INTEGER NULL",
+            ),
+        )
+
+    # martingale_states gained winning-streak columns when Paroli
+    # sizing landed. Existing rows default to ``0`` for both, which
+    # is the same as having no streak in progress.
+    cols = await conn.run_sync(_columns, "martingale_states")
+    if cols and "current_win_streak" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE martingale_states ADD COLUMN "
+                "current_win_streak INTEGER NOT NULL DEFAULT 0",
+            ),
+        )
+    if cols and "last_payout" not in cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE martingale_states ADD COLUMN "
+                "last_payout REAL NOT NULL DEFAULT 0",
             ),
         )
 

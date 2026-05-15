@@ -14,10 +14,10 @@ when a config row is updated or deleted via the router.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -31,6 +31,7 @@ from autotrader.models.parser_config import (
     list_configs as _list_configs,
 )
 from autotrader.models.settings import GlobalSettings
+from autotrader.models.trade_attempt import find_recent_by_tg_message_id
 from autotrader.models.watched_channel import WatchedChannel
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
@@ -112,6 +113,33 @@ class Pipeline:
         # same channel doesn't race the stateful parsers (Aggregator,
         # PrepTriggerParser).
         self._chat_locks: dict[int, asyncio.Lock] = {}
+        # One-way shutdown latch (spec §3.5, Task 6). Set by
+        # start_draining(); dispatch() refuses all new signals once
+        # True. Never reset — there is no resume path.
+        self._draining: bool = False
+        # Phase 0 instrumentation (audit 2026-05-13, H1): track recent
+        # message fingerprints per chat so a Pyrogram replay (or any
+        # other source of duplicate delivery) surfaces in the log
+        # **without** changing dispatch behaviour. Phase 2 replaces
+        # this with a real ``(chat_id, message_id)`` dedup gate that
+        # short-circuits the duplicate; Phase 0 just measures whether
+        # it actually happens in production.
+        #
+        # Fingerprint = ``(text[:200], sender_id)``. Two messages with
+        # the same text from the same sender within
+        # ``_DUPLICATE_WINDOW`` are flagged. False-positive risk: a
+        # channel that legitimately posts the same content twice
+        # (e.g. a repeated daily greeting) will fire one alert per
+        # repeat — acceptable signal-to-noise for an observation pass.
+        self._recent_fingerprints: dict[
+            int, OrderedDict[tuple[str, int], datetime],
+        ] = {}
+
+    # Tuning constants for the Phase 0 duplicate detector. Sized so
+    # the per-chat memory stays bounded under a chatty channel: 200
+    # entries * ~250B/entry ≈ 50KB worst case per active chat.
+    _DUPLICATE_WINDOW: timedelta = timedelta(minutes=10)
+    _DUPLICATE_FINGERPRINT_CAP: int = 200
 
     # ------------------------------------------------------------------
     # Decision feed
@@ -149,6 +177,85 @@ class Pipeline:
     def invalidate_all(self) -> None:
         self._parsers.clear()
 
+    def invalidate_for_chat(self, chat_id: int) -> None:
+        """Drop every cached parser whose config row's chat_id matches.
+
+        Called by the unwatch endpoint so cached parsers belonging to
+        a no-longer-watched chat don't occupy memory until the next
+        signature-drift rebuild. Dispatch already filters out
+        unwatched chats via ``WatchedChannel.enabled``, so this is
+        memory-only hygiene; behaviour is unchanged either way.
+        """
+        for cfg_id in [
+            cfg_id
+            for cfg_id, cached in self._parsers.items()
+            if cached.config_row.chat_id == chat_id
+        ]:
+            self._parsers.pop(cfg_id, None)
+
+    async def warm_up(self) -> dict[str, int]:
+        """Materialise every enabled parser_config into the cache.
+
+        Called by the lifespan after reconcile_pending and before the
+        Telegram message handler is attached, so by the time messages
+        flow in every parser is ready. Failures (bad regex / missing
+        required field) record a ``build_failed`` decision and
+        continue — the lifespan is not aborted.
+
+        Returns ``{built: N, failed: M}`` for log + telemetry.
+        Idempotent: re-running re-validates configs.
+        """
+        async with AsyncSessionLocal() as session:
+            configs = await _list_configs(session)
+        built = 0
+        failed = 0
+        for cfg in configs:
+            if not cfg.enabled:
+                continue
+            if self.prebuild(cfg):
+                built += 1
+            else:
+                failed += 1
+        log.info("pipeline.warm_up", built=built, failed=failed)
+        return {"built": built, "failed": failed}
+
+    def prebuild(self, cfg: ParserConfig) -> bool:
+        """Build a single parser into the cache. Returns True on
+        success, False on ParserBuildError. Failures emit a
+        ``build_failed`` decision so the dashboard surfaces them
+        immediately, not on first message arrival.
+        """
+        try:
+            self._get_or_build(cfg)
+        except ParserBuildError as exc:
+            log.error(
+                "pipeline.parser_build_failed",
+                config_id=cfg.id,
+                name=cfg.name,
+                error=str(exc),
+            )
+            self._record_decision(
+                {
+                    "chat_id": cfg.chat_id,
+                    "parser_config_id": cfg.id,
+                    "parser_name": cfg.name,
+                    "parser_type": cfg.parser_type,
+                    "outcome": "build_failed",
+                    "reasons": [str(exc)],
+                    "signals": 0,
+                    "text_preview": "(warm-up)",
+                },
+            )
+            return False
+        return True
+
+    def start_draining(self) -> None:
+        """One-way latch (spec §3.5, Task 6). After this, dispatch()
+        refuses all new signals. Called once by the FastAPI lifespan
+        shutdown; never reset."""
+        self._draining = True
+        log.info("pipeline.draining")
+
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
@@ -160,10 +267,65 @@ class Pipeline:
         Async-safe and idempotent: callable from the Pyrogram update
         handler with no extra synchronisation.
         """
+        if self._draining:
+            log.info(
+                "pipeline.refused",
+                reason="draining",
+                chat_id=getattr(message, "chat_id", None),
+            )
+            return
         async with self._chat_locks.setdefault(message.chat_id, asyncio.Lock()):
             await self._dispatch_locked(message)
 
+    def _check_duplicate_candidate(self, message: RawMessage) -> None:
+        """Phase 0 instrumentation: log ``pipeline.duplicate_candidate``
+        when ``message`` looks like a replay of one we recently dispatched
+        for the same chat. Side-effect: updates the per-chat fingerprint
+        LRU. Does **not** suppress the message — Phase 2 will do that
+        once we know how often this actually fires in production.
+
+        Runs synchronously under the per-chat dispatch lock, so the
+        check and update are atomic for this chat.
+        """
+        key = ((message.text or "")[:200], message.sender_id)
+        now = datetime.now(UTC)
+        seen = self._recent_fingerprints.setdefault(message.chat_id, OrderedDict())
+        # Evict entries older than the window. ``OrderedDict`` preserves
+        # insertion order so this is O(1) per evicted item.
+        cutoff = now - self._DUPLICATE_WINDOW
+        while seen:
+            oldest_key, oldest_ts = next(iter(seen.items()))
+            if oldest_ts >= cutoff:
+                break
+            seen.pop(oldest_key)
+        prior = seen.get(key)
+        if prior is not None:
+            log.warning(
+                "pipeline.duplicate_candidate",
+                chat_id=message.chat_id,
+                sender_id=message.sender_id,
+                elapsed_seconds=round((now - prior).total_seconds(), 3),
+                text_preview=(message.text or "")[:120],
+            )
+        # Refresh / insert with the latest timestamp. ``move_to_end`` on
+        # the existing key would keep the *prior* timestamp; we want the
+        # most-recent-seen so the next replay is timed against this one.
+        if key in seen:
+            seen.pop(key)
+        seen[key] = now
+        # Bound memory per chat. Eviction is FIFO by insertion order
+        # (== seen order) which approximates LRU well enough for a
+        # short-window cache.
+        while len(seen) > self._DUPLICATE_FINGERPRINT_CAP:
+            seen.popitem(last=False)
+
     async def _dispatch_locked(self, message: RawMessage) -> None:
+        # Phase 0 instrumentation runs FIRST so duplicate replay is
+        # observed regardless of whether the message ultimately matches
+        # a parser. The check is cheap (O(1) dict ops, one log emit on
+        # hit) and side-effect-free outside the per-chat fingerprint
+        # cache.
+        self._check_duplicate_candidate(message)
         async with AsyncSessionLocal() as session:
             # Drop the message early when it comes from a chat the
             # operator hasn't opted into. Pyrogram's MessageHandler
@@ -185,6 +347,49 @@ class Pipeline:
                     chat_id=message.chat_id,
                 )
                 return
+            # Phase 2 idempotency gate (audit 2026-05-13, H1). Run
+            # before parser build so a Pyrogram replay never wastes
+            # CPU on parsing or hits the executor. Keys on the
+            # persisted ``(chat_id, tg_message_id)`` of any
+            # ``TradeAttempt`` from the last 10 min — including
+            # ``rejected`` ones, because "we already processed this
+            # message" is the right invariant regardless of outcome.
+            #
+            # No ``message_id`` (synthetic test replay, batch passes)
+            # falls through; the Phase 0 fingerprint warning above
+            # already flagged any obvious replay shape.
+            message_id = getattr(message, "message_id", None)
+            if message_id is not None:
+                existing = await find_recent_by_tg_message_id(
+                    session,
+                    chat_id=message.chat_id,
+                    tg_message_id=int(message_id),
+                )
+                if existing is not None:
+                    self._record_decision(
+                        {
+                            "chat_id": message.chat_id,
+                            "parser_config_id": existing.parser_config_id,
+                            "parser_name": None,
+                            "parser_type": None,
+                            "outcome": "duplicate",
+                            "reasons": [
+                                f"tg_message_id={message_id} already "
+                                f"processed as TradeAttempt #{existing.id} "
+                                f"(status={existing.status})",
+                            ],
+                            "signals": 0,
+                            "text_preview": (message.text or "")[:120],
+                        },
+                    )
+                    log.warning(
+                        "pipeline.duplicate_blocked",
+                        chat_id=message.chat_id,
+                        tg_message_id=message_id,
+                        prior_attempt_id=existing.id,
+                        prior_status=existing.status,
+                    )
+                    return
             configs = await self._enabled_configs_for(session, message.chat_id)
             settings = await self._get_settings(session)
 
@@ -247,6 +452,7 @@ class Pipeline:
                 log.error(
                     "pipeline.parser_build_failed",
                     config_id=cfg.id,
+                    name=cfg.name,
                     error=str(exc),
                 )
                 self._record_decision(
@@ -323,10 +529,18 @@ class Pipeline:
                 # flip mid-batch takes effect immediately.
                 async with AsyncSessionLocal() as session:
                     fresh = await self._get_settings(session)
+                # Phase 2 (audit 2026-05-13, H1): pass the source
+                # Pyrogram message id so the persisted TradeAttempt is
+                # findable by the next dispatch's dedup gate. Batch
+                # parsers fan one message out to N signals — every row
+                # carries the SAME ``tg_message_id`` (correct: they
+                # all derive from one inbound message).
+                tg_message_id = getattr(message, "message_id", None)
                 await self._executor.submit(
                     signal=sig,
                     parser_config=cached.config_row,
                     settings=fresh,
+                    tg_message_id=int(tg_message_id) if tg_message_id is not None else None,
                 )
             # Priority orders the walk, but every matching enabled
             # parser fires its own trade — they're independent

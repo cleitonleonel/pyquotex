@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import cached_property
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Hard gate for real-money trading. Even when true, channels still
     # have their own enable flag — this is a *master* off-switch.
     live_trading_enabled: bool = False
+
+    # Maximum OTP attempts per cycle before the relay gives up and
+    # edits the message to '/reconnect to retry'. Trades off
+    # alert-fatigue (low) against finger-fumble forgiveness (high).
+    # 3 is the sweet spot per the spec; tune via env if you find
+    # yourself routinely needing more.
+    otp_max_attempts: int = Field(default=3, ge=1, le=10)
 
     db_url: str = "sqlite+aiosqlite:///./data/autotrader.db"
 
@@ -69,6 +76,55 @@ class Settings(BaseSettings):
     # tells you the channel update stream is alive but the post-
     # delivery path is dropping. Off by default — high-cardinality.
     debug_telegram_raw_updates: bool = False
+
+    # When true, ``executor._place`` wraps each broker ``buy()`` /
+    # ``open_pending()`` in :class:`BrokerWireTrace`, which taps
+    # pyquotex's ``send_websocket_request`` to record every outgoing
+    # socket.io frame around the call. On exit (success or
+    # ``TimeoutError``) it emits ``executor.broker_wire.preflight``
+    # and ``executor.broker_wire.postmortem`` structured logs with
+    # the captured frames, ``realtime_price[asset]`` deque length
+    # before/after, and which registry events fired. Used to
+    # diagnose silent ``broker_error: Timeout waiting for realtime
+    # price data`` failures where the broker UI shows the asset as
+    # tradable. Off by default — flip to true only while a known
+    # issue is being investigated, the postmortem payload is large.
+    debug_broker_wire: bool = False
+
+    # ── Tier-0 broker reliability (audit 2026-05-14) ─────────────
+    #
+    # curl_cffi impersonate profile used by pyquotex's HTTP login
+    # path. Currently hardcoded at quotex_manager.py:405; exposing
+    # it lets the operator rotate profiles without a redeploy when
+    # Cloudflare's bot scoring shifts. Sweep candidates with the
+    # probe in RUNBOOK §B.
+    broker_curl_cffi_profile: str = Field(default="firefox144", min_length=1)
+
+    @field_validator("broker_curl_cffi_profile", mode="after")
+    @classmethod
+    def _profile_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            msg = "broker_curl_cffi_profile must not be blank or whitespace-only"
+            raise ValueError(msg)
+        return v
+
+    # Pre-trade WS health gate (Task 5 / spec §3.4). If the latest
+    # tick for the asset is older than this, the executor refuses
+    # to send the order and marks the attempt ``broker_error``. The
+    # martingale ladder is NOT advanced on a health-gate block —
+    # the trade never reached the broker.
+    broker_stale_feed_max_age_seconds: int = Field(default=10, ge=1, le=300)
+
+    # Hard reconnect ceiling (Task 4 / spec §3.3). After this many
+    # consecutive failed reconnect attempts, the manager stops the
+    # pyquotex supervisor, disconnects cleanly, and flips state to
+    # ``awaiting_manual_recovery``. Operator must run /reconnect.
+    # Must be > the soft-downgrade threshold (10 — the point at which
+    # quotex_manager.py downgrades the admin-bot tone from "transient"
+    # to "outage") so the operator sees that transition before the
+    # auto-halt fires. Task 4 of the Tier-0 plan introduces the
+    # constant that codifies this number.
+    broker_reconnect_hard_ceiling: int = Field(default=20, ge=11, le=200)
 
     @cached_property
     def cors_origins_list(self) -> list[str]:

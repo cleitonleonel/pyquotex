@@ -216,107 +216,65 @@ class AdminBotNotifier:
 
 
 def format_trade_placed(payload: dict[str, Any]) -> str:
-    """Render a PLACED event for the admin Telegram bot.
-
-    Fields beyond the core (asset/direction/duration/stake/mode) are
-    optional and only render when present. Lets the same formatter
-    serve live trades (no fire_at, no martingale ladder) and scheduled
-    martingale recoveries (everything populated) without conditional
-    spaghetti at the call site.
-    """
-    asset = payload.get("asset", "?")
+    asset = payload.get("asset") or "?"
     direction = (payload.get("direction") or "?").upper()
     duration = payload.get("duration_seconds", 0)
-    stake = float(payload.get("stake") or 0.0)
-    base = float(payload.get("base_stake") or stake)
-    step = int(payload.get("martingale_step") or 0)
-    mode = payload.get("trade_mode") or "auto"
-    step_note = ""
-    if step > 0 and base > 0:
-        ratio = stake / base
-        step_note = f" (step {step}, x{ratio:.1f} from base)"
-
-    # Mode line — append the broker-side fire time for scheduled trades
-    # so the operator can see *when* the pending order will trigger
-    # without leaving Telegram. ``HH:MM:SS UTC`` is enough; the date is
-    # almost always today and would be clutter.
-    mode_line = f"mode  : {mode}"
-    fire_at_raw = payload.get("fire_at")
-    if mode == "scheduled" and fire_at_raw:
-        fire_at_str = _format_fire_at(fire_at_raw)
-        if fire_at_str:
-            mode_line = f"mode  : {mode} @ {fire_at_str}"
-
-    lines = [
-        f"PLACED  {asset} - {direction} - {duration}s",
-        f"stake : ${stake:.2f}{step_note}",
-        mode_line,
-    ]
-
-    # Parser context — which channel/config triggered the trade. Only
-    # rendered when the executor plumbed it through; live tests that
-    # publish hand-crafted payloads (no parser context) stay clean.
-    parser_name = payload.get("parser_name")
-    if parser_name:
-        lines.append(f"from  : {parser_name}")
-
-    # Broker ticket — useful for cross-referencing with the broker's
-    # own history ticker. Skipped when the broker hasn't returned an id
-    # yet (rare; either the ``buy`` or ``open_pending`` path always sets
-    # one on success).
-    ticket = payload.get("broker_order_id")
-    if ticket:
-        lines.append(f"ticket: {ticket}")
-
-    return "\n".join(lines)
-
-
-def _format_fire_at(value: Any) -> str:
-    """Best-effort ``HH:MM:SS UTC`` from an ISO-8601 string or datetime.
-
-    The wire payload ships ``fire_at`` as an ISO string (executor's
-    ``_attempt_to_payload``) but tests sometimes pass a ``datetime``
-    directly — accept both. Returns ``""`` when the value is unparseable
-    so the caller can fall back to the bare mode line.
-    """
-    from datetime import datetime  # noqa: PLC0415
-
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str):
-        try:
-            # ``datetime.fromisoformat`` handles both ``+00:00`` and
-            # naive forms; the wire format from the executor uses the
-            # offset variant.
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return ""
-    else:
-        return ""
-    if dt.tzinfo is None:
-        # Treat naive as UTC — the executor only ever emits UTC.
-        from datetime import UTC  # noqa: PLC0415
-        dt = dt.replace(tzinfo=UTC)
-    from datetime import UTC  # noqa: PLC0415
-    return dt.astimezone(UTC).strftime("%H:%M:%S UTC")
+    stake = payload.get("stake", 0)
+    head = f"🎯 {direction} {asset} {duration}s · ${stake}"
+    ladder_line = _ladder_line(payload)
+    if ladder_line:
+        return f"{head}\n   {ladder_line}"
+    return head
 
 
 def format_trade_settled(payload: dict[str, Any]) -> str:
-    asset = payload.get("asset", "?")
+    """Format a settled-trade notification, optionally appending
+    a ladder progress line when one of the parsers' ladders is
+    active.
+
+    Defensively coerces ``profit`` and ``direction`` because the
+    payload may carry ``None`` for either field — TradeAttempt
+    declares both as optional and a manually-constructed event
+    bus payload could too.
+    """
+    status = payload.get("status", "")
+    asset = payload.get("asset") or "?"
     direction = (payload.get("direction") or "?").upper()
-    duration = payload.get("duration_seconds", 0)
-    profit = payload.get("profit")
-    status = payload.get("status", "?")
+    stake = payload.get("stake", 0)
+    profit_raw = payload.get("profit")
+    profit = float(profit_raw) if isinstance(profit_raw, (int, float)) else 0.0
+
     if status == "won":
-        prefix = "WIN"
+        head = f"✅ WON +${profit:.2f} {asset} {direction} ${stake}"
     elif status == "lost":
-        prefix = "LOSS"
-    elif status == "refund":
-        prefix = "REFUND"
+        head = f"❌ LOST ${profit:.2f} {asset} {direction} ${stake}"
     else:
-        prefix = status.upper()
-    pnl = f"{profit:+.2f}" if isinstance(profit, (int, float)) else "—"
-    return f"{prefix}   {asset} - {direction} - {duration}s   {pnl}"
+        head = f"⚠️ {status.upper()} {asset} {direction} ${stake}"
+
+    ladder_line = _ladder_line(payload)
+    if ladder_line:
+        return f"{head}\n   {ladder_line}"
+    return head
+
+
+def _ladder_line(payload: dict[str, Any]) -> str:
+    """Return a one-line ladder hint, or empty string when neither
+    ladder is in progress."""
+    ladder = payload.get("ladder")
+    if not isinstance(ladder, dict):
+        return ""
+    cur_win = ladder.get("current_win_streak", 0) or 0
+    max_win = ladder.get("max_win_streak", 0) or 0
+    cur_loss = ladder.get("current_streak", 0) or 0
+    max_loss = ladder.get("max_streak", 0) or 0
+    next_hint = ladder.get("next_stake_hint", 0) or 0
+    if cur_win > 0:
+        if max_win > 0 and cur_win >= max_win:
+            return f"📈 win streak {cur_win}/{max_win} (max hit, reset) → next ${next_hint}"
+        return f"📈 win streak {cur_win}/{max_win} → next ${next_hint}"
+    if cur_loss > 0:
+        return f"📉 next: martingale recovery ${next_hint} (step {cur_loss}/{max_loss})"
+    return ""
 
 
 def format_risk_rejected(payload: dict[str, Any]) -> str:

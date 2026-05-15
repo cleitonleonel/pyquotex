@@ -14,13 +14,16 @@ gates entry — invalid / expired tokens get a clean 1008 close.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+import structlog
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
 from autotrader.auth import _decode  # type: ignore[attr-defined]
 from autotrader.dependencies import EventBusDep
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/feed", tags=["feed"])
 
@@ -33,11 +36,30 @@ async def feed_ws(
 ) -> None:
     """Stream trade-row events as JSON until the client disconnects."""
     if not token:
+        # Phase 0 instrumentation (audit 2026-05-13, M4): operators
+        # report "WS won't connect" with no log breadcrumb. Emit a
+        # structured warning at every rejection point — Phase 1 will
+        # narrow the ``except`` clause below so unexpected exceptions
+        # surface as ``log.exception`` instead of being silently
+        # swallowed.
+        log.warning("feed.ws.auth_rejected", reason="no_token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:
         _decode(token)
-    except Exception:
+    except (HTTPException, InvalidToken) as exc:
+        # Phase 1 (audit 2026-05-13, M4): narrow the catch to the
+        # auth-rejection class so unexpected exceptions surface as a
+        # framework-level ``log.exception`` instead of being silently
+        # swallowed by a bare ``except Exception``. Auth.py's
+        # ``_decode`` only raises ``HTTPException`` today; we include
+        # the lower-level Fernet ``InvalidToken`` for defence in
+        # depth in case the call surface ever bypasses ``_decode``.
+        log.warning(
+            "feed.ws.auth_rejected",
+            reason=type(exc).__name__,
+            detail=str(exc),
+        )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -46,7 +68,6 @@ async def feed_ws(
     # "live" before the first event arrives.
     await websocket.send_json({"type": "feed.ready", "payload": {}})
 
-    consumer_task: asyncio.Task[None] | None = None
     try:
         async for event in bus.subscribe():
             payload: dict[str, Any] = {
@@ -56,6 +77,3 @@ async def feed_ws(
             await websocket.send_json(payload)
     except WebSocketDisconnect:
         return
-    finally:
-        if consumer_task is not None and not consumer_task.done():
-            consumer_task.cancel()

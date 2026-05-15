@@ -360,7 +360,10 @@ function DialogRow({ dialog }: { dialog: TelegramDialog }) {
             enabled: true,
           })
         : telegram.unwatch(dialog.chat_id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["telegram"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["telegram"] });
+      qc.invalidateQueries({ queryKey: ["pipeline", "status"] });
+    },
   });
 
   return (

@@ -598,3 +598,247 @@ def test_pyrogram_min_channel_id_patched_for_64bit_channels() -> None:
     for channel_id in (-1002218147270, -1002475564994):
         # Should not raise.
         assert pyrogram.utils.get_peer_type(channel_id) == "channel"
+
+
+# ---------------------------------------------------------------------------
+# subscribe_chat — per-chat live-stream subscription primitive
+# ---------------------------------------------------------------------------
+
+
+def test_subscribe_chat_calls_get_chat_history(client: TestClient) -> None:
+    """``subscribe_chat`` should run a single ``get_chat_history``
+    touch, mirroring what ``_prime_peer_cache`` does per chat. This
+    is the call that registers the channel with the live update
+    stream so ``UpdateNewChannelMessage`` events stop being silently
+    dropped.
+    """
+    # Log into Telegram so the manager has a live client.
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    # Seed history for chat -1003 so we can prove subscribe_chat
+    # actually walks it (and isn't just a no-op).
+    FakeTelegramClient.history[-1003] = [
+        _FakeMessage(901, text="probe", sender_id=200),
+    ]
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.telegram_manager
+    initial_subscribed = manager.subscribed_chat_count
+
+    asyncio.new_event_loop().run_until_complete(
+        manager.subscribe_chat(-1003)
+    )
+
+    # The gauge ticks up by one and the fake client's get_chat_history
+    # was actually called for the new chat.
+    assert manager.subscribed_chat_count == initial_subscribed + 1
+
+
+def test_subscribe_chat_idempotent_when_logged_out(client: TestClient) -> None:
+    """``subscribe_chat`` returns silently when the manager isn't
+    logged in. Avoids forcing the watch endpoint to know about the
+    login state.
+    """
+    from autotrader.main import app  # noqa: PLC0415
+
+    manager = app.state.telegram_manager
+    # Not logged in — the call is a no-op, not a raise.
+    asyncio.new_event_loop().run_until_complete(
+        manager.subscribe_chat(-1004)
+    )
+    assert manager.subscribed_chat_count == 0
+
+
+def test_subscribe_chat_raises_on_pyrogram_failure(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Pyrogram exception bubbles as ``TelegramManagerError`` so
+    the route can map it to 502 — caller knows the watch row was
+    saved but the subscribe step failed."""
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.services.telegram_manager import TelegramManagerError  # noqa: PLC0415
+
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    manager = app.state.telegram_manager
+    client_obj = manager._client
+    assert client_obj is not None
+
+    async def _broken_history(*_: object, **__: object) -> object:
+        raise RuntimeError("flood-wait")
+        yield  # pragma: no cover  (unreachable; satisfies async-gen typing)
+
+    monkeypatch.setattr(client_obj, "get_chat_history", _broken_history)
+
+    with pytest.raises(TelegramManagerError):
+        asyncio.new_event_loop().run_until_complete(
+            manager.subscribe_chat(-1005)
+        )
+
+
+def test_watch_subscribes_chat_when_enabled(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /telegram/watch with enabled=True must call
+    TelegramManager.subscribe_chat exactly once with the new chat_id.
+    """
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    async def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _spy,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1009,
+            "title": "Elite",
+            "chat_type": "channel",
+            "username": "elite",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert calls == [-1009], (
+        "watch endpoint must call subscribe_chat with the new chat_id; "
+        f"got calls={calls}"
+    )
+
+
+def test_watch_disabled_does_not_subscribe(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled watch row is a draft — don't pay the Pyrogram
+    round-trip."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    async def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _spy,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1010,
+            "title": "Draft",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert calls == [], "subscribe_chat must not run for enabled=False"
+
+
+def test_watch_returns_502_when_subscribe_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When subscribe_chat raises, the watch row IS still saved (so
+    a retry is just another POST), but the route returns 502 with
+    the error detail surfaced."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    from autotrader.main import app  # noqa: PLC0415
+    from autotrader.services.telegram_manager import TelegramManagerError  # noqa: PLC0415
+
+    async def _boom(self: object, chat_id: int) -> None:
+        raise TelegramManagerError(f"flood-wait on {chat_id}")
+
+    monkeypatch.setattr(
+        type(app.state.telegram_manager),
+        "subscribe_chat",
+        _boom,
+    )
+
+    r = client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1011,
+            "title": "Floody",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 502, r.text
+    assert "flood-wait" in r.text
+
+    r = client.get("/telegram/watched", headers=headers)
+    assert any(d["chat_id"] == -1011 for d in r.json())
+
+
+def test_unwatch_invalidates_pipeline_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DELETE /telegram/watch/{chat_id} should call
+    Pipeline.invalidate_for_chat so cached parsers for a no-longer-
+    watched chat don't sit in memory."""
+    headers = _login(client)
+    client.post("/telegram/login", headers=headers, json={"phone": "+15550100"})
+    client.post("/telegram/code", headers=headers, json={"code": "11111"})
+
+    client.post(
+        "/telegram/watch",
+        headers=headers,
+        json={
+            "chat_id": -1012,
+            "title": "Trash",
+            "chat_type": "channel",
+            "username": None,
+            "enabled": True,
+        },
+    )
+
+    from autotrader.main import app  # noqa: PLC0415
+
+    calls: list[int] = []
+
+    def _spy(self: object, chat_id: int) -> None:
+        calls.append(chat_id)
+
+    monkeypatch.setattr(
+        type(app.state.pipeline),
+        "invalidate_for_chat",
+        _spy,
+    )
+
+    r = client.delete("/telegram/watch/-1012", headers=headers)
+    assert r.status_code == 200, r.text
+    assert calls == [-1012], f"expected invalidate_for_chat(-1012); got {calls}"

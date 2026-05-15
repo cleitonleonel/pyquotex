@@ -29,12 +29,22 @@ class FakeUser:
     id: int
     is_bot: bool = False
     first_name: str = "Tester"
+    # See note on ``FakeChat.username`` — pyrofork's
+    # ``MessageHandler.check_if_has_matching_listener`` also reads
+    # ``from_user.username`` on every incoming message.
+    username: str | None = None
 
 
 @dataclass
 class FakeChat:
     id: int
     type: str = "private"
+    # Pyrofork's ``MessageHandler.check_if_has_matching_listener`` reads
+    # ``chat.username`` (message_handler.py:67) before dispatching — bots
+    # in private chats never have one, but the attribute access still
+    # has to succeed. Default ``None`` matches what real Pyrogram returns
+    # for private peers without a public @-handle.
+    username: str | None = None
 
 
 @dataclass
@@ -89,6 +99,7 @@ class FakePyrogramBot:
     raise_on_send: type[BaseException] | None = None
     _on_message: MessageHandler | None = None
     _on_callback: CallbackHandler | None = None
+    _next_message_id: int = field(default=1, init=False)
 
     # ------------------------------------------------------------------
     # Lifecycle (matches the bits of pyrogram.Client AdminBot calls)
@@ -118,12 +129,27 @@ class FakePyrogramBot:
         text: str,
         reply_markup: Any | None = None,
         **_kwargs: Any,
-    ) -> None:
+    ) -> Any:
         if self.raise_on_send is not None:
             exc_cls = self.raise_on_send
             self.raise_on_send = None  # one-shot unless reset
             raise exc_cls("fake send failure")
+        msg_id = self._next_message_id
+        self._next_message_id += 1
         self.sent_messages.append((chat_id, text, reply_markup))
+        # Return a Pyrogram-shaped object so callers like the OTP relay
+        # can capture the message_id from the round-trip (C1 fix).
+        return type("Message", (), {"id": msg_id})()
+
+    async def edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        **_kwargs: Any,
+    ) -> None:
+        """No-op stub — OTP relay tests verify edits via AdminBot.edit_message_text."""
+        pass
 
     # ------------------------------------------------------------------
     # Replay surface (test-only)

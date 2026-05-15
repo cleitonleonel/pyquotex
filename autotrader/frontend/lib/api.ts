@@ -271,6 +271,9 @@ export interface MartingalePayload {
   multiplier: number;
   max_streak: number;
   reset_on_win: boolean;
+  auto_recovery: boolean;
+  winning_streak_enabled: boolean;
+  winning_streak_max_level: number;
 }
 
 export interface ParserConfigPayload {
@@ -341,6 +344,9 @@ export const DEFAULT_PARSER_CONFIG: ParserConfigPayload = {
     multiplier: 2,
     max_streak: 5,
     reset_on_win: true,
+    auto_recovery: false,
+    winning_streak_enabled: false,
+    winning_streak_max_level: 2,
   },
   enabled: true,
 };
@@ -502,6 +508,11 @@ export interface StreakRow {
   last_outcome: string;
   last_stake: number;
   updated_at: string | null;
+  // Winning streak (Paroli) ladder.
+  winning_streak_enabled: boolean;
+  winning_streak_max_level: number;
+  current_win_streak: number;
+  last_payout: number;
 }
 
 export interface RiskOverview {

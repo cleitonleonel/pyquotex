@@ -77,6 +77,20 @@ class ParserConfig(SQLModel, table=True):
     # True for this to do anything; both flags off = flat staking.
     martingale_auto_recovery: bool = Field(default=False, nullable=False)
 
+    # Winning-streak (Paroli) sizing — opt-in per parser. When True,
+    # after a winning trade settles, the **next channel signal** for
+    # this parser stakes at ``ceil(martingale_state.last_payout)``
+    # instead of base. Compounds up to ``winning_streak_max_level``
+    # consecutive wins, then resets to base. A loss at any point also
+    # resets to base (loss handling delegates to martingale config).
+    #
+    # ``last_payout`` (live runtime value) lives on
+    # :class:`MartingaleState`; both ladders share that table since
+    # they're per-parser counters with identical lifecycle (reset on
+    # config edit / manual reset button).
+    winning_streak_enabled: bool = Field(default=False, nullable=False)
+    winning_streak_max_level: int = Field(default=2, nullable=False)
+
     enabled: bool = Field(default=True, nullable=False)
 
     created_at: datetime = Field(default_factory=utc_now, nullable=False)

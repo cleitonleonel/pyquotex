@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -33,12 +34,15 @@ from autotrader.models.telegram_session import (
 from autotrader.routers import admin_bot as admin_bot_router
 from autotrader.routers import auth, broker, feed, health, parsers, risk, stats, stats_v2, telegram
 from autotrader.routers import pipeline as pipeline_router
+
 from autotrader.services.admin_bot import AdminBot
+from autotrader.services.admin_bot_otp_relay import AdminBotOTPRelay
 from autotrader.services.backups import BackupScheduler
 from autotrader.services.event_bus import TradeEventBus
 from autotrader.services.executor import TradeExecutor
 from autotrader.services.pipeline import Pipeline
 from autotrader.services.quotex_manager import QuotexManager
+from autotrader.services.session_store import SessionStore
 from autotrader.services.telegram_manager import TelegramManager
 
 # Initialise logging at import time so anything emitted during module
@@ -121,10 +125,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     manager = QuotexManager(root_path=_broker_root_path(), event_bus=event_bus)
     app.state.quotex_manager = manager
 
-    # Auto-load credentials and pre-warm the connection so the first
-    # trade after startup pays no login cost. If the broker requests
-    # an OTP we leave the connect parked in ``awaiting_otp`` — the
-    # user can finish it from the dashboard.
+    # --- Broker session persistence ---------------------------------------
+    # Encrypted on /data so most container restarts skip OTP. Uses the
+    # same Fernet key that already protects broker_credentials.
+    session_store_path = Path("/data") / "quotex_session.json"
+    session_store_fernet = Fernet(settings.fernet_key.get_secret_value().encode())
+    session_store = SessionStore(
+        path=session_store_path,
+        fernet=session_store_fernet,
+    )
+    manager.set_session_store(session_store)
+
+    # Auto-load credentials so the connection can be pre-warmed once
+    # the OTP relay is wired (see below, after manager.set_otp_relay).
+    # If the broker requests an OTP we leave the connect parked in
+    # ``awaiting_otp`` — the relay then forwards the challenge to
+    # Telegram so the user never has to touch the dashboard.
+    _creds_ready = False
     async with AsyncSessionLocal() as session:
         creds = await load_credentials(session)
     if creds is not None:
@@ -153,16 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
                 else "PRACTICE"
             )
             manager.set_credentials(email, password, mode)
-            try:
-                manager.begin_connect()
-                await manager.wait_settled(timeout=2.0)
-                log.info(
-                    "broker.autoconnect",
-                    state=manager.status().state,
-                    last_error=manager.status().last_error,
-                )
-            except Exception as exc:  # pragma: no cover  (best-effort warm-up)
-                log.warning("broker.autoconnect.failed", error=str(exc))
+            _creds_ready = True
 
     # Telegram manager + session restore. Phase 2 just keeps the
     # client warm; Phase 3 attaches the live message handler.
@@ -212,7 +220,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     pipeline = Pipeline(manager=manager, executor=executor, event_bus=event_bus)
     app.state.pipeline = pipeline
     app.state.executor = executor
-    telegram_manager.set_message_callback(pipeline.dispatch)
+    # Note: telegram_manager.set_message_callback(pipeline.dispatch) is
+    # deliberately NOT called here. We attach the handler only after
+    # warm_up() has populated the parser cache, so the very first
+    # inbound message can't race with cache materialisation. See
+    # below, after the warm_up block.
 
     # Admin Telegram bot (Phase 8). The token is *optional* — when
     # unset, the bot is constructed in ``state="disabled"`` and ``start()``
@@ -230,11 +242,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
     app.state.admin_bot = admin_bot
     await admin_bot.start()
 
+    # --- OTP relay (admin bot ↔ broker manager) -------------------------
+    # Wires the broker's OTP callback to the admin-bot Telegram client.
+    # Bound user is looked up from the persisted GlobalSettings row.
+    otp_relay = AdminBotOTPRelay(
+        manager=manager,
+        admin_bot=admin_bot,
+        bound_user_id=admin_bot.status().bound_user_id,
+        max_attempts=settings.otp_max_attempts,
+    )
+    manager.set_otp_relay(otp_relay)
+
+    # Pre-warm the broker connection NOW that the OTP relay is attached.
+    # Any OTP challenge fired during begin_connect() will reach the relay
+    # (and thus Telegram) instead of falling back to dashboard-only mode.
+    if _creds_ready:
+        try:
+            manager.begin_connect()
+            await manager.wait_settled(timeout=2.0)
+            log.info(
+                "broker.autoconnect",
+                state=manager.status().state,
+                last_error=manager.status().last_error,
+            )
+        except Exception as exc:  # pragma: no cover  (best-effort warm-up)
+            log.warning("broker.autoconnect.failed", error=str(exc))
+
     # Stash references the admin-bot command handlers need (pipeline
     # ring buffer, broker manager, the bot itself). Avoids handlers
     # depending on FastAPI's request context — see admin_bot_state.py.
     from autotrader.services import admin_bot_state  # noqa: PLC0415
-    admin_bot_state.attach(pipeline=pipeline, quotex=manager, admin_bot=admin_bot)
+    admin_bot_state.attach(pipeline=pipeline, quotex=manager, admin_bot=admin_bot, otp_relay=otp_relay)
 
     # Wire the command dispatcher only if the bot is actually running.
     # When disabled / errored, leaving the hook unset means AdminBot
@@ -263,6 +301,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
         quotex=manager,
         admin_bot=admin_bot,
         notifier=notifier,
+        otp_relay=otp_relay,
     )
 
     # Sweep ``pending`` trades from the previous process. In-memory
@@ -273,6 +312,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
         await executor.reconcile_pending()
     except Exception as exc:  # pragma: no cover - best-effort startup task
         log.warning("executor.reconcile.failed", error=str(exc))
+
+    # Eagerly materialise every enabled parser. Without this, the
+    # ``cached_parser_count`` gauge sits at 0 until each chat
+    # receives its first message — operators can't tell whether
+    # their configs compile cleanly until traffic arrives.
+    try:
+        await pipeline.warm_up()
+    except Exception as exc:  # pragma: no cover - belt + braces
+        log.warning("pipeline.warm_up.failed", error=str(exc))
+
+    # Now that the parser cache is hot (warm_up done) it is safe to
+    # attach the Pyrogram MessageHandler — see the deferred comment
+    # near the Pipeline construction. _attach_handler_if_pending
+    # actually wires the handler the first time _on_message is set,
+    # so this call is the moment messages begin flowing.
+    telegram_manager.set_message_callback(pipeline.dispatch)
 
     # Optional online-backup scheduler. ``backup_interval_seconds=0``
     # (the default) keeps the loop quiescent; operators opt in by
@@ -307,6 +362,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
             with contextlib.suppress(asyncio.CancelledError):
                 await notifier_task
         await admin_bot.stop()
+        pipeline.start_draining()
+        executor.start_draining()
+        await executor.wait_for_pendings(timeout=300.0)
         await executor.shutdown()
         await manager.disconnect()
         with contextlib.suppress(Exception):

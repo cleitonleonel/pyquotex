@@ -600,6 +600,12 @@ def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> Non
     _run(_dispatch(app_client, chat_id=-1001, text="BUY EURUSD 1m"))
     pipeline = app_client.app.state.pipeline  # type: ignore[attr-defined]
     assert config_id in pipeline._parsers
+    # Capture the cached instance's identity. The PUT below changes only
+    # ``name`` and ``priority`` — neither is in ``_config_signature``, so
+    # ``_get_or_build`` would refresh ``config_row`` on the *same*
+    # instance if invalidate() were skipped. A different ``id()`` after
+    # the PUT therefore proves invalidate() really ran.
+    cached_before = pipeline._parsers[config_id]
 
     # Update without changing the parser shape — the signature would
     # not drift on its own, so the cache must be flushed by the route.
@@ -628,7 +634,19 @@ def test_parser_update_invalidates_pipeline_cache(app_client: TestClient) -> Non
         },
     )
     assert r.status_code == 200, r.text
-    assert config_id not in pipeline._parsers
+    # invalidate() drops the stale cached instance; prebuild() (added in
+    # Task 7) immediately re-inserts a fresh one because enabled=True.
+    # The invariant is that the cache holds the *new* config shape — not
+    # that the slot is empty. Verify (a) the rebuilt row carries the new
+    # name, and (b) the cached instance is a *different* object than
+    # before — without invalidate(), _get_or_build would have returned
+    # the same instance with config_row simply re-pointed.
+    assert config_id in pipeline._parsers
+    assert pipeline._parsers[config_id].config_row.name == "renamed"
+    assert pipeline._parsers[config_id] is not cached_before, (
+        "PUT must invalidate the cached parser instance, not just "
+        "refresh config_row in place"
+    )
 
 
 def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> None:
@@ -651,3 +669,56 @@ def test_parser_delete_invalidates_pipeline_cache(app_client: TestClient) -> Non
     r = app_client.delete(f"/parsers/configs/{config_id}", headers=headers)
     assert r.status_code == 200
     assert config_id not in pipeline._parsers
+
+
+def test_pipeline_invalidate_for_chat_drops_only_matching_caches() -> None:
+    """``invalidate_for_chat(X)`` removes every cached parser whose
+    ``config_row.chat_id == X``, leaving caches for other chats
+    intact. Called from the unwatch endpoint so cached parsers for
+    a deleted watch row don't sit in memory until a signature drift
+    rebuilds them.
+    """
+    from autotrader.models.parser_config import ParserConfig  # noqa: PLC0415
+    from autotrader.services.parsers import build_parser  # noqa: PLC0415
+    from autotrader.services.pipeline import Pipeline, _CachedParser  # noqa: PLC0415
+
+    class _StubManager:
+        assets: tuple[str, ...] = ()
+
+    class _StubExecutor:
+        async def submit(self, **kwargs: object) -> None:
+            return None
+
+    pipe = Pipeline(manager=_StubManager(), executor=_StubExecutor())
+
+    def _seed(cfg_id: int, chat_id: int) -> None:
+        cfg = ParserConfig(
+            id=cfg_id,
+            chat_id=chat_id,
+            parser_type="template",
+            parser_config_json='{"template": "{DIRECTION} {ASSET} {DURATION}"}',
+        )
+        parser = build_parser(
+            parser_type="template",
+            parser_config={"template": "{DIRECTION} {ASSET} {DURATION}"},
+        )
+        pipe._parsers[cfg_id] = _CachedParser(
+            config_revision=("template", "{}", "0", "{}", "60", "0"),
+            parser_type="template",
+            parser=parser,
+            aggregator=None,
+            config_row=cfg,
+        )
+
+    _seed(cfg_id=10, chat_id=-1001)
+    _seed(cfg_id=11, chat_id=-1001)
+    _seed(cfg_id=20, chat_id=-1002)
+
+    pipe.invalidate_for_chat(-1001)
+
+    assert 10 not in pipe._parsers
+    assert 11 not in pipe._parsers
+    assert 20 in pipe._parsers, (
+        "invalidate_for_chat must only drop caches matching the chat_id; "
+        "parsers on other chats stay cached"
+    )

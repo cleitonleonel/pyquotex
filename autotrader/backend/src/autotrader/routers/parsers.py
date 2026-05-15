@@ -68,6 +68,11 @@ class MartingalePayload(BaseModel):
     # ``ParserConfig.martingale_auto_recovery``. Defaults to False so
     # existing payloads remain valid; operators flip it on per parser.
     auto_recovery: bool = False
+    # Winning-streak (Paroli) fields. Defaults keep existing payloads
+    # valid; operators opt in per parser. Task 1 added the DB columns;
+    # Task 3 wires them through the API and the executor.
+    winning_streak_enabled: bool = False
+    winning_streak_max_level: int = Field(default=2, ge=0, le=20)
 
 
 class ConfigPayload(BaseModel):
@@ -147,7 +152,21 @@ class OkResponse(BaseModel):
 
 
 def _safe_parser_type(value: str) -> ParserType:
-    return value if value in ("template", "regex") else "template"
+    """Coerce the DB-stored ``parser_type`` to the response Literal.
+
+    The DB column is plain text so a row written by an older revision
+    (or directly via SQL) could in theory carry an unknown value;
+    falling back to ``"template"`` keeps the API contract honoured.
+    Critically, **prep_trigger** and **batch** are valid types — an
+    earlier version of this function whitelisted only template/regex
+    and silently downgraded the other two, which made the dashboard
+    editor show the wrong pill as active and render an empty template
+    field for prep_trigger / batch rows. The dispatch path was
+    unaffected (it reads ``cfg.parser_type`` from the SQLModel row,
+    not the API response) but operators reading or re-saving via the
+    dashboard saw a corrupted view.
+    """
+    return value if value in ("template", "regex", "prep_trigger", "batch") else "template"  # type: ignore[return-value]
 
 
 def _safe_trade_mode(value: str) -> TradeMode:
@@ -175,6 +194,8 @@ def _to_response(row: ParserConfig) -> ConfigResponse:
             max_streak=row.martingale_max_streak,
             reset_on_win=row.martingale_reset_on_win,
             auto_recovery=row.martingale_auto_recovery,
+            winning_streak_enabled=row.winning_streak_enabled,
+            winning_streak_max_level=row.winning_streak_max_level,
         ),
         enabled=row.enabled,
         created_at=row.created_at,
@@ -202,6 +223,8 @@ def _payload_to_dict(p: ConfigPayload) -> dict[str, Any]:
         "martingale_max_streak": p.martingale.max_streak,
         "martingale_reset_on_win": p.martingale.reset_on_win,
         "martingale_auto_recovery": p.martingale.auto_recovery,
+        "winning_streak_enabled": p.martingale.winning_streak_enabled,
+        "winning_streak_max_level": p.martingale.winning_streak_max_level,
         "enabled": p.enabled,
     }
 
@@ -296,6 +319,7 @@ async def get_config_endpoint(
 async def create_config_endpoint(
     body: CreateConfigRequest,
     session: SessionDep,
+    pipeline: PipelineDep,
 ) -> ConfigResponse:
     _validate_compiles(body)
     payload = _payload_to_dict(body)
@@ -308,6 +332,10 @@ async def create_config_endpoint(
         chat_id=body.chat_id,
         payload=payload,
     )
+    # Eagerly materialise the parser so the cache reflects the save
+    # immediately — no waiting for first message arrival.
+    if row.enabled:
+        pipeline.prebuild(row)
     return _to_response(row)
 
 
@@ -335,6 +363,13 @@ async def update_config_endpoint(
     # catch most edits but explicit invalidation is cheap insurance
     # and clears the cached row even when the signature didn't drift.
     pipeline.invalidate(config_id)
+    # invalidate() and prebuild() are both synchronous dict-mutation
+    # ops with no `await` between them, so a concurrent dispatch on
+    # the same event loop cannot interleave between them. If either
+    # gains an await in the future, wrap the pair in the per-chat
+    # lock to keep the cache consistent.
+    if row.enabled:
+        pipeline.prebuild(row)
     return _to_response(row)
 
 

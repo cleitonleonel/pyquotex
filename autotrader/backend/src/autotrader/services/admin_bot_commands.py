@@ -112,6 +112,7 @@ _HELP_TEXT = (
     "  /pipeline on|off\n"
     "  /panic — kill switch + pipeline off in one shot\n"
     "  /mode demo|real — switch broker account mode\n"
+    "  /reconnect — trigger a fresh broker connect (use after OTP timeout)\n"
     "  /stake <amount> — set default stake\n"
     "  /caps loss|stake|concurrent <value>\n"
     "  /notify placed|settled|risk_rejected|system_error on|off\n"
@@ -658,6 +659,57 @@ async def _confirm_unbind() -> str:
 
 
 # --------------------------------------------------------------------------
+# /reconnect — trigger a fresh broker connect attempt
+# --------------------------------------------------------------------------
+
+
+async def handle_reconnect(_message: Any, _bot: Any) -> Reply:
+    """Kick the broker manager into a fresh connect cycle.
+
+    Used by the OTP-relay recovery path: after an OTP timeout or an
+    attempts-exhausted terminal state, the relay's message tells the
+    operator to '/reconnect'. The new cycle starts with attempt=1 and
+    sends a fresh OTP message (no edit of the dead one).
+
+    Calls :meth:`QuotexManager.reset_for_manual_reconnect` first so the
+    OTP-failure gate (Fix C, 2026-05-12) is cleared, the relay's
+    exhaustion latch (Fix A) is cleared, and pyquotex's internal
+    supervisor is re-enabled. Without this reset, a manager that hit
+    the OTP cap during the prior disconnect would refuse to relay the
+    fresh prompt."""
+    from autotrader.services.admin_bot_state import get_quotex  # noqa: PLC0415
+    qx = get_quotex()
+    if qx is None:
+        return Reply(text="Broker manager not attached.")
+    if qx.connected:
+        return Reply(text="Broker is already connected — no action taken.")
+    if not qx.configured:
+        return Reply(
+            text="No broker credentials stored. Set them via the dashboard first.",
+        )
+    # Reset counters + supervisor before kicking the connect. Best-effort:
+    # if the manager doesn't expose the method (older test stubs), proceed
+    # without it.
+    reset = getattr(qx, "reset_for_manual_reconnect", None)
+    if callable(reset):
+        try:
+            reset()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("admin_bot.reconnect.reset_failed", error=str(exc))
+    try:
+        qx.begin_connect()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("admin_bot.reconnect_failed")
+        return Reply(text=f"Reconnect failed to start: {type(exc).__name__}: {exc}")
+    return Reply(
+        text=(
+            "Reconnect triggered — counters reset, watch for a fresh OTP "
+            "message in a few seconds."
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
 # Command registry
 # --------------------------------------------------------------------------
 
@@ -683,6 +735,7 @@ COMMANDS: dict[str, Handler] = {
     "/channel": handle_channel_detail,
     "/parsers": handle_parsers,
     "/parser": handle_parser_detail,
+    "/reconnect": handle_reconnect,
 }
 
 
@@ -712,6 +765,28 @@ def build_message_hook(bot: Any) -> Callable[[Any, Any], Awaitable[None]]:
     """
 
     async def _hook(_client: Any, message: Any) -> None:
+        # OTP-submission forwarding. Must run BEFORE the slash-command
+        # check so a digit-only reply (which doesn't start with '/')
+        # still reaches the relay. We use ``claims_submission`` rather
+        # than ``owns_reply`` because most operators on mobile just
+        # type the code as a fresh message instead of using Telegram's
+        # Reply gesture — production observed at 2026-05-13T05:08:35Z
+        # where an OTP reply "463031" was silently dropped because it
+        # wasn't a reply-to-message.
+        from autotrader.services.admin_bot_state import get_otp_relay  # noqa: PLC0415
+        relay = get_otp_relay()
+        if relay is not None and relay.claims_submission(message):
+            # Same auth model as commands: only the bound admin.
+            sender_id = int(getattr(message.from_user, "id", 0))
+            bound = bot.status().bound_user_id
+            if bound is None or sender_id != bound:
+                log.info(
+                    "admin_bot.otp_reply.unauthorised", sender=sender_id,
+                )
+                return
+            await relay.handle_reply(message)
+            return
+
         text = (getattr(message, "text", "") or "").strip()
         if not text.startswith("/"):
             return

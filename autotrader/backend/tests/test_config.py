@@ -70,3 +70,33 @@ def test_telegram_settings_bot_token_optional(monkeypatch: pytest.MonkeyPatch) -
 
     s = TelegramSettings()  # type: ignore[call-arg]
     assert s.bot_token is None
+
+
+def test_otp_max_attempts_defaults_to_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default cap on OTP retry attempts per cycle. The relay edits
+    the same Telegram message up to this count, then bails with the
+    terminal '/reconnect to retry' state.
+    """
+    monkeypatch.delenv("AUTOTRADER_OTP_MAX_ATTEMPTS", raising=False)
+    from autotrader.config import Settings  # noqa: PLC0415
+
+    s = Settings()  # type: ignore[call-arg]
+    assert s.otp_max_attempts == 3
+
+
+def test_otp_max_attempts_env_var_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTOTRADER_OTP_MAX_ATTEMPTS", "5")
+    from autotrader.config import Settings  # noqa: PLC0415
+
+    s = Settings()  # type: ignore[call-arg]
+    assert s.otp_max_attempts == 5
+
+
+def test_otp_max_attempts_rejects_out_of_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Field-level validator rejects nonsense values at parse time."""
+    monkeypatch.setenv("AUTOTRADER_OTP_MAX_ATTEMPTS", "0")
+    from pydantic import ValidationError  # noqa: PLC0415
+    from autotrader.config import Settings  # noqa: PLC0415
+
+    with pytest.raises(ValidationError):
+        Settings()  # type: ignore[call-arg]
