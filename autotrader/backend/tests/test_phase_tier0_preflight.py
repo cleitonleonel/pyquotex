@@ -36,8 +36,8 @@ async def test_preflight_403_blocks_and_logs(
     """Spec §3.1 first bullet: a 403 from the sign-in page raises
     ``BrokerPreflightFailed``."""
     from autotrader.services.quotex_manager import (  # noqa: PLC0415
-        QuotexManager,
         BrokerPreflightFailed,
+        QuotexManager,
     )
 
     mgr = QuotexManager()
@@ -62,8 +62,8 @@ async def test_preflight_5xx_blocks_and_logs(
 ) -> None:
     """Spec §3.1 second bullet: 5xx raises ``BrokerPreflightFailed``."""
     from autotrader.services.quotex_manager import (  # noqa: PLC0415
-        QuotexManager,
         BrokerPreflightFailed,
+        QuotexManager,
     )
 
     mgr = QuotexManager()
@@ -74,9 +74,8 @@ async def test_preflight_5xx_blocks_and_logs(
         MagicMock(return_value=_FakeResp(status=503)),
     )
 
-    with capture_logs() as logs:
-        with pytest.raises(BrokerPreflightFailed, match="503"):
-            await mgr._preflight_check()
+    with capture_logs() as logs, pytest.raises(BrokerPreflightFailed, match="503"):
+        await mgr._preflight_check()
 
     assert any(
         r["event"] == "broker.preflight.upstream_5xx" for r in logs
@@ -91,6 +90,7 @@ async def test_preflight_network_timeout_falls_through(
     pyquotex still gets to try. The log line
     ``broker.preflight.network_error`` is the breadcrumb."""
     import curl_cffi.requests as curl_requests  # noqa: PLC0415
+
     from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
 
     mgr = QuotexManager()
@@ -140,6 +140,7 @@ async def test_do_connect_aborts_on_preflight_403(
     manager in ``error`` state with operator-readable last_error,
     and pyquotex.Quotex() is never even constructed."""
     from unittest.mock import MagicMock  # noqa: PLC0415
+
     from autotrader.services.quotex_manager import QuotexManager  # noqa: PLC0415
 
     mgr = QuotexManager()

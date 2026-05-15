@@ -59,7 +59,7 @@ def _curl_get(url: str, *, impersonate: str, timeout: float) -> Any:
     one-shot ``Session`` per call — fine for a single pre-flight
     probe, but a caller must not put this in a hot loop.
     """
-    return _curl_requests.get(url, impersonate=impersonate, timeout=timeout)
+    return _curl_requests.get(url, impersonate=impersonate, timeout=timeout)  # type: ignore[arg-type]  # curl_cffi wants a Literal; profile validated in config
 
 AccountMode = Literal["PRACTICE", "REAL"]
 ConnectState = Literal[
@@ -122,7 +122,7 @@ class BrokerNotLive(RuntimeError):  # noqa: N818 — intentional name (spec §3.
         self.detail: dict[str, object] = dict(detail)
 
 
-class BrokerPreflightFailed(RuntimeError):
+class BrokerPreflightFailed(RuntimeError):  # noqa: N818 — intentional name (spec §3.1 interface)
     """Raised by :meth:`QuotexManager._preflight_check` when the
     broker sign-in page returns a hard error (Cloudflare 403,
     upstream 5xx) before pyquotex even tries to connect. Caught
