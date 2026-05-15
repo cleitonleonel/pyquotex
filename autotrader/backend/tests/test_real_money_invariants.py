@@ -331,6 +331,10 @@ async def test_disconnect_mid_ladder_does_not_advance_state() -> None:
             threshold=10.0,
         )
     )
+    # assets must include the resolved symbol so _place's _resolve_asset
+    # passes it through to assert_live (the health gate under test). If
+    # the broker symbol naming changes, update this or test 3 fails with
+    # a misleading "asset unrecognized" instead of exercising the gate.
     mgr.assets = ("EURUSD_otc",)
     mgr._client = MagicMock()
 
