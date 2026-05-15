@@ -80,7 +80,7 @@ If you see `broker.connect.rejection_probe` in logs:
 docker logs autotrader-api 2>&1 | grep broker.connect.rejection_probe | tail -1 | jq .
 ```
 
-Key fields emitted (verified: `quotex_manager.py:594` and `:702`):
+Key fields emitted (from the `broker.connect.rejection_probe` event in `quotex_manager.py`):
 
 | Field | Meaning |
 |---|---|
@@ -168,7 +168,7 @@ Send via the admin bot:
 /killswitch on
 ```
 
-Registered command: `admin_bot_commands.py:324` (`COMMANDS["/killswitch"]` →
+Registered command: `handle_killswitch` in `admin_bot_commands.py` (`COMMANDS["/killswitch"]` →
 `handle_killswitch`). This sets `GlobalSettings.kill_switch_engaged = True`.
 
 Verify it worked:
@@ -176,8 +176,8 @@ Verify it worked:
 /status
 ```
 
-Expected reply includes `Kill switch: *ENGAGED*`. Under the hood the risk gate
-(verified: `risk_gate.py:147`) blocks every signal with
+Expected reply includes `Kill switch: *ENGAGED*`. Under the hood the risk gate in
+`risk_gate.py` blocks every signal with
 `reason="kill switch engaged"`, so you will see these in the Decisions feed.
 
 ### C.2 Full emergency stop — kill switch + pipeline off
@@ -187,7 +187,7 @@ Send via the admin bot:
 /panic
 ```
 
-Registered command: `admin_bot_commands.py:335` (`COMMANDS["/panic"]` →
+Registered command: `handle_panic` in `admin_bot_commands.py` (`COMMANDS["/panic"]` →
 `handle_panic`). This atomically sets `kill_switch_engaged = True` AND
 `pipeline_active = False` in a single DB transaction.
 
@@ -258,7 +258,7 @@ Steps:
 > If backups are not present: confirm the prod overlay was used
 > (`docker-compose.prod.yml`) and `AUTOTRADER_BACKUP_INTERVAL_SECONDS` is
 > non-zero. A stock install with only the base compose file has backups off
-> by default (`backup_interval_seconds: int = 0` in `config.py:62`).
+> by default (field `backup_interval_seconds` in `config.py`).
 
 ---
 
@@ -271,7 +271,7 @@ DMs you `SYSTEM broker broker.reconnect_ceiling_reached`):
 docker logs autotrader-api 2>&1 | grep broker.reconnect_ceiling_reached | tail -1 | jq .
 ```
 
-Fields emitted (`quotex_manager.py:934`): `failed_attempts`, `ceiling`.
+Fields emitted by `broker.reconnect_ceiling_reached` in `quotex_manager.py`: `failed_attempts`, `ceiling`.
 
 What this means: the pyquotex reconnect supervisor has been **stopped** and the
 manager state machine is now `awaiting_manual_recovery`. The bot is not trading.
@@ -290,7 +290,7 @@ Steps:
    ```
    /reconnect
    ```
-   Registered command: `admin_bot_commands.py:717` (`COMMANDS["/reconnect"]` →
+   Registered command: `handle_reconnect` in `admin_bot_commands.py` (`COMMANDS["/reconnect"]` →
    `handle_reconnect`). This calls `QuotexManager.reset_for_manual_reconnect()`
    to clear the OTP-failure gate and reconnect counter, then calls
    `qx.begin_connect()`.
@@ -322,7 +322,7 @@ Trigger: `executor.healthgate_blocked reason=stale_feed` in logs
 docker logs autotrader-api 2>&1 | grep executor.healthgate_blocked | tail -5 | jq .
 ```
 
-Possible `reason` values (verified: `quotex_manager.py:1453–1483`):
+Possible `reason` values (emitted by health-gate checks in `quotex_manager.py`):
 
 | reason | Meaning |
 |---|---|
@@ -379,7 +379,7 @@ All three live in `config.py` under the `AUTOTRADER_` prefix (pydantic
 
 ### G.2 Admin-bot command quick reference
 
-All commands registered in `COMMANDS` dict at `admin_bot_commands.py:717–739`:
+All commands registered in the `COMMANDS` dict in `admin_bot_commands.py`:
 
 | Command | Action |
 |---|---|
@@ -401,20 +401,20 @@ All commands registered in `COMMANDS` dict at `admin_bot_commands.py:717–739`:
 
 | Event | Level | Source | What it means |
 |---|---|---|---|
-| `broker.preflight.ok` | INFO | `quotex_manager.py:450` | HTTP probe to broker sign-in returned 2xx — safe to proceed with connect |
-| `broker.preflight.network_error` | WARNING | `:418` | Network-level failure during preflight — connect proceeds anyway |
-| `broker.preflight.cloudflare_403` | ERROR | `:432` | 403 from Cloudflare — rotate curl_cffi profile (§B.1) |
-| `broker.preflight.upstream_5xx` | ERROR | `:442` | 5xx from broker — wait for maintenance window |
-| `broker.connect.ok` | INFO | `:647` | Broker connected successfully |
-| `broker.connect.rejection_probe` | WARNING | `:594` / `:702` | Connect failed — forensic probe fields attached |
-| `broker.reconnect_ceiling_reached` | ERROR | `:934` | Hard ceiling hit — supervisor stopped, manual `/reconnect` required |
-| `executor.healthgate_blocked` | WARNING | `executor.py:617` | Trade blocked by WS health gate; `reason` field is one of `not_connected` / `ws_not_authed` / `no_tick_seen` / `stale_feed` |
-| `executor.draining` | INFO | `executor.py:308` | Executor entered drain mode (shutdown in progress) |
-| `lifespan.drain.complete` | INFO | `executor.py:329/335` | All in-flight trades drained before shutdown |
-| `lifespan.drain.timeout` | WARNING | `executor.py:333` | Drain timed out; `remaining` shows how many trades were abandoned |
-| `pipeline.draining` | INFO | `pipeline.py:257` | Pipeline drain started |
-| `pipeline.refused` | INFO | `pipeline.py:272` | Signal rejected because pipeline is draining |
-| `executor.auto_recovery.skipped` | INFO | `executor.py:1068/1096/1104/1112` | Martingale auto-recovery skipped; `reason` field explains why |
+| `broker.preflight.ok` | INFO | `quotex_manager.py` | HTTP probe to broker sign-in returned 2xx — safe to proceed with connect |
+| `broker.preflight.network_error` | WARNING | `quotex_manager.py` | Network-level failure during preflight — connect proceeds anyway |
+| `broker.preflight.cloudflare_403` | ERROR | `quotex_manager.py` | 403 from Cloudflare — rotate curl_cffi profile (§B.1) |
+| `broker.preflight.upstream_5xx` | ERROR | `quotex_manager.py` | 5xx from broker — wait for maintenance window |
+| `broker.connect.ok` | INFO | `quotex_manager.py` | Broker connected successfully |
+| `broker.connect.rejection_probe` | WARNING | `quotex_manager.py` | Connect failed — forensic probe fields attached |
+| `broker.reconnect_ceiling_reached` | ERROR | `quotex_manager.py` | Hard ceiling hit — supervisor stopped, manual `/reconnect` required |
+| `executor.healthgate_blocked` | WARNING | `executor.py` | Trade blocked by WS health gate; `reason` field is one of `not_connected` / `ws_not_authed` / `no_tick_seen` / `stale_feed` |
+| `executor.draining` | INFO | `executor.py` | Executor entered drain mode (shutdown in progress) |
+| `lifespan.drain.complete` | INFO | `executor.py` | All in-flight trades drained before shutdown |
+| `lifespan.drain.timeout` | WARNING | `executor.py` | Drain timed out; `remaining` shows how many trades were abandoned |
+| `pipeline.draining` | INFO | `pipeline.py` | Pipeline drain started |
+| `pipeline.refused` | INFO | `pipeline.py` | Signal rejected because pipeline is draining |
+| `executor.auto_recovery.skipped` | INFO | `executor.py` | Martingale auto-recovery skipped; `reason` field explains why |
 
 ---
 
