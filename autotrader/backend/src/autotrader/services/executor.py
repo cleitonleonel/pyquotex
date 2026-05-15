@@ -284,6 +284,31 @@ class TradeExecutor:
         # Attempt is in DB; place the trade.
         return await self._place(attempt, signal, decision)
 
+    async def wait_for_pendings(self, *, timeout: float) -> int:  # noqa: ASYNC109
+        """Spec §3.5 / Task 6. Poll list_pending() every 2s. Return 0
+        once drained, or the remaining count on timeout. Called by the
+        lifespan BEFORE shutdown() so in-flight trades settle naturally
+        instead of becoming reconcile_pending work (which intentionally
+        does NOT advance the martingale ladder, leaving it stale).
+
+        Honors ``timeout`` promptly: the sleep is capped to the
+        remaining budget so the loop never overshoots by a full poll
+        interval."""
+        deadline = asyncio.get_running_loop().time() + float(timeout)
+        poll_interval = 2.0
+        while True:
+            async with AsyncSessionLocal() as session:
+                remaining = await list_pending(session)
+            if not remaining:
+                log.info("lifespan.drain.complete")
+                return 0
+            now = asyncio.get_running_loop().time()
+            if now >= deadline:
+                log.warning("lifespan.drain.timeout", remaining=len(remaining))
+                return len(remaining)
+            sleep_for = min(poll_interval, max(0.0, deadline - now))
+            await asyncio.sleep(sleep_for)
+
     async def shutdown(self) -> None:
         """Cancel and await in-flight watchers so the lifespan exits cleanly.
 

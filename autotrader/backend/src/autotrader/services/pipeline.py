@@ -113,6 +113,10 @@ class Pipeline:
         # same channel doesn't race the stateful parsers (Aggregator,
         # PrepTriggerParser).
         self._chat_locks: dict[int, asyncio.Lock] = {}
+        # One-way shutdown latch (spec §3.5, Task 6). Set by
+        # start_draining(); dispatch() refuses all new signals once
+        # True. Never reset — there is no resume path.
+        self._draining: bool = False
         # Phase 0 instrumentation (audit 2026-05-13, H1): track recent
         # message fingerprints per chat so a Pyrogram replay (or any
         # other source of duplicate delivery) surfaces in the log
@@ -245,6 +249,13 @@ class Pipeline:
             return False
         return True
 
+    def start_draining(self) -> None:
+        """One-way latch (spec §3.5, Task 6). After this, dispatch()
+        refuses all new signals. Called once by the FastAPI lifespan
+        shutdown; never reset."""
+        self._draining = True
+        log.info("pipeline.draining")
+
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
@@ -256,6 +267,13 @@ class Pipeline:
         Async-safe and idempotent: callable from the Pyrogram update
         handler with no extra synchronisation.
         """
+        if self._draining:
+            log.info(
+                "pipeline.refused",
+                reason="draining",
+                chat_id=getattr(message, "chat_id", None),
+            )
+            return
         async with self._chat_locks.setdefault(message.chat_id, asyncio.Lock()):
             await self._dispatch_locked(message)
 
