@@ -152,6 +152,8 @@ class FakeQuotex:
         ``api.connect``; tests only care about the terminal state, so
         we shortcut to it here on every success path.
         """
+        import time as _time  # noqa: PLC0415
+        from collections import deque  # noqa: PLC0415
         self.api.state.status = WebsocketStatus.CONNECTED
         self.api.state.auth_status = AuthStatus.AUTHENTICATED
         # Mirror pyquotex's behaviour — a successful connect leaves a
@@ -162,6 +164,16 @@ class FakeQuotex:
                 "cookies": "fake-cookies",
                 "user_agent": "Firefox/144 (test)",
             }
+        # Populate realtime_price with fresh ticks for every asset in
+        # the fake's asset universe so assert_live passes in integration
+        # tests. Shape mirrors pyquotex api.py:700:
+        #   price_list.append({"time": ts, "price": price})
+        # where ts is Unix epoch seconds (float).
+        now = _time.time()
+        self.api.realtime_price = {
+            asset: deque([{"time": now - 1.0, "price": 1.0}])
+            for asset in FakeQuotex.assets_mapping
+        }
 
     async def connect(self) -> tuple[bool, str]:
         if FakeQuotex.behavior == "ok":

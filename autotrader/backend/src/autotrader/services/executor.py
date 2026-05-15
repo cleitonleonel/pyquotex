@@ -531,6 +531,28 @@ class TradeExecutor:
             )
             signal = dataclasses.replace(signal, asset=resolved)
 
+        # ── Pre-trade WS health gate (Task 5 / spec §3.5) ────────────
+        # Verify the broker WS is genuinely live and the asset's price
+        # feed is fresh BEFORE issuing the order. On BrokerNotLive we
+        # mark broker_error and return immediately — the martingale
+        # ladder is NOT advanced because the trade never reached the
+        # broker and treating a stale-feed block as a loss would corrupt
+        # the recovery sequence.
+        from autotrader.services.quotex_manager import BrokerNotLive  # noqa: PLC0415
+        try:
+            await self._manager.assert_live(signal.asset)
+        except BrokerNotLive as exc:
+            log.warning(
+                "executor.healthgate_blocked",
+                attempt_id=attempt.id,
+                reason=exc.reason,
+                **exc.detail,
+            )
+            return await self._mark_error(
+                attempt,
+                f"healthgate:{exc.reason}",
+            )
+
         is_scheduled = decision.trade_mode == "scheduled"
         client = self._manager._client
         try:

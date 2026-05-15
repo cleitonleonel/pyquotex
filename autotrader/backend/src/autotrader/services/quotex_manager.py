@@ -102,6 +102,26 @@ class QuotexManagerError(Exception):
     """Raised for caller-visible failures (auth rejected, REAL gate, etc.)."""
 
 
+class BrokerNotLive(RuntimeError):  # noqa: N818 — intentional name (spec §3.5 interface)
+    """Raised by :meth:`QuotexManager.assert_live` when the broker WS
+    is not in a state fit to accept an order.
+
+    Attributes
+    ----------
+    reason : str
+        One of ``"not_connected"``, ``"ws_not_authed"``,
+        ``"no_tick_seen"``, ``"stale_feed"``.
+    detail : dict
+        Extra context (e.g. ``age_seconds``, ``threshold``, ``asset``,
+        ``state``).  Always a ``dict`` — never ``None``.
+    """
+
+    def __init__(self, reason: str, **detail: object) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail: dict[str, object] = dict(detail)
+
+
 class BrokerPreflightFailed(RuntimeError):
     """Raised by :meth:`QuotexManager._preflight_check` when the
     broker sign-in page returns a hard error (Cloudflare 403,
@@ -1370,3 +1390,94 @@ class QuotexManager:
         codes = sorted({str(k).strip() for k in (mapping or {}).keys() if k})
         self._assets = tuple(codes)
         log.info("broker.assets.refreshed", count=len(codes))
+
+    # ------------------------------------------------------------------
+    # Pre-trade health gate (Task 5 / spec §3.5)
+    # ------------------------------------------------------------------
+
+    def _last_tick_age_seconds(self, asset: str) -> float | None:
+        """Return how many seconds old the latest realtime tick is,
+        or ``None`` if no tick has ever been seen for ``asset``.
+
+        Reads ``client.api.realtime_price[asset]`` — a
+        ``deque[{"time": float, "price": float}]`` populated by
+        pyquotex's ``_on_message`` at ``api.py:700``.  The ``"time"``
+        value is a Unix epoch timestamp in **seconds** (confirmed by
+        ``timesync.py``: ``datetime.fromtimestamp(ts)`` used directly).
+
+        All accesses are null-safe: any missing attribute returns
+        ``None`` rather than raising, so ``assert_live`` can only ever
+        raise ``BrokerNotLive`` — never an unexpected AttributeError.
+        """
+        client = self._client
+        if client is None:
+            return None
+        api = getattr(client, "api", None)
+        if api is None:
+            return None
+        realtime_price = getattr(api, "realtime_price", None)
+        if realtime_price is None:
+            return None
+        price_deque = realtime_price.get(asset)
+        if not price_deque:
+            return None
+        # deque is ordered oldest→newest; [-1] is the most recent.
+        latest = price_deque[-1]
+        ts = latest.get("time") if isinstance(latest, dict) else None
+        if ts is None:
+            return None
+        return time.time() - float(ts)
+
+    async def assert_live(self, asset: str) -> None:
+        """Assert the broker WS is genuinely live and the asset's price
+        feed is fresh enough to accept an order.
+
+        Raises :class:`BrokerNotLive` with one of:
+
+        * ``reason="not_connected"`` — manager state machine is not
+          ``"connected"`` (could be reconnecting, idle, error, etc.).
+        * ``reason="ws_not_authed"`` — state is ``"connected"`` but
+          pyquotex's ``api.state.auth_status`` is NOT
+          ``AuthStatus.AUTHENTICATED``. Uses the real state-object
+          path (NOT the ``is_authenticated`` method — that is a bound
+          method object, always truthy).
+        * ``reason="no_tick_seen"`` — no realtime-price tick has
+          arrived for ``asset`` yet.
+        * ``reason="stale_feed"`` — the latest tick is older than
+          ``settings.broker_stale_feed_max_age_seconds``.
+
+        Returns ``None`` (no raise) when all checks pass.
+        """
+        # ── Check 1: manager state machine ───────────────────────────
+        if self._state != "connected":
+            raise BrokerNotLive("not_connected", state=self._state)
+
+        # ── Check 2: pyquotex WS auth ─────────────────────────────────
+        # Read client.api.state.auth_status — the real pyquotex path.
+        # is_authenticated on QuotexAPI is a *bound method*, not a bool;
+        # using it would always be truthy. Task 3's rejection-probe code
+        # (quotex_manager.py:~566) uses the same state.auth_status path.
+        _authed = False
+        try:
+            _api = getattr(self._client, "api", None)
+            _state = getattr(_api, "state", None)
+            _auth = getattr(_state, "auth_status", None)
+            _authed = (_auth == AuthStatus.AUTHENTICATED)
+        except Exception as _exc:  # noqa: BLE001 — null-safe; never let this leak
+            log.debug("broker.assert_live.auth_probe_failed", error=str(_exc))
+        if not _authed:
+            raise BrokerNotLive("ws_not_authed")
+
+        # ── Check 3 + 4: tick freshness ───────────────────────────────
+        age = self._last_tick_age_seconds(asset)
+        if age is None:
+            raise BrokerNotLive("no_tick_seen", asset=asset)
+
+        threshold = float(settings.broker_stale_feed_max_age_seconds)
+        if age > threshold:
+            raise BrokerNotLive(
+                "stale_feed",
+                asset=asset,
+                age_seconds=age,
+                threshold=threshold,
+            )
