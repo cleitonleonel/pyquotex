@@ -219,6 +219,14 @@ class TradeExecutor:
         # block on them. _watchers stays the superset that shutdown()
         # cancels.
         self._result_watchers: set[asyncio.Task[None]] = set()
+        # One-way drain latch (Task 6 / spec §3.5). Set by the
+        # FastAPI lifespan shutdown alongside pipeline draining.
+        # Distinct from Pipeline._draining: the pipeline latch blocks
+        # the dispatch->submit path, but executor-internal re-entry
+        # (auto-recovery firing from _watch_result) bypasses the
+        # pipeline entirely. This latch closes that path so no new
+        # result-watcher is spawned after wait_for_pendings snapshots.
+        self._draining: bool = False
         # Live dashboard fan-out. Optional so unit tests that don't
         # care about the feed can leave it ``None``.
         self._event_bus = event_bus
@@ -291,6 +299,14 @@ class TradeExecutor:
         # Attempt is in DB; place the trade.
         return await self._place(attempt, signal, decision)
 
+    def start_draining(self) -> None:
+        """One-way latch (spec §3.5). After this, executor-internal
+        trade origination (e.g. martingale auto-recovery) is refused
+        so wait_for_pendings' snapshot can't be invalidated by a
+        watcher spawning a new watcher. Never reset."""
+        self._draining = True
+        log.info("executor.draining")
+
     async def wait_for_pendings(self, *, timeout: float) -> int:  # noqa: ASYNC109
         """Spec §3.5 / Task 6. Wait (up to ``timeout`` s) for in-flight
         RESULT-watchers to finish so a planned-deploy mid-trade lets the
@@ -299,9 +315,14 @@ class TradeExecutor:
         leaving it stale). Deliberately ignores _spawn_deferred_reconcile
         give-up timers — they have no incoming outcome to wait for.
 
-        Safe to snapshot: the lifespan calls pipeline.start_draining()
-        BEFORE this, so no new dispatch -> no new result-watcher is
-        spawned during the drain.
+        Safe to snapshot: BOTH pipeline.start_draining() AND
+        executor.start_draining() are called before this snapshot is
+        taken. The pipeline latch gates the dispatch->submit path;
+        the executor latch gates executor-internal trade origination
+        (martingale auto-recovery firing from _watch_result), which
+        bypasses the pipeline entirely. Together they ensure no new
+        result-watcher can be spawned after the snapshot is taken, so
+        asyncio.wait({snapshot}) is complete and correct.
         """
         watchers = [t for t in self._result_watchers if not t.done()]
         if not watchers:
@@ -1042,6 +1063,16 @@ class TradeExecutor:
         from the freshly-incremented martingale state — a single
         source of truth for "what's the stake right now".
         """
+        if self._draining:
+            log.info(
+                "executor.auto_recovery.skipped",
+                reason="draining",
+                config_id=cfg.id,
+                original_attempt_id=original.id,
+                streak=streak,
+            )
+            return
+
         from autotrader.services.parsers import ParsedSignal  # noqa: PLC0415
 
         log.info(

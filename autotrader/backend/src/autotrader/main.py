@@ -363,6 +363,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR09
                 await notifier_task
         await admin_bot.stop()
         pipeline.start_draining()
+        executor.start_draining()
         await executor.wait_for_pendings(timeout=300.0)
         await executor.shutdown()
         await manager.disconnect()

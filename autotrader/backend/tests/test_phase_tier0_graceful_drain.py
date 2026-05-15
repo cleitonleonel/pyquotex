@@ -9,7 +9,9 @@ Tests adapted from plan pseudocode accordingly; intent is identical.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from structlog.testing import capture_logs
@@ -126,3 +128,149 @@ async def test_wait_for_pendings_times_out_with_remaining_log() -> None:
         never_finishing.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await never_finishing
+
+
+# ---------------------------------------------------------------------------
+# Critical fix: executor-side drain latch (audit 2026-05-15)
+# ---------------------------------------------------------------------------
+
+
+def test_executor_draining_latch_is_one_way() -> None:
+    """``TradeExecutor.start_draining()`` sets ``_draining = True`` with no
+    reset path, mirroring the Pipeline latch (spec §3.5 / Task 6 CRITICAL).
+    """
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    instance = TradeExecutor.__new__(TradeExecutor)
+    instance._draining = False
+    assert instance._draining is False
+    instance.start_draining()
+    assert instance._draining is True
+    # There must be no method that can flip it back.
+    public_methods = [
+        m for m in dir(instance)
+        if not m.startswith("_") and callable(getattr(instance, m))
+    ]
+    reset_methods = [
+        m for m in public_methods
+        if "reset" in m.lower() or "resume" in m.lower() or "undrain" in m.lower()
+    ]
+    assert reset_methods == [], (
+        f"start_draining() must be one-way; found potential reset methods: {reset_methods}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_recovery_skipped_when_draining() -> None:
+    """When ``_draining=True``, ``_fire_auto_recovery`` must return immediately
+    without calling ``submit``, ``_place``, or ``_spawn_watcher``, and must log
+    ``executor.auto_recovery.skipped`` with reason='draining'.
+
+    This is the regression guard for the Task 6 CRITICAL bug: a loss settling
+    mid-drain would previously spawn a new result-watcher AFTER
+    wait_for_pendings had snapshotted _result_watchers, invalidating the
+    drain guarantee.
+    """
+    import types  # noqa: PLC0415
+
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    instance = TradeExecutor.__new__(TradeExecutor)
+    instance._draining = True
+    instance._watchers = set()
+    instance._result_watchers = set()
+
+    # SimpleNamespace stand-ins — the draining guard only reads .id on
+    # both objects (for the log statement) and returns before touching
+    # anything else. No SQLModel/SA initialisation needed.
+    original = types.SimpleNamespace(
+        id=42,
+        asset="EURUSD_otc",
+        direction="call",
+        duration_seconds=60,
+        asset_raw="EURUSD OTC",
+    )
+    cfg = types.SimpleNamespace(id=7)
+
+    with patch.object(instance, "submit", new=AsyncMock()) as mock_submit, capture_logs() as logs:
+        await instance._fire_auto_recovery(
+            original=original,  # type: ignore[arg-type]
+            cfg=cfg,            # type: ignore[arg-type]
+            streak=1,
+        )
+
+    # Guard: submit must NOT have been called.
+    mock_submit.assert_not_called()
+    # No new watchers spawned.
+    assert len(instance._result_watchers) == 0
+    assert len(instance._watchers) == 0
+    # The skip log entry must be present with reason='draining'.
+    skipped = [
+        r for r in logs
+        if r["event"] == "executor.auto_recovery.skipped"
+        and r.get("reason") == "draining"
+    ]
+    assert skipped, (
+        "expected executor.auto_recovery.skipped reason=draining in logs; "
+        f"got: {logs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_spawn_watcher_tracks_in_both_sets() -> None:
+    """``_spawn_watcher`` must add the spawned task to BOTH ``_watchers`` and
+    ``_result_watchers`` immediately, and the done-callbacks must remove it
+    from BOTH sets once it completes.
+
+    This subset invariant is load-bearing for drain correctness:
+    ``wait_for_pendings`` snapshots ``_result_watchers`` to know what to
+    wait on; ``shutdown()`` cancels ``_watchers`` to clean up everything.
+    A task missing from either set would corrupt the drain.
+    """
+    from autotrader.services.executor import TradeExecutor  # noqa: PLC0415
+
+    instance = TradeExecutor.__new__(TradeExecutor)
+    instance._watchers = set()
+    instance._result_watchers = set()
+
+    # Patch _watch_result to a fast no-op so the watcher completes
+    # immediately and the done-callback removal fires within the test.
+    async def _instant_watch(
+        attempt_id: int,
+        order_id: str,
+        duration: int,
+        timeout: float | None = None,  # noqa: ASYNC109
+    ) -> None:
+        return
+
+    with patch.object(instance, "_watch_result", side_effect=_instant_watch):
+        instance._spawn_watcher(
+            attempt_id=99,
+            order_id="test-order-1",
+            duration=60,
+            timeout=None,
+        )
+
+        # Immediately after spawn: task is in BOTH sets.
+        assert len(instance._watchers) == 1, (
+            "_watchers must contain the spawned task"
+        )
+        assert len(instance._result_watchers) == 1, (
+            "_result_watchers must contain the spawned task"
+        )
+        task = next(iter(instance._watchers))
+        assert task in instance._result_watchers, (
+            "the task in _watchers must also be in _result_watchers"
+        )
+
+        # Let the task run to completion and the done-callbacks fire.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # After completion: done-callbacks remove from BOTH sets.
+    assert len(instance._watchers) == 0, (
+        "_watchers must be empty after task completes"
+    )
+    assert len(instance._result_watchers) == 0, (
+        "_result_watchers must be empty after task completes"
+    )
