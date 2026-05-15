@@ -400,9 +400,10 @@ class QuotexManager:
             )
             return
         # No separate TimeoutError branch: curl_cffi maps every curl
-        # timeout to requests.errors.Timeout (a RequestsError subclass),
-        # caught above. We don't wrap in asyncio.wait_for, so no bare
-        # asyncio TimeoutError can surface here either.
+        # timeout to curl_cffi.requests.exceptions.Timeout (a
+        # RequestsError subclass), caught above. We don't wrap in
+        # asyncio.wait_for, so no bare asyncio TimeoutError can
+        # surface here either.
 
         status = int(resp.status_code)
         if status == 403:
