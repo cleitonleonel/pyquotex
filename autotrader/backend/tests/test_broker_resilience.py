@@ -256,7 +256,7 @@ async def test_loud_policy_fires_on_every_failed_retry(
 
     The operator picked this policy on 2026-05-12 to maximise visibility
     when running on real money. The first few failures are flagged
-    ``recoverable=True`` (transient); past ``_HARD_OUTAGE_AFTER_ATTEMPTS``
+    ``recoverable=True`` (transient); past ``_SOFT_DOWNGRADE_AFTER_ATTEMPTS``
     the flag flips to ``False`` so the admin bot escalates the tone.
     """
     bus = TradeEventBus()
@@ -307,11 +307,11 @@ async def test_loud_policy_fires_on_every_failed_retry(
 async def test_loud_policy_flips_recoverable_after_hard_outage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Past ``_HARD_OUTAGE_AFTER_ATTEMPTS`` (10), the event flips to
+    """Past ``_SOFT_DOWNGRADE_AFTER_ATTEMPTS`` (10), the event flips to
     ``recoverable=False`` so the admin bot stops downplaying it."""
     from autotrader.services.quotex_manager import QuotexManager
 
-    threshold = QuotexManager._HARD_OUTAGE_AFTER_ATTEMPTS
+    threshold = QuotexManager._SOFT_DOWNGRADE_AFTER_ATTEMPTS
 
     bus = TradeEventBus()
     events, drain_task = _collect_events(bus)
