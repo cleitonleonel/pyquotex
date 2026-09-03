@@ -7,11 +7,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from .global_value import (
-    ConnectionState,
-    WebsocketStatus,
-    AuthStatus
-)
+from .global_value import AuthStatus, ConnectionState, WebsocketStatus
 from .network.history import GetHistory
 from .network.login import Login
 from .network.logout import Logout
@@ -47,6 +43,7 @@ class QuotexAPI:
             user_data_dir: str = ".",
             on_otp_callback: Callable | None = None,
             reconnect_policy: Any = None,
+            wss_url_override: str | None = None,
     ):
         """
         :param str host: The hostname or ip address of a Quotex server.
@@ -56,6 +53,10 @@ class QuotexAPI:
         :param proxies: The proxies of a Quotex server.
         :param user_data_dir: The path browser user data dir.
         :param on_otp_callback: Callback function for OTP (2FA) input.
+        :param wss_url_override: Replace the computed ``wss://ws2.{host}``
+            URL with this value. Primarily a test hook so the offline
+            integration tests can point at a local replay server, but
+            also useful for routing through a custom proxy.
         """
         self.state = ConnectionState()
         self.on_otp_callback = on_otp_callback
@@ -86,7 +87,11 @@ class QuotexAPI:
 
         self.host = host
         self.https_url = f"https://{host}"
-        self.wss_url = f"wss://ws2.{host}/socket.io/?EIO=3&transport=websocket"
+        self.wss_url = (
+            wss_url_override
+            if wss_url_override
+            else f"wss://ws2.{host}/socket.io/?EIO=3&transport=websocket"
+        )
         self.wss_message: str | None = None
         self.websocket_client: WebsocketClient | None = None
         self._websocket_task: asyncio.Task | None = None
@@ -132,7 +137,7 @@ class QuotexAPI:
         self.last_message_at: float = time.monotonic()
 
         # Active stream subscriptions, replayed after auto-reconnect.
-        from pyquotex.types import Subscription  # local import to avoid cycle
+        from pyquotex.qxtypes import Subscription  # local import to avoid cycle
         self._subscriptions: dict[str, Subscription] = {}
 
         # Dispatch table for "control" events: maps Socket.IO event name
@@ -160,7 +165,7 @@ class QuotexAPI:
         **extra: Any,
     ) -> None:
         """Record an active stream so it can be replayed after reconnect."""
-        from pyquotex.types import Subscription
+        from pyquotex.qxtypes import Subscription
         key = f"{kind}:{asset}:{period or 0}"
         self._subscriptions[key] = Subscription(
             kind=kind,  # type: ignore[arg-type]
@@ -229,19 +234,22 @@ class QuotexAPI:
         self.state.status = WebsocketStatus.CONNECTED
         await self.event_registry.set_event("status_changed", self.state.status)
 
-        # Start Heartbeat task to keep connection alive and stream active
+        # 1. Send authorization packet FIRST before any other command
+        if self.state.SSID:
+            payload = {
+                "session": self.state.SSID,
+                "isDemo": int(self.account_type) if self.account_type is not None else 1,
+                "tournamentId": 0,
+            }
+            await self.websocket.send(f'42["authorization",{json.dumps_str(payload)}]')
+
+        # 2. Start heartbeat & then send other requests
         async def heartbeat() -> None:
             while self.state.status == WebsocketStatus.CONNECTED:
                 try:
                     await self.websocket.send('42["tick"]')
                 except Exception:
                     break
-                # Send it every 5 seconds as in legacy version.
-                # TODO(refactor/architecture Phase 2): this is fixed-interval
-                # pacing for a heartbeat ping (NOT a retry-on-error sleep),
-                # so exponential backoff_sleep would be the wrong primitive
-                # here. Migrating only makes sense if reconnect logic is
-                # added that retries on transient send failures.
                 await asyncio.sleep(5)
 
         self.heartbeat_task = asyncio.create_task(heartbeat())
@@ -406,7 +414,7 @@ class QuotexAPI:
                         if order_id:
                             profit = order.get("profit", 0)
                             win = "win" if profit > 0 else "loss"
-                            # Check if it's in a closed list or has a 
+                            # Check if it's in a closed list or has a
                             # close status
                             is_closed = (
                                     any(
@@ -546,7 +554,7 @@ class QuotexAPI:
                     )
                     self.timesync.server_timestamp = ts  # Sync server clock
 
-                    # Limit realtime_price history to 1000 entries 
+                    # Limit realtime_price history to 1000 entries
                     # to prevent memory bloat
                     price_list = self.realtime_price[asset]
                     price_list.append({"time": ts, "price": price})
@@ -621,21 +629,22 @@ class QuotexAPI:
         """
         Authenticates the user using the provided credentials.
 
-        Performs HTTP login, retrieves cookies and SSID token, 
+        Performs HTTP login, retrieves cookies and SSID token,
         and updates the browser session.
 
         Returns:
             tuple[bool, str]: (Success status, Error message or "Success").
         """
-        async with self.login as login:
-            status, msg = await login(
-                self.username, self.password, self.user_data_dir
-            )
+        login_obj = self.login
+        status, msg = await login_obj(
+            self.username, self.password, self.user_data_dir
+        )
         if status:
+            self.browser = login_obj  # Share the active SSL context & cookies
             self.state.SSID = self.session_data.get("token")
             self.is_logged = True
             # Sync session to browser client
-            if "cookies" in self.session_data:
+            if "cookies" in self.session_data and self.session_data["cookies"]:
                 cookie_str = self.session_data["cookies"]
                 for item in cookie_str.split("; "):
                     if "=" in item:
@@ -648,6 +657,8 @@ class QuotexAPI:
                 "User-Agent": self.session_data.get("user_agent", ""),
                 "Referer": f"{self.https_url}/{self.lang}/trade"
             })
+        else:
+            await login_obj.close()
         return status, msg
 
     async def send_http_request_v1(
@@ -886,17 +897,22 @@ class QuotexAPI:
             "Origin": self.https_url,
             "Referer": f"{self.https_url}/{self.lang}/trade",
             "Cookie": self.session_data.get("cookies", ""),
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
-            "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
         }
+        # Skip SSL for plain ws:// (test / proxy / dev) — the websockets
+        # library expects no SSLContext on a non-TLS URL.
+        ssl_ctx = (
+            self.browser._ssl_context
+            if self.wss_url.startswith("wss://")
+            else None
+        )
         self._websocket_task = asyncio.create_task(
             self.websocket_client.run_forever(
                 url=self.wss_url,
                 extra_headers=extra_headers,
-                ssl=self.browser._ssl_context
+                ssl=ssl_ctx,
             )
         )
         for _ in range(100):
@@ -928,7 +944,8 @@ class QuotexAPI:
             AccountType.DEMO if is_demo else AccountType.REAL
         )
         ok, reason = await self.start_websocket()
-        if ok: await self.send_ssid()
+        if ok and self.state.auth_status != AuthStatus.AUTHENTICATED and not self.state.SSID:
+            await self.send_ssid()
         return ok, reason
 
     async def close(self) -> bool:
@@ -937,8 +954,8 @@ class QuotexAPI:
             await self.websocket_client.close()
             # Explicitly trigger cleanup to ensure heartbeat is cancelled
             self._on_close(1000, "Graceful closure")
-        # if self._http_client:
-        #    await self._http_client.aclose()
+        if self.browser:
+            await self.browser.close()
         return True
 
     @property
@@ -980,7 +997,7 @@ class QuotexAPI:
         """
         Retrieves and parses the user profile data.
 
-        Updates the internal profile object with nickname, balances, 
+        Updates the internal profile object with nickname, balances,
         country, and timezone.
 
         Returns:

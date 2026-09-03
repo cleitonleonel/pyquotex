@@ -1,7 +1,7 @@
 """Tests for the new public dataclasses in ``pyquotex.types``."""
 import pytest
 
-from pyquotex.types import (
+from pyquotex.qxtypes import (
     AssetInfo,
     Balance,
     Candle,

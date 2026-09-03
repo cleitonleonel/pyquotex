@@ -55,7 +55,7 @@ def load_session(email: str, user_agent: str | None = None) -> dict[str, Any]:
     """Load session data for a specific email."""
     if user_agent is None:
         user_agent = UserAgent().random
-        
+
     output_file = Path(resource_path("session.json"))
     with session_lock:
         all_sessions = {}
@@ -74,7 +74,7 @@ def load_session(email: str, user_agent: str | None = None) -> dict[str, Any]:
                 "user_agent": user_agent
             }
             output_file.write_text(json.dumps(all_sessions, indent=4))
-        
+
         return all_sessions.get(email)
 
 

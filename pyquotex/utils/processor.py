@@ -51,7 +51,7 @@ def get_last_n_candles(
         return []
 
     sorted_periods = sorted(candles[pair].keys(), reverse=True)
-    
+
     # Pre-format all timestamps instead of formatting in loop
     last_n_candles = []
     for period in sorted_periods[:n]:
@@ -163,7 +163,7 @@ def process_candles_v2(
     # Combine candles and realtime data
     combined = candles + (data if data else [])
 
-    # Deduplicate by time to prevent same candle from being added 
+    # Deduplicate by time to prevent same candle from being added
     # multiple times
     if combined:
         candle_dict = {
@@ -216,7 +216,7 @@ def merge_candles(candles_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not candles_data:
         return []
 
-    # Use dict to eliminate duplicates by time, then convert back to 
+    # Use dict to eliminate duplicates by time, then convert back to
     # sorted list
     candle_dict = {
         c['time']: c for c in candles_data

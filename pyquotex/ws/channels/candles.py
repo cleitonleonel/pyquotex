@@ -1,5 +1,4 @@
 from pyquotex.utils import json_utils as json
-
 from pyquotex.ws.channels.base import Base
 
 

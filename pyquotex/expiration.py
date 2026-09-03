@@ -1,9 +1,6 @@
 import calendar
 import time
-from datetime import (
-    datetime,
-    timedelta
-)
+from datetime import datetime, timedelta
 
 
 def get_timestamp() -> int:
@@ -167,7 +164,7 @@ def get_server_timer(time_offset_seconds: int) -> int:
     """
     Returns the server (UTC) timestamp based on local time and offset.
 
-    :param time_offset_seconds: The offset in seconds between local time 
+    :param time_offset_seconds: The offset in seconds between local time
                                  and UTC. Example: -10800 for UTC-3.
     :return: An integer representing the server time as a Unix timestamp (UTC).
     """

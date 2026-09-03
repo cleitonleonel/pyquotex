@@ -1,7 +1,7 @@
 """A python wrapper for Quotex API."""
 import logging
 
-from .types import (
+from .qxtypes import (
     AssetInfo,
     Balance,
     Candle,

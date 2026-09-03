@@ -39,7 +39,6 @@ from pyquotex.cli.commands.trading import (
     cmd_sell,
 )
 
-
 COMMAND_REGISTRY = {
     "login": cmd_login,
     "balance": cmd_balance,

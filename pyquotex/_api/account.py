@@ -15,7 +15,6 @@ from typing import Any
 from pyquotex import expiration
 from pyquotex._api._constants import DEFAULT_TIMEOUT
 from pyquotex.api import QuotexAPI
-from pyquotex.config import resource_path
 from pyquotex.exceptions import QuotexTimeoutError
 from pyquotex.utils.account_type import AccountType
 from pyquotex.utils.services import truncate
@@ -40,6 +39,7 @@ class AccountMixin:
             proxies=self.proxies,
             on_otp_callback=self.on_otp_callback,
             reconnect_policy=getattr(self, "reconnect_policy", None),
+            wss_url_override=getattr(self, "wss_url_override", None),
         )
 
         self.api.trace_ws = self.debug_ws_enable

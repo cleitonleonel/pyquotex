@@ -1,11 +1,11 @@
 import logging
 import time
 
+from pyquotex.expiration import get_expiration_time_quotex
 from pyquotex.utils import json_utils as json
 from pyquotex.ws.channels.base import Base
 
 logger = logging.getLogger(__name__)
-from pyquotex.expiration import get_expiration_time_quotex
 
 
 class Buy(Base):
@@ -65,7 +65,7 @@ class Buy(Base):
             "optionType": option_type
         }
 
-        data = f'42["tick"]'
+        data = '42["tick"]'
         await self.send_websocket_request(data)
 
         data = f'42["orders/open",{json.dumps_str(payload)}]'

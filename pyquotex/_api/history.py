@@ -17,8 +17,8 @@ from pyquotex.utils import json_utils as json
 from pyquotex.utils.cache import TTLCache
 from pyquotex.utils.processor import (
     calculate_candles,
-    process_candles_v2,
     merge_candles,
+    process_candles_v2,
 )
 
 # Per-process cache of recent get_candles() responses. Keyed by

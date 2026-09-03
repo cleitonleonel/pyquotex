@@ -14,8 +14,8 @@ from typing import Any, Callable
 from pyquotex._api._constants import DEFAULT_TIMEOUT
 from pyquotex.utils.indicators import TechnicalIndicators
 from pyquotex.utils.processor import (
-    process_tick,
     aggregate_candle,
+    process_tick,
 )
 
 logger = logging.getLogger(__name__)

@@ -16,7 +16,7 @@ import pytest
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
-from pyquotex.types import ReconnectPolicy, Subscription
+from pyquotex.qxtypes import ReconnectPolicy, Subscription
 from pyquotex.ws.client import WebsocketClient
 
 

@@ -8,7 +8,11 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
-    BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn,
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
 )
 
 from pyquotex.cli.formatters import _print_candles_table, _save_candles_csv

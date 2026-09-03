@@ -88,6 +88,18 @@ poetry add "pyquotex[fast] @ git+https://github.com/cleitonleonel/pyquotex.git"
 curl -sSL https://raw.githubusercontent.com/cleitonleonel/pyquotex/refs/heads/master/run_in_termux.sh | sh
 ```
 
+### 4. Configuração de Host (Bloqueio Regional) / Host Configuration (Region Blocks)
+
+Se você enfrentar problemas de conexão ou sua região bloquear o domínio padrão, você pode alterar o parâmetro `host` ao
+inicializar a classe `Quotex`. Alternativas comuns incluem:
+If you experience connection issues or your region blocks the default domain, you can change the `host` parameter when
+initializing the `Quotex` class. Common alternatives include:
+
+- `qxbroker.com` (default)
+- `quotex.com`
+- `qxbroker.io`
+- `quotex.io`
+- `qxbroker.sqldb.tc`
 
 ## 🧪 Exemplo de uso
 
@@ -97,7 +109,8 @@ from pyquotex.stable_api import Quotex
 client = Quotex(
   email="your_email",
   password="your_password",
-  lang="pt"  # ou "en", "es"
+  lang="pt",  # ou "en", "es"
+  host="qxbroker.com"  # Altere se bloqueado em sua região / Change if blocked in your region (e.g. "quotex.com", "qxbroker.io")
 )
 
 await client.connect()

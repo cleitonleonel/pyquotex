@@ -197,7 +197,7 @@ class TripleConfirmationStrategy:
                         signal.upper(), float(candles[-1]["close"]), len(candles),
                     )
                     print(
-                        f"  🟢 CALL" if signal == "call" else "  🔴 PUT",
+                        "  🟢 CALL" if signal == "call" else "  🔴 PUT",
                         f"  {asset}  @{candles[-1]['close']}",
                     )
 

@@ -59,7 +59,7 @@ class TimeSync(Base):
 
     @property
     def expiration_datetime(self) -> datetime.datetime:
-        """Get the expiration date and time based on the expiration time 
+        """Get the expiration date and time based on the expiration time
         and server timestamp.
 
         :returns: The expiration date and time.

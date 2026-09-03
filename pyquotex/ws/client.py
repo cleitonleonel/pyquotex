@@ -30,7 +30,7 @@ from websockets.protocol import State
 
 from pyquotex._api._waits import backoff_sleep
 from pyquotex.global_value import WebsocketStatus
-from pyquotex.types import ReconnectPolicy
+from pyquotex.qxtypes import ReconnectPolicy
 
 logger = logging.getLogger(__name__)
 

@@ -8,13 +8,9 @@ from ._api.history import HistoryMixin
 from ._api.realtime import RealtimeMixin
 from ._api.trading import TradingMixin
 from .api import QuotexAPI
-from .config import (
-    load_session,
-    update_session,
-    resource_path
-)
+from .config import load_session, resource_path, update_session
 from .global_value import AuthStatus
-from .types import ReconnectPolicy
+from .qxtypes import ReconnectPolicy
 from .utils.account_type import AccountType
 from .utils.optimization import OptimizedQuotexMixin
 
@@ -44,6 +40,7 @@ class Quotex(
             proxies: dict[str, str] | None = None,
             on_otp_callback: Callable | None = None,
             reconnect_policy: ReconnectPolicy | None = None,
+            wss_url_override: str | None = None,
     ):
         """
         Initializes the Quotex stable API wrapper.
@@ -96,6 +93,7 @@ class Quotex(
         self.session_data = session
         self.on_otp_callback = on_otp_callback
         self.reconnect_policy = reconnect_policy or ReconnectPolicy()
+        self.wss_url_override = wss_url_override
 
     @property
     def websocket(self) -> Any:
@@ -108,18 +106,18 @@ class Quotex(
     async def _check_connect(state: Any) -> bool:
         """Check connection using the per-instance state object.
 
-        Waits up to ~2s for the state to settle on AUTHENTICATED; returns
+        Waits up to ~7s for the state to settle on AUTHENTICATED; returns
         as soon as the predicate is satisfied (event-driven path) or False
-        on timeout. Replaces an unconditional ``await asyncio.sleep(2)``.
+        on timeout.
         """
         from pyquotex._api._waits import wait_until
         try:
             await wait_until(
-                lambda: state.auth_status == AuthStatus.AUTHENTICATED,
-                timeout=2,
+                lambda: state.auth_status == AuthStatus.AUTHENTICATED or state.auth_status == AuthStatus.FAILED,
+                timeout=7,
                 poll_interval=0.05,
             )
-            return True
+            return state.auth_status == AuthStatus.AUTHENTICATED
         except asyncio.TimeoutError:
             return state.auth_status == AuthStatus.AUTHENTICATED
 
