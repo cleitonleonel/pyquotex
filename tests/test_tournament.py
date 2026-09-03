@@ -8,7 +8,7 @@ from pyquotex.stable_api import Quotex
 async def test_tournament_account_example():
     """
     Example of how to use a tournament account in demo mode.
-    
+
     To use a tournament, you must provide the tournament_id.
     Tournament accounts are always considered 'DEMO' (practice) type.
     """

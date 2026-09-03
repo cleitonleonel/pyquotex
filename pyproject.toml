@@ -2,44 +2,81 @@
 name = "pyquotex"
 version = "1.1.0"
 description = "Quotex API Client written in Python."
-authors = [
-    { name = "cleiton", email = "cleiton.leonel@gmail.com"}]
+authors = [{ name = "cleiton", email = "cleiton.leonel@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-packages = [{ include = "pyquotex" }]
 requires-python = ">=3.12,<4.0"
 
-[tool.poetry]
-include = [
-    { path = "pyquotex/py.typed", format = ["sdist", "wheel"] },
-]
-
 dependencies = [
-    "websockets (>=12.0)",
-    "httpx (>=0.27.0,<1.0.0)",
-    "pyfiglet (>=1.0.2,<2.0.0)",
-    "beautifulsoup4 (>=4.12.3,<5.0.0)",
-    "fake-useragent (==2.2.0)",
-    "certifi (>=2025.1.31)",
-    "rich (>=13.7.0,<14.0.0)",
+    "websockets>=12.0",
+    "httpx>=0.27.0,<1.0.0",
+    "pyfiglet>=1.0.2,<2.0.0",
+    "beautifulsoup4>=4.12.3,<5.0.0",
+    "fake-useragent==2.2.0",
+    "certifi>=2025.1.31",
+    "rich>=13.7.0,<14.0.0",
     # numpy removed: the 7 calls in indicators.py have been replaced with
     # pure-Python / stdlib equivalents (statistics.pstdev, list comprehensions).
     # This saves ~20 MB and unblocks installation on Termux / slim images.
 ]
 
 [project.optional-dependencies]
-fast = ["orjson (>=3.9.0,<4.0.0)"]
+fast = ["orjson>=3.9.0,<4.0.0"]
+# `dev` and `test` extras are convenience for local setup; CI installs
+# them explicitly via pip so changes here don't change CI behavior.
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "pytest-mock>=3.12.0",
+    "pytest-cov>=4.1.0",
+]
+dev = [
+    "pyquotex[test]",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
 
-[tool.poetry.group.dev.dependencies]
-python = ">=3.12,<4.0"
-pytest = "^8.0.0"
-pytest-asyncio = "^0.23.5"
-pytest-mock = "^3.12.0"
+[build-system]
+requires = ["hatchling>=1.20"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pyquotex"]
+# py.typed marker (PEP 561) must ship in the wheel.
+include = ["pyquotex/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "pyquotex",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-[build-system]
-requires = ["poetry-core>=2.0.0"]
-build-backend = "poetry.core.masonry.api"
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    "examples",
+    # Legacy network/optimization code uses idioms ruff flags but rewriting
+    # them is out of scope for the resilience / typing PR. Tighten over time.
+    "pyquotex/network/login.py",
+    "pyquotex/network/navigator.py",
+    "pyquotex/utils/optimization.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line-too-long — handled by ruff format
+    "E701",  # one-liner `if x: return` is fine in this codebase
+    "E712",  # `== True` comparisons in legacy ConnectionState properties
+    "E713",  # `not (x in y)` style appears a few times in legacy code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811", "F541"]  # tests intentionally import-and-discard
+"scripts/*" = ["F401", "F541"]

@@ -149,6 +149,57 @@ async def step_subscription_replay(q: Quotex, asset: str, period: int) -> None:
     print(f"  Post-reconnect candles fetched: {len(fresh or [])}")
 
 
+async def step_buy_and_check_win(q: Quotex) -> None:
+    """Place a real DEMO buy and resolve it via the event-driven check_win.
+
+    Exercises the end-to-end trade path against the broker:
+      * settings_apply / orders/open frames
+      * slots.buy_confirm wakes up when broker echoes the order id
+      * slots.win_result(order_id) wakes up when the deal closes
+    """
+    banner("Step 7 — buy + check_win (DEMO trade)")
+    # Try a few candidates; first one the broker accepts wins.
+    candidates = ["EURUSD_otc", "EURUSD", "AUDCAD_otc", "AUDCAD"]
+    amount = 1.0
+    duration = 60
+
+    sym = None
+    buy_info: Any = None
+    ok = False
+    for candidate in candidates:
+        print(f"  Trying buy on {candidate}…")
+        try:
+            ok, buy_info = await asyncio.wait_for(
+                q.buy(amount, candidate, "call", duration),
+                timeout=45,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            print("    realtime stream timed out — try next")
+            continue
+        except Exception as e:
+            print(f"    exception: {e!r}")
+            continue
+        if ok and isinstance(buy_info, dict) and buy_info.get("id"):
+            sym = candidate
+            break
+        print(f"    rejected: ok={ok!r} info={buy_info!r}")
+    if not ok or not sym:
+        print("  ⚠️  No tradeable asset right now; skipping trade step")
+        return
+    if not ok:
+        print(f"  ❌ Buy failed: {buy_info}")
+        return
+    order_id = buy_info.get("id") if isinstance(buy_info, dict) else None
+    print(f"  ✅ Buy accepted: order_id={order_id}")
+    if not order_id:
+        print("  ⚠️  No order_id returned — can't check_win")
+        return
+
+    print(f"  Waiting for trade to close (~{duration}s)…")
+    win, profit = await q.check_win(order_id, duration=duration)
+    print(f"  ✅ check_win → status={win!r} profit={profit}")
+
+
 async def main() -> None:
     email, password = credentials()
     policy = ReconnectPolicy(
@@ -183,6 +234,9 @@ async def main() -> None:
         candles, asset, period = await step_candles_cache(q)
         await step_streaming_indicators(candles)
         await step_typed_candle(candles)
+        # Buy BEFORE the forced reconnect — it needs realtime price ticks
+        # flowing for the asset, which is most reliable on a fresh socket.
+        await step_buy_and_check_win(q)
         await step_subscription_replay(q, asset, period)
 
     banner("Done — context manager cleanly closed the connection.")

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# This workflow only uses matrix variables and github.{workflow,ref} (safe
+# values that cannot be controlled by untrusted users) — no untrusted
+# event inputs are interpolated into run blocks.
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install ruff
+      - name: ruff check
+        run: ruff check pyquotex tests scripts
+      # Format check is opt-in until the codebase is migrated to ruff
+      # format in a follow-up PR (would touch ~80 files in a single diff).
+      # Enable by running: ruff format pyquotex tests scripts
+
+  type-check:
+    name: Type check (mypy)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[test]" mypy
+      - name: mypy (public surface only)
+        run: |
+          mypy --ignore-missing-imports --no-strict-optional \
+            pyquotex/types.py \
+            pyquotex/utils/streaming_indicators.py \
+            pyquotex/utils/cache.py \
+            pyquotex/utils/json_utils.py \
+            pyquotex/_api/_waits.py
+
+  test:
+    name: Test (py${{ matrix.python }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[test]"
+      - name: pytest (offline only)
+        env:
+          PYQUOTEX_LIVE: "0"
+        run: |
+          pytest -q --cov=pyquotex --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
+      - name: Upload coverage XML
+        if: matrix.os == 'ubuntu-24.04' && matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore

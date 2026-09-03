@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from . import json_utils  # used by FastJSONParser below
 from ..global_value import AuthStatus
+from . import json_utils  # used by FastJSONParser below
 
 
 class AsyncEvent:

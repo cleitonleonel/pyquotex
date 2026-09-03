@@ -1,5 +1,6 @@
 """Unit tests for WaitableSlot and wait_until."""
 import asyncio
+
 import pytest
 
 from pyquotex._api._waits import SlotRegistry, WaitableSlot, wait_until
@@ -181,6 +182,7 @@ def test_slot_registry_candle_v2_release():
 async def test_backoff_sleep_respects_base():
     """attempt=0 with base=0.01 should sleep ~0.01s (within jitter)."""
     import time
+
     from pyquotex._api._waits import backoff_sleep
     start = time.monotonic()
     await backoff_sleep(0, base=0.01, cap=0.1, jitter=0)
@@ -192,6 +194,7 @@ async def test_backoff_sleep_respects_base():
 async def test_backoff_sleep_caps_at_max():
     """A large attempt should not exceed cap (within jitter)."""
     import time
+
     from pyquotex._api._waits import backoff_sleep
     start = time.monotonic()
     await backoff_sleep(5, base=0.01, cap=0.05, jitter=0)

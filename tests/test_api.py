@@ -41,7 +41,7 @@ def test_multiple_quotex_instances():
 
 def test_connection_state_enums():
     """Test that Enums are correctly initialized and legacy properties work."""
-    from pyquotex.global_value import WebsocketStatus, AuthStatus
+    from pyquotex.global_value import AuthStatus, WebsocketStatus
     state = ConnectionState()
 
     assert state.status == WebsocketStatus.DISCONNECTED
