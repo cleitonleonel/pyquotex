@@ -1,4 +1,5 @@
 """Tests for the incremental streaming indicators."""
+
 import pytest
 
 from pyquotex.utils.indicators import TechnicalIndicators

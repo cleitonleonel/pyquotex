@@ -3,6 +3,7 @@
 These exercise the control-event handlers directly, without involving the
 WebSocket or HTTP layers.
 """
+
 import pytest
 
 from pyquotex.api import QuotexAPI

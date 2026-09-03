@@ -42,10 +42,7 @@ def get_expiration_time_quotex(timestamp: int, duration: int) -> int:
     # For durations < 60s (only valid for market orders or OTC)
     if duration < 60:
         shift = 1 if now.second >= 30 else 0
-        exp_time = (
-                now.replace(second=0, microsecond=0)
-                + timedelta(minutes=shift + 1)
-        )
+        exp_time = now.replace(second=0, microsecond=0) + timedelta(minutes=shift + 1)
         return int(date_to_timestamp(exp_time))
 
     # For durations >= 60s (valid for buy_pending and scheduled trades)
@@ -61,10 +58,7 @@ def get_expiration_time_quotex(timestamp: int, duration: int) -> int:
 
 
 def get_next_timeframe(
-        timestamp: int | float,
-        time_zone: int,
-        timeframe: int,
-        open_time: str | None = None
+        timestamp: int | float, time_zone: int, timeframe: int, open_time: str | None = None
 ) -> str:
     """
     Calculate the next timestamp based on the given timeframe in seconds.
@@ -86,28 +80,18 @@ def get_next_timeframe(
             open_time = f"{open_time}:00"
 
         full_date_time = open_time
-        if len(open_time.split('/')[0]) != 4:
+        if len(open_time.split("/")[0]) != 4:
             full_date_time = f"{current_year}/{open_time}"
 
         date_time_obj = datetime.strptime(full_date_time, "%Y/%d/%m %H:%M:%S")
-        next_time = (
-                date_time_obj.replace(second=0, microsecond=0)
-                - timedelta(seconds=time_zone)
-        )
+        next_time = date_time_obj.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
     else:
         seconds_passed = now_date.second + now_date.minute * 60
-        next_timeframe_seconds = (
-                                         (seconds_passed // timeframe) + 2
-                                 ) * timeframe
-        next_time = now_date + timedelta(
-            seconds=next_timeframe_seconds - seconds_passed
-        )
-        next_time = (
-                next_time.replace(second=0, microsecond=0)
-                - timedelta(seconds=time_zone)
-        )
+        next_timeframe_seconds = ((seconds_passed // timeframe) + 2) * timeframe
+        next_time = now_date + timedelta(seconds=next_timeframe_seconds - seconds_passed)
+        next_time = next_time.replace(second=0, microsecond=0) - timedelta(seconds=time_zone)
 
-    return next_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    return next_time.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def get_expiration_time(timestamp: int | float, duration: int) -> int:
@@ -127,10 +111,7 @@ def get_period_time(duration: int) -> int:
 def get_remaning_time(timestamp: int | float) -> list[tuple[int, int]]:
     now_date = datetime.fromtimestamp(timestamp)
     exp_date = now_date.replace(second=0, microsecond=0)
-    if (
-            int(date_to_timestamp(exp_date + timedelta(minutes=1)))
-            - timestamp
-    ) > 30:
+    if (int(date_to_timestamp(exp_date + timedelta(minutes=1))) - timestamp) > 30:
         exp_date = exp_date + timedelta(minutes=1)
     else:
         exp_date = exp_date + timedelta(minutes=2)

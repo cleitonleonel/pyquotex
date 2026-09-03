@@ -3,6 +3,7 @@
 Public-method discovery is intentionally underscore-prefixed: we treat any name
 starting with `_` as private and exclude it from the public surface.
 """
+
 import inspect
 from typing import Any
 

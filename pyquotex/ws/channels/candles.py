@@ -7,14 +7,7 @@ class GetCandles(Base):
 
     name = "candles"
 
-    async def __call__(
-            self,
-            asset: str,
-            index: int,
-            time: int,
-            offset: int,
-            period: int
-    ) -> None:
+    async def __call__(self, asset: str, index: int, time: int, offset: int, period: int) -> None:
         """Method to send message to candles websocket chanel.
 
         :param asset: The active/asset identifier.
@@ -23,12 +16,6 @@ class GetCandles(Base):
         :param offset: Time interval in which you want to catalog the candles
         :param period: The candle duration (timeframe for the candles).
         """
-        payload = {
-            "asset": asset,
-            "index": index,
-            "time": time,
-            "offset": offset,
-            "period": period
-        }
+        payload = {"asset": asset, "index": index, "time": time, "offset": offset, "period": period}
         data = f'42["history/load",{json.dumps_str(payload)}]'
         await self.send_websocket_request(data)

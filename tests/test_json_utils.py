@@ -1,4 +1,5 @@
 """Tests for ``pyquotex.utils.json_utils``."""
+
 import pytest
 
 from pyquotex.utils import json_utils as j

@@ -8,10 +8,7 @@ from typing import Any
 
 from fake_useragent import UserAgent
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) "
-    "Gecko/20100101 Firefox/119.0"
-)
+USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
 
 base_dir = Path.cwd()
 config_path = Path(os.path.join(base_dir, "settings/config.ini"))
@@ -68,11 +65,7 @@ def load_session(email: str, user_agent: str | None = None) -> dict[str, Any]:
             output_file.parent.mkdir(exist_ok=True, parents=True)
 
         if email not in all_sessions:
-            all_sessions[email] = {
-                "cookies": None,
-                "token": None,
-                "user_agent": user_agent
-            }
+            all_sessions[email] = {"cookies": None, "token": None, "user_agent": user_agent}
             output_file.write_text(json.dumps(all_sessions, indent=4))
 
         return all_sessions.get(email)

@@ -17,12 +17,10 @@ def test_connection_state_independent():
 
 def test_quotex_api_instantiation():
     """Test that the QuotexAPI instance initializes the state properly."""
-    api = QuotexAPI(
-        "qxbroker.com", "test@test.com", "password", None, "en", 1
-    )
+    api = QuotexAPI("qxbroker.com", "test@test.com", "password", None, "en", 1)
 
     # Assert connection state exists
-    assert hasattr(api, 'state')
+    assert hasattr(api, "state")
     assert isinstance(api.state, ConnectionState)
 
 
@@ -42,6 +40,7 @@ def test_multiple_quotex_instances():
 def test_connection_state_enums():
     """Test that Enums are correctly initialized and legacy properties work."""
     from pyquotex.global_value import AuthStatus, WebsocketStatus
+
     state = ConnectionState()
 
     assert state.status == WebsocketStatus.DISCONNECTED

@@ -1,4 +1,5 @@
 """pyquotex CLI entry point. Run with `python -m pyquotex` or via app.py."""
+
 import asyncio
 import sys
 

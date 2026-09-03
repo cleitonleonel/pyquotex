@@ -13,6 +13,7 @@ Four pieces live here:
 4. ``offline_quotex`` — factory that builds a :class:`Quotex` pre-seeded
    with a fake SSID and pointed at the replay server.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,24 +21,26 @@ from typing import AsyncIterator, Callable
 
 import pytest
 
+from pyquotex.qxtypes import ReconnectPolicy
 from pyquotex.stable_api import Quotex
-from pyquotex.types import ReconnectPolicy
 from pyquotex.utils.account_type import AccountType
 from tests.fakes.ws_replay_server import WSReplayServer
 
 # Test modules that depend on a real broker session — auto-tagged ``live``.
 # Add to this set when introducing a new credentials-using test file.
-_LIVE_TEST_MODULES: frozenset[str] = frozenset({
-    "test_basic",
-    "test_buy",
-    "test_login",
-    "test_subscribe_indicator",
-    "test_deep_history",
-    "test_infinite_history",
-    "test_win",
-    "test_tournament",
-    "test_user",
-})
+_LIVE_TEST_MODULES: frozenset[str] = frozenset(
+    {
+        "test_basic",
+        "test_buy",
+        "test_login",
+        "test_subscribe_indicator",
+        "test_deep_history",
+        "test_infinite_history",
+        "test_win",
+        "test_tournament",
+        "test_user",
+    }
+)
 
 
 def _live_enabled() -> bool:
@@ -70,14 +73,10 @@ def pytest_ignore_collect(collection_path, config: pytest.Config) -> bool | None
     return None
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-mark live tests; skip them at runtime unless ``PYQUOTEX_LIVE=1``."""
     live_enabled = _live_enabled()
-    skip_live = pytest.mark.skip(
-        reason="live test (set PYQUOTEX_LIVE=1 to enable)"
-    )
+    skip_live = pytest.mark.skip(reason="live test (set PYQUOTEX_LIVE=1 to enable)")
     for item in items:
         module_name = item.module.__name__.rsplit(".", 1)[-1]
         if module_name in _LIVE_TEST_MODULES:

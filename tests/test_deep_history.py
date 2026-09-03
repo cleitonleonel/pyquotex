@@ -35,17 +35,22 @@ class TestDeepHistory(unittest.IsolatedAsyncioTestCase):
 
         # Verify chronological order and continuity
         for i in range(len(candles) - 1):
-            curr_time = candles[i]['time']
-            next_time = candles[i + 1]['time']
+            curr_time = candles[i]["time"]
+            next_time = candles[i + 1]["time"]
 
-            self.assertLess(curr_time, next_time, f"Candles at index {i} and {i + 1} are out of order")
+            self.assertLess(
+                curr_time, next_time, f"Candles at index {i} and {i + 1} are out of order"
+            )
 
             # Since it's 1m candles, the difference should be 60s
             # Note: There might be gaps during weekends, but EURUSD is usually open.
             # We allow for some small gaps if needed, but here we expect continuity.
             diff = next_time - curr_time
-            self.assertEqual(diff, period,
-                             f"Gap found between {curr_time} and {next_time}: {diff}s instead of {period}s")
+            self.assertEqual(
+                diff,
+                period,
+                f"Gap found between {curr_time} and {next_time}: {diff}s instead of {period}s",
+            )
 
     async def test_deep_history_amount(self) -> None:
         """Test if we can fetch more than the 200-candle limit."""
@@ -60,14 +65,18 @@ class TestDeepHistory(unittest.IsolatedAsyncioTestCase):
                 f"Asset {asset} not found or closed. Please check the asset name and availability."
             )
 
-        candles = await self.client.get_historical_candles(asset, amount_seconds, period, max_workers=1)
+        candles = await self.client.get_historical_candles(
+            asset, amount_seconds, period, max_workers=1
+        )
 
         if len(candles) == 0:
             self.skipTest("No candles were fetched (market might be closed)")
 
         # 5 candles * 60s = 300s. We should have at least 5 candles.
         # Note: broker might return slightly more or less depending on exact boundaries.
-        self.assertGreaterEqual(len(candles), len(candles), f"Fetched only {len(candles)} candles, expected at least 5")
+        self.assertGreaterEqual(
+            len(candles), len(candles), f"Fetched only {len(candles)} candles, expected at least 5"
+        )
 
 
 if __name__ == "__main__":

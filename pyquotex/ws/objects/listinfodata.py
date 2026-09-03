@@ -12,11 +12,7 @@ class ListInfoData(Base):
         self.listinfodata_dict: dict[str | int, dict[str, Any]] = {}
 
     def set(self, win: str, game_state: int, id_number: str | int, profit: float | int = 0) -> None:
-        self.listinfodata_dict[id_number] = {
-            "win": win,
-            "game_state": game_state,
-            "profit": profit
-        }
+        self.listinfodata_dict[id_number] = {"win": win, "game_state": game_state, "profit": profit}
 
     def delete(self, id_number: str | int) -> None:
         if id_number in self.listinfodata_dict:

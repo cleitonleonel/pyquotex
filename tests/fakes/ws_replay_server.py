@@ -31,6 +31,7 @@ Usage
 
 If many tests use the same canned protocol, use :func:`default_handlers`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -79,11 +80,7 @@ class WSReplayServer:
         self._dyn_handlers: dict[str, Handler] = {}
         self.received: list[str] = []
         self.connections: list[ServerConnection] = []
-        self.greeting: list[Reply] = (
-            greeting
-            if greeting is not None
-            else default_greeting_frames()
-        )
+        self.greeting: list[Reply] = greeting if greeting is not None else default_greeting_frames()
 
     @property
     def url(self) -> str:
@@ -203,17 +200,17 @@ def default_greeting_frames() -> list[Reply]:
     """
     return [
         '0{"sid":"replay-sid","upgrades":[],"pingInterval":25000,"pingTimeout":5000}',
-        '40',
+        "40",
         '42["s_authorization"]',
         '42["balance",{"demoBalance":10000.0,"liveBalance":0.0,"currencyCode":"USD"}]',
         '451-["instruments/list",{"_placeholder":true,"num":0}]',
         # Followed by the data payload (list of instrument rows). The
         # client's unwrap step would collapse a single-row message into
         # a flat row, so we ship two rows to keep the shape intact.
-        '['
+        "["
         '[1,"EURUSD","EUR/USD","forex",4,84,60,30,3,1,0,0,[],1,true],'
         '[2,"GBPUSD","GBP/USD","forex",4,84,60,30,3,1,0,0,[],1,true]'
-        ']',
+        "]",
     ]
 
 

@@ -1,4 +1,5 @@
 """Realtime CLI command handlers."""
+
 import argparse
 import asyncio
 from datetime import datetime
@@ -17,10 +18,7 @@ async def cmd_realtime_price(client: Quotex, args: argparse.Namespace) -> None:
     if not await connect_with_retry(client, is_demo):
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
-    console.print(
-        f"[cyan]Streaming live price for[/] [bold]{asset}[/] "
-        f"[dim](Ctrl+C to stop)[/]"
-    )
+    console.print(f"[cyan]Streaming live price for[/] [bold]{asset}[/] [dim](Ctrl+C to stop)[/]")
     await client.start_realtime_price(asset, args.period)
     try:
         while True:
@@ -39,18 +37,13 @@ async def cmd_realtime_price(client: Quotex, args: argparse.Namespace) -> None:
         await client.stop_candles_stream(asset)
 
 
-async def cmd_realtime_sentiment(
-        client: Quotex, args: argparse.Namespace
-) -> None:
+async def cmd_realtime_sentiment(client: Quotex, args: argparse.Namespace) -> None:
     """Stream live trader-sentiment data (Ctrl+C to stop)."""
     is_demo = _is_demo(args)
     if not await connect_with_retry(client, is_demo):
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
-    console.print(
-        f"[cyan]Streaming sentiment for[/] [bold]{asset}[/] "
-        f"[dim](Ctrl+C to stop)[/]"
-    )
+    console.print(f"[cyan]Streaming sentiment for[/] [bold]{asset}[/] [dim](Ctrl+C to stop)[/]")
     await client.start_realtime_sentiment(asset, args.period)
     try:
         while True:
@@ -70,25 +63,19 @@ async def cmd_realtime_sentiment(
         await client.stop_candles_stream(asset)
 
 
-async def cmd_realtime_candle(
-        client: Quotex, args: argparse.Namespace
-) -> None:
+async def cmd_realtime_candle(client: Quotex, args: argparse.Namespace) -> None:
     """Stream live processed candle ticks (Ctrl+C to stop)."""
     is_demo = _is_demo(args)
     if not await connect_with_retry(client, is_demo):
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
-    console.print(
-        f"[cyan]Streaming candle ticks for[/] [bold]{asset}[/] "
-        f"[dim](Ctrl+C to stop)[/]"
-    )
+    console.print(f"[cyan]Streaming candle ticks for[/] [bold]{asset}[/] [dim](Ctrl+C to stop)[/]")
     try:
         while True:
             candle = await client.start_realtime_candle(asset, args.period)
             if candle:
                 console.print(
-                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  "
-                    f"{candle}",
+                    f"  [dim]{datetime.now().strftime('%H:%M:%S')}[/]  {candle}",
                     end="\r",
                 )
             await asyncio.sleep(0.5)

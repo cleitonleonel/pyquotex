@@ -4,6 +4,7 @@ These tests stub out the actual ``websockets.connect`` call and exercise
 :meth:`WebsocketClient.run_forever` to verify the auto-reconnect loop,
 backoff, watchdog, and subscription replay logic in isolation.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,6 +53,7 @@ class _FakeWS:
     def __init__(self, frames: list[str] | None = None, raise_on_iter: Exception | None = None):
         self.state = MagicMock()
         from websockets.protocol import State
+
         self.state = State.OPEN
         self._frames = frames or []
         self._raise = raise_on_iter
@@ -78,6 +80,7 @@ class _FakeWS:
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
         from websockets.protocol import State
+
         self.state = State.CLOSED
         self.closed = True
 
@@ -148,12 +151,8 @@ async def test_auto_reconnect_after_unexpected_close() -> None:
 @pytest.mark.asyncio
 async def test_subscriptions_replayed_on_reconnect() -> None:
     api = _FakeApi()
-    api._subscriptions["candle:EURUSD:60"] = Subscription(
-        kind="candle", asset="EURUSD", period=60
-    )
-    api._subscriptions["mood:EURUSD:0"] = Subscription(
-        kind="mood", asset="EURUSD"
-    )
+    api._subscriptions["candle:EURUSD:60"] = Subscription(kind="candle", asset="EURUSD", period=60)
+    api._subscriptions["mood:EURUSD:0"] = Subscription(kind="mood", asset="EURUSD")
     policy = ReconnectPolicy(
         enabled=True,
         max_attempts=1,

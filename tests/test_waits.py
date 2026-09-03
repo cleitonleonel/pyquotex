@@ -1,4 +1,5 @@
 """Unit tests for WaitableSlot and wait_until."""
+
 import asyncio
 
 import pytest
@@ -184,6 +185,7 @@ async def test_backoff_sleep_respects_base():
     import time
 
     from pyquotex._api._waits import backoff_sleep
+
     start = time.monotonic()
     await backoff_sleep(0, base=0.01, cap=0.1, jitter=0)
     elapsed = time.monotonic() - start
@@ -196,6 +198,7 @@ async def test_backoff_sleep_caps_at_max():
     import time
 
     from pyquotex._api._waits import backoff_sleep
+
     start = time.monotonic()
     await backoff_sleep(5, base=0.01, cap=0.05, jitter=0)
     elapsed = time.monotonic() - start

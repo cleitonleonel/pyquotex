@@ -12,6 +12,7 @@ helper. Requires ``pip install curl_cffi`` in the local venv only.
 Usage:
     PYTHONPATH=. python scripts/seed_session_via_curlcffi.py
 """
+
 from __future__ import annotations
 
 import json
@@ -27,10 +28,7 @@ from pyquotex.config import credentials, resource_path
 BASE = "https://qxbroker.com"
 LANG = "en"
 IMPERSONATE = "firefox133"
-UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) "
-    "Gecko/20100101 Firefox/127.0"
-)
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 
 
 def _cookies_to_header(jar: dict[str, str]) -> str:
@@ -103,9 +101,11 @@ def main() -> int:
         print("  (saved response to /tmp/qx_pin_response.html)")
         # Snippet of error if any
         import re as _re
+
         err = _re.search(
             r'<div[^>]*class="[^"]*error[^"]*"[^>]*>(.*?)</div>',
-            r.text, _re.S,
+            r.text,
+            _re.S,
         )
         if err:
             print(f"  Error block: {err.group(1).strip()[:200]}")

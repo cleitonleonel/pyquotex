@@ -107,10 +107,10 @@ initializing the `Quotex` class. Common alternatives include:
 from pyquotex.stable_api import Quotex
 
 client = Quotex(
-  email="your_email",
-  password="your_password",
-  lang="pt",  # ou "en", "es"
-  host="qxbroker.com"  # Altere se bloqueado em sua região / Change if blocked in your region (e.g. "quotex.com", "qxbroker.io")
+    email="your_email",
+    password="your_password",
+    lang="pt",  # ou "en", "es"
+    host="qxbroker.com",  # Altere se bloqueado em sua região / Change if blocked in your region (e.g. "quotex.com", "qxbroker.io")
 )
 
 await client.connect()
@@ -118,6 +118,7 @@ print(await client.get_balance())
 
 # Usar conta de torneio / Use tournament account
 from pyquotex.utils.account_type import AccountType
+
 await client.change_account(AccountType.DEMO, tournament_id=1)
 
 # Buscar histórico profundo paralelo / Fetch parallel deep history
@@ -125,7 +126,9 @@ await client.change_account(AccountType.DEMO, tournament_id=1)
 # ⚠️ WARNING: Excessive workers (> 10) may lead to a ban!
 # ⚠️ ADVERTENCIA: ¡El uso excesivo de workers (> 10) puede causar baneo!
 # Recomendado: 2-5 workers.
-candles = await client.get_historical_candles("EURUSD", amount_of_seconds=86400, period=60, max_workers=5)
+candles = await client.get_historical_candles(
+    "EURUSD", amount_of_seconds=86400, period=60, max_workers=5
+)
 
 await client.close()
 ```

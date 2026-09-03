@@ -4,6 +4,7 @@ This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.session_data, self.account_is_demo, etc. — all set up in
 Quotex.__init__ inside pyquotex/stable_api.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,9 +56,7 @@ class AccountMixin:
 
         check, reason = await self.api.connect(self.account_is_demo == AccountType.DEMO)
         if not await self.check_connect():
-            logger.error(
-                "Websocket failed to connect or connection was rejected."
-            )
+            logger.error("Websocket failed to connect or connection was rejected.")
             if "token" in self.session_data:
                 self.session_data["token"] = None
             return False, "Websocket connection rejected."
@@ -76,16 +75,12 @@ class AccountMixin:
         elif balance_mode.upper() == "PRACTICE":
             self.account_is_demo = AccountType.DEMO
         else:
-            raise ValueError(
-                f"Invalid balance mode '{balance_mode}'. "
-                "Use 'REAL' or 'PRACTICE'."
-            )
+            raise ValueError(f"Invalid balance mode '{balance_mode}'. Use 'REAL' or 'PRACTICE'.")
 
     async def change_account(self, balance_mode: str, tournament_id: int = 0) -> None:
         """Change active account `real` or `practice` or a specific tournament"""
         self.account_is_demo = (
-            AccountType.REAL if balance_mode.upper() == "REAL"
-            else AccountType.DEMO
+            AccountType.REAL if balance_mode.upper() == "REAL" else AccountType.DEMO
         )
         if self.api:
             await self.api.change_account(self.account_is_demo, tournament_id=tournament_id)
@@ -97,18 +92,14 @@ class AccountMixin:
         return None
 
     async def edit_practice_balance(
-            self,
-            amount: float | int | None = None,
-            timeout: int = DEFAULT_TIMEOUT
+            self, amount: float | int | None = None, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
         """Refills the demo account balance."""
         if self.api is None:
             raise RuntimeError("API not initialized")
 
         self.api.training_balance_edit_request = None
-        await self.api.edit_training_balance(
-            amount if amount is not None else 0
-        )
+        await self.api.edit_training_balance(amount if amount is not None else 0)
         # TODO(refactor/architecture Phase 2.4): polling here cannot be migrated
         # to SlotRegistry until we identify the WS event that should populate
         # self.api.training_balance_edit_request. No producer exists in
@@ -122,9 +113,7 @@ class AccountMixin:
         start = time.time()
         while self.api.training_balance_edit_request is None:
             if time.time() - start > timeout:
-                raise TimeoutError(
-                    "Timeout waiting for practice balance edit response."
-                )
+                raise TimeoutError("Timeout waiting for practice balance edit response.")
             await asyncio.sleep(0.2)
         return self.api.training_balance_edit_request
 
@@ -144,9 +133,7 @@ class AccountMixin:
             try:
                 await self.api.slots.balance.wait(timeout=timeout)
             except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"get_balance timed out after {timeout}s"
-                )
+                raise QuotexTimeoutError(f"get_balance timed out after {timeout}s")
 
         if self.api.account_balance is None:
             return 0.0
@@ -170,9 +157,7 @@ class AccountMixin:
 
         user_settings = await self.get_profile()
         offset_zone = user_settings.offset if user_settings else 0
-        self.api.timesync.server_timestamp = (
-            expiration.get_server_timer(offset_zone)
-        )
+        self.api.timesync.server_timestamp = expiration.get_server_timer(offset_zone)
         return self.api.timesync.server_timestamp
 
     async def start_remaing_time(self) -> None:
@@ -182,9 +167,7 @@ class AccountMixin:
             return
 
         now_stamp = datetime.fromtimestamp(expiration.get_timestamp())
-        expiration_stamp = datetime.fromtimestamp(
-            self.api.timesync.server_timestamp
-        )
+        expiration_stamp = datetime.fromtimestamp(self.api.timesync.server_timestamp)
         remaing_time = int((expiration_stamp - now_stamp).total_seconds())
         while remaing_time >= 0:
             remaing_time -= 1
@@ -199,7 +182,7 @@ class AccountMixin:
             deal: int = 5,
             percent_mode: bool = False,
             percent_deal: int = 1,
-            timeout: int = DEFAULT_TIMEOUT
+            timeout: int = DEFAULT_TIMEOUT,
     ) -> dict[str, Any]:
         """Applies trading settings and retrieves updated settings."""
         if self.api is None:
@@ -213,7 +196,7 @@ class AccountMixin:
             is_fast_option=is_fast_option,
             deal=deal,
             percent_mode=percent_mode,
-            percent_deal=percent_deal
+            percent_deal=percent_deal,
         )
         await asyncio.sleep(0.2)
         start = time.time()

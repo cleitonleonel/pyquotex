@@ -4,6 +4,7 @@ This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.codes_asset, etc. — all set up in Quotex.__init__ inside
 pyquotex/stable_api.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,8 +26,8 @@ from pyquotex.utils.processor import (
 # (asset, period, offset, candle_bucket). TTL stays well under the candle
 # period so live data is never served stale. Off by default; opt in by
 # passing use_cache=True.
-_CANDLE_CACHE: TTLCache[tuple[str, int, int, int], list[dict[str, Any]]] = (
-    TTLCache(maxsize=128, ttl=10.0)
+_CANDLE_CACHE: TTLCache[tuple[str, int, int, int], list[dict[str, Any]]] = TTLCache(
+    maxsize=128, ttl=10.0
 )
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class HistoryMixin:
 
         # Clear event state before requesting data to prevent
         # race with WS response
-        await self.api.event_registry.clear_event(f'candles_ready_{asset}')
+        await self.api.event_registry.clear_event(f"candles_ready_{asset}")
 
         await self.start_candles_stream(asset, period)
         await self.api.get_candles(asset, index, end_from_time, offset, period)
@@ -82,13 +83,10 @@ class HistoryMixin:
         try:
             # Wait for WebSocket event signaling candles' arrival
             history_data = await self.api.event_registry.wait_event(
-                f'candles_ready_{asset}', timeout=timeout
+                f"candles_ready_{asset}", timeout=timeout
             )
         except TimeoutError:
-            logger.error(
-                "Timeout waiting for candles for %s after %ds",
-                asset, timeout
-            )
+            logger.error("Timeout waiting for candles for %s after %ds", asset, timeout)
             return None
 
         # Pass the asset-specific history directly to avoid
@@ -106,13 +104,7 @@ class HistoryMixin:
         return candles
 
     async def _fetch_historical_batch(
-            self,
-            asset: str,
-            fetch_time: int,
-            offset: int,
-            period: int,
-            index: int,
-            timeout: int
+            self, asset: str, fetch_time: int, offset: int, period: int, index: int, timeout: int
     ) -> dict[str, Any] | None:
         """Low-level batch fetcher for a specific time point and index."""
         if self.api is None:
@@ -123,30 +115,23 @@ class HistoryMixin:
             "index": index,
             "time": fetch_time,
             "offset": offset,
-            "period": period
+            "period": period,
         }
         ws_msg = f'42["history/load",{json.dumps_str(payload)}]'
 
         # Clear specific event to ensure fresh wait
-        event_name = f'candles_ready_{asset}_{index}'
+        event_name = f"candles_ready_{asset}_{index}"
         await self.api.event_registry.clear_event(event_name)
 
         await self.api.send_websocket_request(ws_msg)
 
         try:
-            return await self.api.event_registry.wait_event(
-                event_name, timeout=timeout
-            )
+            return await self.api.event_registry.wait_event(event_name, timeout=timeout)
         except TimeoutError:
-            logger.warning(
-                "Batch fetch timeout at %d (index %d) for %s",
-                fetch_time, index, asset
-            )
+            logger.warning("Batch fetch timeout at %d (index %d) for %s", fetch_time, index, asset)
             return None
 
-    def _parse_historical_candles(
-            self, raw_data: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    def _parse_historical_candles(self, raw_data: dict[str, Any]) -> list[dict[str, Any]]:
         """Standardizes raw candle data into a uniform list of dicts."""
         raw_candles = raw_data.get("data", []) or raw_data.get("candles", [])
         if not raw_candles:
@@ -155,13 +140,15 @@ class HistoryMixin:
         parsed = []
         for c in raw_candles:
             if isinstance(c, list) and len(c) >= 5:
-                parsed.append({
-                    "time": int(c[0]),
-                    "open": float(c[1]),
-                    "close": float(c[2]),
-                    "high": float(c[3]),
-                    "low": float(c[4])
-                })
+                parsed.append(
+                    {
+                        "time": int(c[0]),
+                        "open": float(c[1]),
+                        "close": float(c[2]),
+                        "high": float(c[3]),
+                        "low": float(c[4]),
+                    }
+                )
             elif isinstance(c, dict) and "time" in c:
                 parsed.append(c)
         return parsed
@@ -175,7 +162,7 @@ class HistoryMixin:
             period: int,
             timeout: int = DEFAULT_TIMEOUT,
             max_workers: int = 5,
-            progress_callback: Callable[[int, int, int, str], None] | None = None
+            progress_callback: Callable[[int, int, int, str], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Retrieves extensive historical candle data using a hybrid parallel-sequential approach.
@@ -220,7 +207,7 @@ class HistoryMixin:
                     # Process and find new boundary
                     batch_times = []
                     for c in new_batch:
-                        ts = c['time']
+                        ts = c["time"]
                         if ts >= end_t and ts <= start_t:
                             worker_candles[ts] = c
                             batch_times.append(ts)
@@ -235,10 +222,7 @@ class HistoryMixin:
                     if progress_callback:
                         # Report progress based on how much of the block is covered
                         progress_callback(
-                            start_t - new_oldest,
-                            start_t - end_t,
-                            len(worker_candles),
-                            worker_label
+                            start_t - new_oldest, start_t - end_t, len(worker_candles), worker_label
                         )
 
                     if new_oldest >= oldest_t:
@@ -265,26 +249,17 @@ class HistoryMixin:
         # Merge results and deduplicate
         for batch in results:
             for c in batch:
-                all_candles[c['time']] = c
+                all_candles[c["time"]] = c
 
-        return sorted(all_candles.values(), key=lambda x: x['time'])
+        return sorted(all_candles.values(), key=lambda x: x["time"])
 
-    async def get_candles_deep(
-            self, *args: Any, **kwargs: Any
-    ) -> list[dict[str, Any]]:
+    async def get_candles_deep(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         """Deprecated alias for get_historical_candles."""
-        logger.warning(
-            "get_candles_deep is deprecated, "
-            "use get_historical_candles instead."
-        )
+        logger.warning("get_candles_deep is deprecated, use get_historical_candles instead.")
         return await self.get_historical_candles(*args, **kwargs)
 
     async def get_history_line(
-            self,
-            asset: str,
-            end_from_time: float,
-            offset: int,
-            timeout: int = DEFAULT_TIMEOUT
+            self, asset: str, end_from_time: float, offset: int, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any] | None:
         """Retrieves historical price line data for an asset."""
         if self.api is None:
@@ -297,9 +272,7 @@ class HistoryMixin:
         # "not yet received".
         self.api.historical_candles = None
         await self.start_candles_stream(asset)
-        await self.api.get_history_line(
-            self.codes_asset[asset], index, end_from_time, offset
-        )
+        await self.api.get_history_line(self.codes_asset[asset], index, end_from_time, offset)
         # TODO(refactor/architecture Phase 2.7): polling here cannot be migrated
         # to SlotRegistry until we identify the WS event that should populate
         # self.api.historical_candles. No producer exists in
@@ -310,10 +283,7 @@ class HistoryMixin:
         start_time = time.time()
         while await self.check_connect() and self.api.historical_candles is None:
             if time.time() - start_time > timeout:
-                logger.error(
-                    "Timeout waiting for history line data for %s.",
-                    asset
-                )
+                logger.error("Timeout waiting for history line data for %s.", asset)
                 return None
             await asyncio.sleep(0.2)
         return self.api.historical_candles
@@ -332,19 +302,13 @@ class HistoryMixin:
         try:
             await self.api.slots.candle_v2(asset).wait(timeout=timeout)
         except asyncio.TimeoutError:
-            logger.error(
-                "Timeout waiting for get_candle_v2 data for %s.",
-                asset
-            )
+            logger.error("Timeout waiting for get_candle_v2 data for %s.", asset)
             return None
         candles = self.prepare_candles(asset, period)
         return candles
 
     def prepare_candles(
-            self,
-            asset: str,
-            period: int,
-            history: list[Any] | None = None
+            self, asset: str, period: int, history: list[Any] | None = None
     ) -> list[dict[str, Any]]:
         """Prepare candles data for a specified asset."""
         if self.api is None:
@@ -352,20 +316,14 @@ class HistoryMixin:
 
         # Use provided history if available (from event response),
         # otherwise fallback to shared state
-        history_data = (
-            history if history is not None else self.api.candles.candles_data
-        )
+        history_data = history if history is not None else self.api.candles.candles_data
         candles_data = calculate_candles(history_data, period)
-        candles_v2_data = process_candles_v2(
-            self.api.candle_v2_data, asset, candles_data
-        )
+        candles_v2_data = process_candles_v2(self.api.candle_v2_data, asset, candles_data)
         new_candles = merge_candles(candles_v2_data)
 
         return new_candles
 
-    async def get_trader_history(
-            self, account_type: int, page_number: int
-    ) -> dict[str, Any]:
+    async def get_trader_history(self, account_type: int, page_number: int) -> dict[str, Any]:
         """Retrieves trade history for a specific account and page."""
         if self.api:
             return await self.api.get_trader_history(account_type, page_number)

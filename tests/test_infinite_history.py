@@ -32,10 +32,7 @@ async def test_deep_history():
 
     print(f"📊 Buscando histórico profundo para {asset}...")
     candles = await client.get_candles_deep(
-        asset=asset,
-        amount_of_seconds=amount_of_history,
-        period=period,
-        progress_callback=progress
+        asset=asset, amount_of_seconds=amount_of_history, period=period, progress_callback=progress
     )
 
     if candles:

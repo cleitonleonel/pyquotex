@@ -8,7 +8,8 @@ import pytest
 from pyquotex.stable_api import Quotex
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 
 @pytest.mark.asyncio
 async def test_win():
@@ -67,6 +68,7 @@ async def test_win():
 
     finally:
         await client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(test_win())

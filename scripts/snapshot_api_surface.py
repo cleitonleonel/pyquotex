@@ -4,6 +4,7 @@ Run once before the refactor and commit tests/fixtures/api_surface.json.
 The regression test in tests/test_api_surface.py compares the live class
 against this snapshot.
 """
+
 import json
 from pathlib import Path
 

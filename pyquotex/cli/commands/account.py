@@ -1,4 +1,5 @@
 """Account CLI command handlers."""
+
 import argparse
 from datetime import datetime
 
@@ -21,16 +22,18 @@ async def cmd_login(client: Quotex, args: argparse.Namespace) -> None:
         return
     profile = await client.get_profile()
     console.print(_balance_table(profile))
-    console.print(Panel(
-        f"[bold blue]Nickname:[/] {profile.nick_name}\n"
-        f"[bold blue]Country:[/]  {profile.country_name}\n"
-        f"[bold blue]Offset:[/]   {profile.offset}",
-        title="👤 [bold]User Profile[/]",
-        border_style="bright_blue",
-        box=box.ROUNDED,
-        padding=(1, 2),
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold blue]Nickname:[/] {profile.nick_name}\n"
+            f"[bold blue]Country:[/]  {profile.country_name}\n"
+            f"[bold blue]Offset:[/]   {profile.offset}",
+            title="👤 [bold]User Profile[/]",
+            border_style="bright_blue",
+            box=box.ROUNDED,
+            padding=(1, 2),
+            expand=False,
+        )
+    )
 
 
 async def cmd_balance(client: Quotex, args: argparse.Namespace) -> None:
@@ -48,30 +51,31 @@ async def cmd_server_time(client: Quotex, args: argparse.Namespace) -> None:
         return
     ts = await client.get_server_time()
     dt = datetime.fromtimestamp(ts)
-    console.print(Panel(
-        f"[bold cyan]Unix:[/]   {ts}\n"
-        f"[bold cyan]Local:[/]  {dt.strftime('%Y-%m-%d %H:%M:%S')}",
-        title="🕒 [bold]Server Time[/]",
-        border_style="cyan",
-        box=box.ROUNDED,
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Unix:[/]   {ts}\n[bold cyan]Local:[/]  {dt.strftime('%Y-%m-%d %H:%M:%S')}",
+            title="🕒 [bold]Server Time[/]",
+            border_style="cyan",
+            box=box.ROUNDED,
+            expand=False,
+        )
+    )
 
 
-async def cmd_set_demo_balance(
-        client: Quotex, args: argparse.Namespace
-) -> None:
+async def cmd_set_demo_balance(client: Quotex, args: argparse.Namespace) -> None:
     """Refill or set the demo (practice) account balance."""
     if not await connect_with_retry(client, True):
         return
     result = await client.edit_practice_balance(args.amount)
-    console.print(Panel(
-        f"[bold green]✓ Demo balance updated[/]\n{result}",
-        title="💸 [bold]Set Demo Balance[/]",
-        border_style="green",
-        box=box.ROUNDED,
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold green]✓ Demo balance updated[/]\n{result}",
+            title="💸 [bold]Set Demo Balance[/]",
+            border_style="green",
+            box=box.ROUNDED,
+            expand=False,
+        )
+    )
 
 
 async def cmd_settings(client: Quotex, args: argparse.Namespace) -> None:

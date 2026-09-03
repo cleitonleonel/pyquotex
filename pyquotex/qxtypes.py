@@ -8,6 +8,7 @@ Existing methods continue to return ``dict``/``list`` to preserve
 backward compatibility; helper ``from_dict`` constructors are provided
 so callers can opt into typed objects when they want them.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -91,16 +92,10 @@ class TradeResult:
             status=status,
             profit=profit,
             asset=data.get("asset"),
-            amount=(
-                float(data["amount"]) if data.get("amount") is not None else None
-            ),
+            amount=(float(data["amount"]) if data.get("amount") is not None else None),
             direction=data.get("direction") or data.get("action"),
-            open_time=(
-                int(data["openTime"]) if data.get("openTime") is not None else None
-            ),
-            close_time=(
-                int(data["closeTime"]) if data.get("closeTime") is not None else None
-            ),
+            open_time=(int(data["openTime"]) if data.get("openTime") is not None else None),
+            close_time=(int(data["closeTime"]) if data.get("closeTime") is not None else None),
         )
 
 

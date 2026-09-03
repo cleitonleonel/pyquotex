@@ -4,6 +4,7 @@ then persist (as JSON) the cookies + CSRF token for step 2 to resume.
 After this runs successfully you'll see a new code in valejoapps@gmail.com.
 Hand that code to step 2.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,10 +19,7 @@ from pyquotex.config import credentials
 BASE = "https://qxbroker.com"
 LANG = "en"
 IMPERSONATE = "firefox133"
-UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) "
-    "Gecko/20100101 Firefox/127.0"
-)
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 STATE_PATH = Path("/tmp/qx_seed_state.json")
 
 
@@ -67,11 +65,14 @@ def main() -> int:
         return 2
 
     STATE_PATH.write_text(
-        json.dumps({
-            "cookies": s.cookies.get_dict(),
-            "token": token,
-            "email": email,
-        }, indent=2)
+        json.dumps(
+            {
+                "cookies": s.cookies.get_dict(),
+                "token": token,
+                "email": email,
+            },
+            indent=2,
+        )
     )
     print(f"  ✅ State saved to {STATE_PATH}")
     print("     → CHECK valejoapps@gmail.com for the LATEST 6-digit code,")

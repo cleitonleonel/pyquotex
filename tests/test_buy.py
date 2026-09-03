@@ -8,6 +8,7 @@ from pyquotex.stable_api import Quotex
 
 logging.basicConfig(level=logging.DEBUG)
 
+
 @pytest.mark.asyncio
 async def test_buy():
     email, password = credentials()
@@ -28,6 +29,7 @@ async def test_buy():
 
     finally:
         await client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(test_buy())

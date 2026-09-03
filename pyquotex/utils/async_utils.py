@@ -1,10 +1,10 @@
 """Async utilities for improved performance with event-driven architecture."""
+
 import asyncio
 import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
-from . import json_utils  # used by FastJSONParser below
 from ..global_value import AuthStatus
 from . import json_utils  # used by FastJSONParser below
 
@@ -211,7 +211,7 @@ async def wait_for_condition(
     condition_func: Callable[[], bool],
     timeout: float = 30.0,
     check_interval: float = 0.1,
-    error_message: str = "Condition wait timeout"
+        error_message: str = "Condition wait timeout",
 ) -> bool:
     """Wait for a condition to become true with timeout.
 
@@ -240,11 +240,7 @@ async def wait_for_condition(
         await asyncio.sleep(min(check_interval, timeout - elapsed))
 
 
-async def gather_with_limit(
-    coros: list,
-    limit: int = 10,
-    return_exceptions: bool = False
-) -> list:
+async def gather_with_limit(coros: list, limit: int = 10, return_exceptions: bool = False) -> list:
     """Run coroutines with concurrency limit.
 
     Args:
@@ -262,8 +258,7 @@ async def gather_with_limit(
             return await coro
 
     return await asyncio.gather(
-        *[sem_coro(coro) for coro in coros],
-        return_exceptions=return_exceptions
+        *[sem_coro(coro) for coro in coros], return_exceptions=return_exceptions
     )
 
 

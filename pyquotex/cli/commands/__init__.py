@@ -1,4 +1,5 @@
 """CLI command handlers and the COMMAND_REGISTRY dict."""
+
 from pyquotex.cli.commands.account import (
     cmd_balance,
     cmd_login,

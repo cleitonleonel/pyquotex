@@ -19,17 +19,14 @@ async def test_subscribe_indicator_logic():
 
     # Mock history fetching
     mock_history = [
-        {"time": 100, "open": 1.1, "close": 1.2, "high": 1.3, "low": 1.0}
-        for _ in range(30)
+        {"time": 100, "open": 1.1, "close": 1.2, "high": 1.3, "low": 1.0} for _ in range(30)
     ]
     client.get_candles = AsyncMock(return_value=mock_history)
     client.start_candles_stream = AsyncMock()
     client.stop_candles_stream = AsyncMock()
 
     # 2. Mock Event Data (New Candle)
-    new_candle_event = {
-        "index": 200, "open": 1.2, "close": 1.4, "high": 1.5, "low": 1.1
-    }
+    new_candle_event = {"index": 200, "open": 1.2, "close": 1.4, "high": 1.5, "low": 1.1}
     client.api.event_registry.wait_event = AsyncMock(return_value=new_candle_event)
 
     # 3. Define Callback
@@ -42,10 +39,8 @@ async def test_subscribe_indicator_logic():
     # We use a timeout because subscribe_indicator has an infinite loop
     try:
         await asyncio.wait_for(
-            client.subscribe_indicator(
-                "EURUSD", "RSI", {"period": 14}, my_callback, timeframe=60
-            ),
-            timeout=2
+            client.subscribe_indicator("EURUSD", "RSI", {"period": 14}, my_callback, timeframe=60),
+            timeout=2,
         )
     except (asyncio.TimeoutError, Exception):
         pass

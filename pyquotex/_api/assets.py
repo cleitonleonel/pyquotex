@@ -4,6 +4,7 @@ This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.codes_asset, etc. — all set up in Quotex.__init__ inside
 pyquotex/stable_api.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,9 +20,7 @@ logger = logging.getLogger(__name__)
 class AssetsMixin:
     """Methods related to instruments, assets metadata, and payouts."""
 
-    async def get_instruments(
-            self, timeout: int = DEFAULT_TIMEOUT
-    ) -> list[Any]:
+    async def get_instruments(self, timeout: int = DEFAULT_TIMEOUT) -> list[Any]:
         """Get instruments using a true event-driven approach."""
         if not self.api or not await self.check_connect():
             return []
@@ -33,17 +32,13 @@ class AssetsMixin:
             # Request instruments explicitly
             await self.api.get_instruments()
             # Wait for WebSocket event signaling instruments arrival
-            await self.api.event_registry.wait_event(
-                'instruments_ready', timeout=timeout
-            )
+            await self.api.event_registry.wait_event("instruments_ready", timeout=timeout)
 
             if not self.api.instruments:
                 # Try one last wait if empty — event-driven up to 2s
                 try:
                     await wait_until(
-                        lambda: bool(
-                            self.api and self.api.instruments
-                        ),
+                        lambda: bool(self.api and self.api.instruments),
                         timeout=2,
                         poll_interval=0.1,
                     )
@@ -52,9 +47,7 @@ class AssetsMixin:
 
             return self.api.instruments or []
         except TimeoutError:
-            logger.error(
-                "Timeout waiting for instruments after %ds", timeout
-            )
+            logger.error("Timeout waiting for instruments after %ds", timeout)
             return []
 
     def get_all_asset_name(self) -> list[list[str]] | None:
@@ -65,10 +58,7 @@ class AssetsMixin:
             list: List of assets with ID and display name.
         """
         if self.api and self.api.instruments:
-            return [
-                [i[1], i[2].replace("\n", "")]
-                for i in self.api.instruments
-            ]
+            return [[i[1], i[2].replace("\n", "")] for i in self.api.instruments]
         return None
 
     async def get_available_asset(
@@ -89,9 +79,7 @@ class AssetsMixin:
         if force_open and (not asset_open or not asset_open[2]):
             condition_otc = "otc" not in asset_name
             refactor_asset = asset_name.replace("_otc", "")
-            asset_name = (
-                f"{asset_name}_otc" if condition_otc else refactor_asset
-            )
+            asset_name = f"{asset_name}_otc" if condition_otc else refactor_asset
             _, asset_open = await self.check_asset_open(asset_name)
 
         return asset_name, asset_open
@@ -141,11 +129,8 @@ class AssetsMixin:
             assets_data[i[2].replace("\n", "")] = {
                 "turbo_payment": i[18],
                 "payment": i[5],
-                "profit": {
-                    "1M": i[-9],
-                    "5M": i[-8]
-                },
-                "open": i[14]
+                "profit": {"1M": i[-9], "5M": i[-8]},
+                "open": i[14],
             }
 
         return assets_data
@@ -164,12 +149,8 @@ class AssetsMixin:
                 assets_data[i[1].replace("\n", "")] = {
                     "turbo_payment": i[18],
                     "payment": i[5],
-                    "profit": {
-                        "24H": i[-10],
-                        "1M": i[-9],
-                        "5M": i[-8]
-                    },
-                    "open": i[14]
+                    "profit": {"24H": i[-10], "1M": i[-9], "5M": i[-8]},
+                    "open": i[14],
                 }
                 break
 

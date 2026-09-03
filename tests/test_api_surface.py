@@ -1,4 +1,5 @@
 """Regression test: Quotex's public surface must not shrink during refactors."""
+
 import json
 from pathlib import Path
 
@@ -30,14 +31,10 @@ def test_public_method_params_unchanged():
             continue
         if name not in current:
             continue  # caught by previous test
-        baseline_params = [
-            p["name"] for p in baseline_entry["signature"]["parameters"]
-        ]
+        baseline_params = [p["name"] for p in baseline_entry["signature"]["parameters"]]
         current_params = current[name].get("params", [])
         if baseline_params != current_params:
-            diffs.append(
-                f"{name}: baseline={baseline_params} current={current_params}"
-            )
+            diffs.append(f"{name}: baseline={baseline_params} current={current_params}")
     assert not diffs, "Parameter signatures changed:\n" + "\n".join(diffs)
 
 
@@ -52,7 +49,5 @@ def test_public_method_kinds_unchanged():
         baseline_kind = baseline[name].get("kind")
         current_kind = current[name].get("kind")
         if baseline_kind != current_kind:
-            changed.append(
-                f"{name}: baseline={baseline_kind} current={current_kind}"
-            )
+            changed.append(f"{name}: baseline={baseline_kind} current={current_kind}")
     assert not changed, "Symbol kinds changed:\n" + "\n".join(changed)

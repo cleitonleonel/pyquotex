@@ -1,4 +1,5 @@
 """Shared module-level constants used by stable_api facade and _api mixins."""
+
 import itertools
 import time
 

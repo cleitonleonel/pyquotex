@@ -25,10 +25,7 @@ class Buy(Base):
     ) -> None:
         option_type = 3 if is_fast_option else 1
 
-        expiration_time = get_expiration_time_quotex(
-            int(time.time()),
-            duration
-        )
+        expiration_time = get_expiration_time_quotex(int(time.time()), duration)
         expiration = expiration_time
 
         """if asset.endswith("_otc") and not is_fast_option:
@@ -62,7 +59,7 @@ class Buy(Base):
             "isDemo": self.api.account_type,
             "tournamentId": self.api.tournament_id,
             "requestId": request_id,
-            "optionType": option_type
+            "optionType": option_type,
         }
 
         data = '42["tick"]'

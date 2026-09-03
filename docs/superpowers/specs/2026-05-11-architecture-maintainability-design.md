@@ -123,6 +123,7 @@ from typing import TypeVar, Callable
 T = TypeVar("T")
 DEFAULT_TIMEOUT = 10.0
 
+
 class WaitableSlot[T]:
     """Typed slot a consumer awaits and the WS handler fills."""
 
@@ -151,9 +152,11 @@ async def wait_until(
 ) -> None:
     """For states that cannot be signaled from the WS handler.
     Short poll with a hard timeout."""
+
     async def _loop():
         while not predicate():
             await asyncio.sleep(poll_fallback)
+
     await asyncio.wait_for(_loop(), timeout=timeout)
 ```
 
@@ -206,6 +209,7 @@ from pyquotex.cli.parser import make_parser
 from pyquotex.cli.runtime import connect_with_retry
 from pyquotex.cli.commands import COMMAND_REGISTRY
 
+
 async def main():
     parser = make_parser()
     args = parser.parse_args()
@@ -218,6 +222,7 @@ async def main():
     finally:
         await client.close()
 
+
 if __name__ == "__main__":
     asyncio.run(main())
 ```
@@ -229,7 +234,13 @@ if __name__ == "__main__":
 ```python
 from .account import cmd_login, cmd_balance, cmd_server_time, cmd_set_demo_balance, cmd_settings
 from .market import cmd_assets, cmd_payout, cmd_payout_asset
-from .candles import cmd_candles, cmd_candles_v2, cmd_candles_deep, cmd_history_line, cmd_candle_info
+from .candles import (
+    cmd_candles,
+    cmd_candles_v2,
+    cmd_candles_deep,
+    cmd_history_line,
+    cmd_candle_info,
+)
 from .realtime import cmd_realtime_price, cmd_realtime_sentiment, cmd_realtime_candle
 from .trading import cmd_buy, cmd_sell, cmd_pending, cmd_check, cmd_result
 from .analysis import cmd_signals, cmd_history, cmd_indicator, cmd_monitor, cmd_strategy

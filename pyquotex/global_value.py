@@ -4,12 +4,14 @@ Replaces the old module-level global variables with an instanciable
 dataclass so that multiple QuotexAPI instances can coexist without
 sharing state (multi-account support).
 """
+
 from dataclasses import dataclass
 from enum import IntEnum
 
 
 class WebsocketStatus(IntEnum):
     """Enumeration for WebSocket connection status."""
+
     DISCONNECTED = 0
     CONNECTED = 1
     CONNECTING = 2
@@ -18,6 +20,7 @@ class WebsocketStatus(IntEnum):
 
 class AuthStatus(IntEnum):
     """Enumeration for authentication status."""
+
     NOT_AUTHENTICATED = 0
     AUTHENTICATING = 1
     AUTHENTICATED = 2

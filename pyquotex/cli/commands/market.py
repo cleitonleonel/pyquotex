@@ -1,4 +1,5 @@
 """Market CLI command handlers."""
+
 import argparse
 
 from rich import box
@@ -91,12 +92,14 @@ async def cmd_payout_asset(client: Quotex, args: argparse.Namespace) -> None:
     if result is None:
         console.print(f"[red]Asset '{args.asset}' not found.[/]")
         return
-    console.print(Panel(
-        f"[bold cyan]Asset:[/]     {args.asset}\n"
-        f"[bold cyan]Timeframe:[/] {args.timeframe}M\n"
-        f"[bold green]Payout:[/]    {result}%",
-        title="💹 [bold]Asset Payout[/]",
-        border_style="green",
-        box=box.ROUNDED,
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Asset:[/]     {args.asset}\n"
+            f"[bold cyan]Timeframe:[/] {args.timeframe}M\n"
+            f"[bold green]Payout:[/]    {result}%",
+            title="💹 [bold]Asset Payout[/]",
+            border_style="green",
+            box=box.ROUNDED,
+            expand=False,
+        )
+    )

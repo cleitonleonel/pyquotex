@@ -5,6 +5,7 @@ These tests prove the WS stack works (socket.io framing, dispatch table,
 slot registry, subscription tracking, reconnect loop) without ever
 touching the broker. They run on CI.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,8 +16,8 @@ from typing import Any, Callable
 import pytest
 
 from pyquotex.global_value import AuthStatus, WebsocketStatus
+from pyquotex.qxtypes import ReconnectPolicy
 from pyquotex.stable_api import Quotex
-from pyquotex.types import ReconnectPolicy
 from tests.fakes.ws_replay_server import (
     WSReplayServer,
     candle_history_frames,
@@ -158,26 +159,18 @@ async def test_get_candles_use_cache_hits_on_second_call(
         end_time = 1_700_000_000.0
 
         t0 = time.monotonic()
-        first = await client.get_candles(
-            "EURUSD", end_time, 1800, 60, use_cache=True, timeout=5
-        )
+        first = await client.get_candles("EURUSD", end_time, 1800, 60, use_cache=True, timeout=5)
         elapsed_first = time.monotonic() - t0
         assert first is not None and len(first) > 0
 
-        baseline_history_loads = sum(
-            1 for m in replay_server.received if '"history/load"' in m
-        )
+        baseline_history_loads = sum(1 for m in replay_server.received if '"history/load"' in m)
 
         t0 = time.monotonic()
-        second = await client.get_candles(
-            "EURUSD", end_time, 1800, 60, use_cache=True, timeout=5
-        )
+        second = await client.get_candles("EURUSD", end_time, 1800, 60, use_cache=True, timeout=5)
         elapsed_second = time.monotonic() - t0
         assert second == first
         # No second history/load went over the wire.
-        new_history_loads = sum(
-            1 for m in replay_server.received if '"history/load"' in m
-        )
+        new_history_loads = sum(1 for m in replay_server.received if '"history/load"' in m)
         assert new_history_loads == baseline_history_loads
         # And the cached call is at least ~10x faster.
         assert elapsed_second < elapsed_first / 5
@@ -244,9 +237,7 @@ async def test_reconnect_replays_subscriptions_against_replay(
         ws_client = api.websocket_client
         assert ws_client is not None
 
-        baseline_subs = sum(
-            1 for m in replay_server.received if '"instruments/update"' in m
-        )
+        baseline_subs = sum(1 for m in replay_server.received if '"instruments/update"' in m)
         assert len(replay_server.connections) >= 1, "no server-side connection"
         for conn in list(replay_server.connections):
             await conn.close(code=1011, reason="forced")
@@ -258,24 +249,18 @@ async def test_reconnect_replays_subscriptions_against_replay(
                 break
 
         assert ws_client._open_count >= 2, (  # type: ignore[attr-defined]
-            f"Reconnect did not open a second WS (open_count="
-            f"{ws_client._open_count})"  # type: ignore[attr-defined]
+            f"Reconnect did not open a second WS (open_count={ws_client._open_count})"  # type: ignore[attr-defined]
         )
         # Now wait for replay to fire the subscribe.
         for _ in range(100):
             await asyncio.sleep(0.05)
-            new_subs = sum(
-                1 for m in replay_server.received if '"instruments/update"' in m
-            )
+            new_subs = sum(1 for m in replay_server.received if '"instruments/update"' in m)
             if new_subs > baseline_subs:
                 break
 
-        new_subs = sum(
-            1 for m in replay_server.received if '"instruments/update"' in m
-        )
+        new_subs = sum(1 for m in replay_server.received if '"instruments/update"' in m)
         assert new_subs > baseline_subs, (
-            f"Replay did not re-issue subscribe (saw {new_subs}, "
-            f"baseline {baseline_subs})"
+            f"Replay did not re-issue subscribe (saw {new_subs}, baseline {baseline_subs})"
         )
     finally:
         await client.close()

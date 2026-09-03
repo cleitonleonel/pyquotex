@@ -11,10 +11,7 @@ def nested_dict(n: int, obj_type: Callable[[], Any]) -> defaultdict:
         return defaultdict(lambda: nested_dict(n - 1, obj_type))
 
 
-def group_by_period(
-        data: list[list[Any]],
-        period: int
-) -> dict[int, list[list[Any]]]:
+def group_by_period(data: list[list[Any]], period: int) -> dict[int, list[list[Any]]]:
     """Group tick data by timeframe period."""
     grouped = defaultdict(list)
     for tick in data:

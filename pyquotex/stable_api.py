@@ -25,7 +25,6 @@ class Quotex(
     AssetsMixin,
     OptimizedQuotexMixin,
 ):
-
     def __init__(
             self,
             email: str,
@@ -64,10 +63,7 @@ class Quotex(
                 exponential backoff. Pass ``ReconnectPolicy(enabled=False)``
                 to opt out.
         """
-        self.size = [
-            5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
-            3600, 7200, 14400, 86400
-        ]
+        self.size = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 86400]
         self.email = email
         self.password = password
         self.host = host
@@ -111,9 +107,13 @@ class Quotex(
         on timeout.
         """
         from pyquotex._api._waits import wait_until
+
         try:
             await wait_until(
-                lambda: state.auth_status == AuthStatus.AUTHENTICATED or state.auth_status == AuthStatus.FAILED,
+                lambda: (
+                        state.auth_status == AuthStatus.AUTHENTICATED
+                        or state.auth_status == AuthStatus.FAILED
+                ),
                 timeout=7,
                 poll_interval=0.05,
             )
@@ -128,10 +128,7 @@ class Quotex(
         return await self._check_connect(self.api.state)
 
     def set_session(
-            self,
-            user_agent: str,
-            cookies: str | None = None,
-            ssid: str | None = None
+            self, user_agent: str, cookies: str | None = None, ssid: str | None = None
     ) -> None:
         """
         Manually sets the session data.
@@ -141,11 +138,7 @@ class Quotex(
             cookies (str, optional): The raw cookie string.
             ssid (str, optional): The SSID token.
         """
-        session = {
-            "cookies": cookies,
-            "token": ssid,
-            "user_agent": user_agent
-        }
+        session = {"cookies": cookies, "token": ssid, "user_agent": user_agent}
         self.session_data = update_session(self.email, session)
 
     async def re_subscribe_stream(self) -> None:

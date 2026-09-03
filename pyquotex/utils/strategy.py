@@ -12,6 +12,7 @@ Usage
     await strategy.run(auto_trade=False)   # signal-only (safe)
     await strategy.run(auto_trade=True)    # auto-trade DEMO only
 """
+
 import asyncio
 import logging
 import time
@@ -99,8 +100,8 @@ class TripleConfirmationStrategy:
             return None
 
         closes = [float(c["close"]) for c in candles]
-        highs  = [float(c.get("high", c.get("max", c["close"]))) for c in candles]
-        lows   = [float(c.get("low",  c.get("min", c["close"]))) for c in candles]
+        highs = [float(c.get("high", c.get("max", c["close"]))) for c in candles]
+        lows = [float(c.get("low", c.get("min", c["close"]))) for c in candles]
 
         # 1. EMA trend
         ema20 = self.indicators.calculate_ema(closes, self.ema_fast)
@@ -108,8 +109,8 @@ class TripleConfirmationStrategy:
         if not ema20 or not ema50:
             return None
 
-        price   = closes[-1]
-        uptrend   = price > ema20[-1] > ema50[-1]
+        price = closes[-1]
+        uptrend = price > ema20[-1] > ema50[-1]
         downtrend = price < ema20[-1] < ema50[-1]
 
         # 2. RSI momentum
@@ -160,15 +161,14 @@ class TripleConfirmationStrategy:
             Seconds to wait between candle checks (default 5.0).
         """
         logger.info(
-            "TripleConfirmation started — asset=%s period=%ds "
-            "auto_trade=%s",
-            self.asset, self.period, auto_trade,
+            "TripleConfirmation started — asset=%s period=%ds auto_trade=%s",
+            self.asset,
+            self.period,
+            auto_trade,
         )
 
         # Resolve OTC fallback once
-        asset, info = await self.client.get_available_asset(
-            self.asset, force_open=True
-        )
+        asset, info = await self.client.get_available_asset(self.asset, force_open=True)
         if not info or not info[0]:
             logger.error("Asset %s is not available.", self.asset)
             return
@@ -194,7 +194,9 @@ class TripleConfirmationStrategy:
                 if signal:
                     logger.info(
                         "Signal: %s | price=%.5f | candles=%d",
-                        signal.upper(), float(candles[-1]["close"]), len(candles),
+                        signal.upper(),
+                        float(candles[-1]["close"]),
+                        len(candles),
                     )
                     print(
                         "  🟢 CALL" if signal == "call" else "  🔴 PUT",

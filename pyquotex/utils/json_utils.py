@@ -12,6 +12,7 @@ Public surface
 ``dumps_str(obj)`` -> ``str`` : Serialize to str (Socket.IO frames built by concat).
 ``dumps_bytes(obj)`` -> ``bytes`` : Explicit alias for :func:`dumps`.
 """
+
 from __future__ import annotations
 
 import json as _stdlib_json

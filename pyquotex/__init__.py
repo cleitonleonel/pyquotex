@@ -1,4 +1,5 @@
 """A python wrapper for Quotex API."""
+
 import logging
 
 from .qxtypes import (

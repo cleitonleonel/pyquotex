@@ -5,6 +5,7 @@ strategies that call ``get_candles`` once per tick with the same
 arguments. We intentionally keep the TTL short (default: one candle
 period) so live data is never served stale.
 """
+
 from __future__ import annotations
 
 import time

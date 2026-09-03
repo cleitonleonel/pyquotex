@@ -9,11 +9,7 @@ from pyquotex.stable_api import Quotex
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 
 email, password = credentials()
-client = Quotex(
-    email=email,
-    password=password,
-    lang="pt"
-)
+client = Quotex(email=email, password=password, lang="pt")
 
 
 async def buy_simple():
@@ -48,5 +44,5 @@ async def test_basic():
     await buy_simple()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(test_basic())

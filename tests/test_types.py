@@ -1,4 +1,5 @@
 """Tests for the new public dataclasses in ``pyquotex.types``."""
+
 import pytest
 
 from pyquotex.qxtypes import (
@@ -18,9 +19,7 @@ class TestCandle:
         c = Candle.from_dict(
             {"time": 1, "open": 2.0, "high": 3.0, "low": 1.5, "close": 2.5, "volume": 100}
         )
-        assert (c.time, c.open, c.high, c.low, c.close, c.volume) == (
-            1, 2.0, 3.0, 1.5, 2.5, 100.0
-        )
+        assert (c.time, c.open, c.high, c.low, c.close, c.volume) == (1, 2.0, 3.0, 1.5, 2.5, 100.0)
 
     def test_from_array_orders_match_broker(self) -> None:
         # broker order: [t, o, c, h, l]
@@ -61,9 +60,7 @@ def test_trade_result_from_dict_infers_status() -> None:
 
 @pytest.mark.unit
 def test_balance_from_dict() -> None:
-    b = Balance.from_dict(
-        {"demoBalance": 10000.0, "liveBalance": 50.0, "currencyCode": "USD"}
-    )
+    b = Balance.from_dict({"demoBalance": 10000.0, "liveBalance": 50.0, "currencyCode": "USD"})
     assert b.demo == 10000.0
     assert b.live == 50.0
     assert b.currency_code == "USD"
@@ -80,6 +77,7 @@ def test_profile_info_from_profile_object() -> None:
         currency_symbol = "$"
         country_name = "BR"
         offset = 0
+
     p = ProfileInfo.from_profile(P())
     assert p.nickname == "alice"
     assert p.profile_id == 42

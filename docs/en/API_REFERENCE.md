@@ -30,14 +30,14 @@ from pyquotex.stable_api import Quotex
 client = Quotex(
     email="your@email.com",
     password="your_password",
-    lang="en",                        # "pt" | "en" | "es"
-    host="qxbroker.com",              # default
-    root_path=".",                    # local storage root
-    user_data_dir="browser",          # browser profile folder
-    asset_default="EURUSD",           # default asset
-    period_default=60,                # default candle period (seconds)
-    proxies=None,                     # optional {"http": "...", "https": "..."}
-    on_otp_callback=None,             # async callable for 2FA/OTP input
+    lang="en",  # "pt" | "en" | "es"
+    host="qxbroker.com",  # default
+    root_path=".",  # local storage root
+    user_data_dir="browser",  # browser profile folder
+    asset_default="EURUSD",  # default asset
+    period_default=60,  # default candle period (seconds)
+    proxies=None,  # optional {"http": "...", "https": "..."}
+    on_otp_callback=None,  # async callable for 2FA/OTP input
 )
 ```
 
@@ -109,9 +109,7 @@ Manually injects a pre-existing session (bypass login).
 
 ```python
 client.set_session(
-    user_agent="Mozilla/5.0 ...",
-    cookies="__cf_bm=...; SSID=...",
-    ssid="your-ssid-token"
+    user_agent="Mozilla/5.0 ...", cookies="__cf_bm=...; SSID=...", ssid="your-ssid-token"
 )
 ```
 
@@ -124,12 +122,12 @@ Returns the user profile object.
 
 ```python
 profile = await client.get_profile()
-print(profile.nick_name)       # display name
-print(profile.demo_balance)    # demo balance (float)
-print(profile.live_balance)    # live balance (float)
-print(profile.currency_symbol) # e.g. "$"
-print(profile.country_name)    # country
-print(profile.offset)          # timezone offset (seconds)
+print(profile.nick_name)  # display name
+print(profile.demo_balance)  # demo balance (float)
+print(profile.live_balance)  # live balance (float)
+print(profile.currency_symbol)  # e.g. "$"
+print(profile.country_name)  # country
+print(profile.offset)  # timezone offset (seconds)
 ```
 
 ---
@@ -150,8 +148,8 @@ Switches between Demo, Live, or Tournament account.
 ```python
 from pyquotex.utils.account_type import AccountType
 
-await client.change_account("PRACTICE")             # Demo
-await client.change_account("REAL")                 # Live
+await client.change_account("PRACTICE")  # Demo
+await client.change_account("REAL")  # Live
 await client.change_account("PRACTICE", tournament_id=1)  # Tournament
 ```
 
@@ -188,6 +186,7 @@ Returns the current synced server Unix timestamp.
 ```python
 ts = await client.get_server_time()
 from datetime import datetime
+
 print(datetime.fromtimestamp(ts))
 ```
 
@@ -209,7 +208,7 @@ Applies trading-UI settings and returns the server confirmation.
 result = await client.store_settings_apply(
     asset="EURUSD",
     period=60,
-    time_mode="TIMER",   # "TIMER" | "TURBO"
+    time_mode="TIMER",  # "TIMER" | "TURBO"
     deal=5,
     percent_mode=False,
     percent_deal=1,
@@ -289,9 +288,9 @@ for asset, data in payouts.items():
 Returns payout % for a specific asset.
 
 ```python
-pct = client.get_payout_by_asset("EURUSD", timeframe="1")   # 1M payout %
-pct = client.get_payout_by_asset("EURUSD", timeframe="5")   # 5M payout %
-pct = client.get_payout_by_asset("EURUSD", timeframe="all") # all timeframes
+pct = client.get_payout_by_asset("EURUSD", timeframe="1")  # 1M payout %
+pct = client.get_payout_by_asset("EURUSD", timeframe="5")  # 5M payout %
+pct = client.get_payout_by_asset("EURUSD", timeframe="all")  # all timeframes
 ```
 
 ---
@@ -307,8 +306,8 @@ import time
 candles = await client.get_candles(
     asset="EURUSD",
     end_from_time=time.time(),
-    offset=3600,   # how far back in seconds
-    period=60,     # candle size in seconds
+    offset=3600,  # how far back in seconds
+    period=60,  # candle size in seconds
 )
 # Each candle: {"time": int, "open": float, "close": float, "max": float, "min": float}
 ```
@@ -332,9 +331,9 @@ Fetches deep historical data using parallel workers.
 ```python
 candles = await client.get_historical_candles(
     asset="EURUSD",
-    amount_of_seconds=86400,   # 24 hours
+    amount_of_seconds=86400,  # 24 hours
     period=60,
-    max_workers=5,             # ⚠️ keep ≤ 10 to avoid bans
+    max_workers=5,  # ⚠️ keep ≤ 10 to avoid bans
 )
 # Returns sorted list of candle dicts
 ```
@@ -344,9 +343,8 @@ candles = await client.get_historical_candles(
 def on_progress(done: int, total: int, count: int, label: str) -> None:
     print(f"{label}: {done}/{total} — {count} candles")
 
-candles = await client.get_historical_candles(
-    "EURUSD", 86400, 60, progress_callback=on_progress
-)
+
+candles = await client.get_historical_candles("EURUSD", 86400, 60, progress_callback=on_progress)
 ```
 
 ---
@@ -493,8 +491,8 @@ Places an immediate binary option trade.
 status, data = await client.buy(
     amount=10.0,
     asset="EURUSD",
-    direction="call",   # "call" (UP) | "put" (DOWN)
-    duration=60,        # seconds
+    direction="call",  # "call" (UP) | "put" (DOWN)
+    duration=60,  # seconds
 )
 if status:
     trade_id = data.get("id")
@@ -520,7 +518,7 @@ status, data = await client.open_pending(
     asset="EURUSD",
     direction="call",
     duration=60,
-    open_time="14:30",   # HH:MM, or None for next candle
+    open_time="14:30",  # HH:MM, or None for next candle
 )
 ```
 
@@ -644,6 +642,7 @@ Subscribes to live indicator updates — callback is called on every new candle.
 async def on_signal(data: dict) -> None:
     print(f"RSI: {data.get('rsi')}")
 
+
 await client.subscribe_indicator(
     asset="EURUSD",
     indicator="RSI",
@@ -729,6 +728,7 @@ Run any command via `python app.py <command> [options]`.
 import asyncio
 from pyquotex.stable_api import Quotex
 
+
 async def safe_example():
     client = Quotex(email="...", password="...")
     try:
@@ -772,6 +772,7 @@ async def safe_example():
 import asyncio
 from pyquotex.stable_api import Quotex
 
+
 async def main():
     client = Quotex(email="you@example.com", password="secret")
     check, reason = await client.connect()
@@ -784,6 +785,7 @@ async def main():
     print(f"Hello {profile.nick_name} — Balance: {balance:.2f}")
     await client.close()
 
+
 asyncio.run(main())
 ```
 
@@ -795,9 +797,7 @@ asyncio.run(main())
 async def rsi_example(client):
     asset, _ = await client.get_available_asset("EURUSD", force_open=True)
 
-    result = await client.calculate_indicator(
-        asset, "RSI", params={"period": 14}, timeframe=60
-    )
+    result = await client.calculate_indicator(asset, "RSI", params={"period": 14}, timeframe=60)
     print(f"RSI: {result}")
 ```
 
@@ -830,6 +830,8 @@ async def trade_example(client):
 
 ```python
 import csv
+
+
 async def history_export(client):
     candles = await client.get_historical_candles(
         "EURUSD",
@@ -857,7 +859,8 @@ async def live_rsi(client):
         print(f"RSI={val:.2f}  →  {signal}")
 
     await client.subscribe_indicator(
-        "EURUSD", "RSI",
+        "EURUSD",
+        "RSI",
         params={"period": 14},
         callback=on_rsi,
         timeframe=60,

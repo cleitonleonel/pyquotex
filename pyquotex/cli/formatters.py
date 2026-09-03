@@ -1,4 +1,5 @@
 """Output formatting helpers shared by CLI commands."""
+
 import csv
 from datetime import datetime
 from typing import Any
@@ -23,12 +24,8 @@ def _balance_table(profile: Any) -> Table:
     table.add_column("Account", style="cyan", no_wrap=True)
     table.add_column("Balance", justify="right", style="bold green")
     table.add_column("Currency", style="bright_white")
-    table.add_row(
-        "Demo", f"{profile.demo_balance:,.2f}", profile.currency_symbol or ""
-    )
-    table.add_row(
-        "Live", f"{profile.live_balance:,.2f}", profile.currency_symbol or ""
-    )
+    table.add_row("Demo", f"{profile.demo_balance:,.2f}", profile.currency_symbol or "")
+    table.add_row("Live", f"{profile.live_balance:,.2f}", profile.currency_symbol or "")
     return table
 
 
@@ -65,10 +62,7 @@ def _print_candles_table(
         h = c.get("max", c.get("high", 0))
         lo = c.get("min", c.get("low", 0))
         cl = c.get("close", 0)
-        direction = (
-            "[green]▲[/]" if float(cl) >= float(o)
-            else "[red]▼[/]"
-        )
+        direction = "[green]▲[/]" if float(cl) >= float(o) else "[red]▼[/]"
         table.add_row(
             ts_str,
             f"{float(o):.5f}",

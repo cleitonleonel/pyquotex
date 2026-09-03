@@ -17,6 +17,7 @@ Reconnect flow:
 3. On unexpected close or watchdog timeout, the loop sleeps using
    :func:`pyquotex._api._waits.backoff_sleep` and reconnects.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -135,7 +136,7 @@ class WebsocketClient:
             ssl=ssl,
             ping_interval=24,
             ping_timeout=20,
-            max_size=2 ** 23,
+                max_size=2 ** 23,
             compression=None,
         ) as ws:
             self._ws = ws
@@ -186,7 +187,8 @@ class WebsocketClient:
                 if silent_for > timeout:
                     logger.warning(
                         "WebSocket idle for %.1fs (>%ds); recycling.",
-                        silent_for, timeout,
+                        silent_for,
+                        timeout,
                     )
                     try:
                         await self._ws.close(code=4000, reason="watchdog-stale")
@@ -216,7 +218,9 @@ class WebsocketClient:
             except Exception as e:
                 logger.warning(
                     "Failed to replay subscription kind=%s asset=%s: %s",
-                    sub.kind, sub.asset, e,
+                    sub.kind,
+                    sub.asset,
+                    e,
                 )
 
     async def _replay_one(self, sub: Any) -> None:

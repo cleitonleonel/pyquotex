@@ -4,6 +4,7 @@ This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.account_is_demo, etc. — all set up in Quotex.__init__
 inside pyquotex/stable_api.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,12 +24,7 @@ class TradingMixin:
     """Methods related to placing trades and reading their results."""
 
     async def buy(
-            self,
-            amount: float,
-            asset: str,
-            direction: str,
-            duration: int,
-            time_mode: str = "TIME"
+            self, amount: float, asset: str, direction: str, duration: int, time_mode: str = "TIME"
     ) -> tuple[bool, Any]:
         """
         Places a buy order for a specified asset, direction, and duration.
@@ -69,22 +65,13 @@ class TradingMixin:
         if self.api.state.check_websocket_if_error:
             return False, self.api.state.websocket_error_reason
 
-        if (
-                event_data
-                and isinstance(event_data, dict)
-                and "error" in event_data
-        ):
+        if event_data and isinstance(event_data, dict) and "error" in event_data:
             return False, event_data["error"]
 
         return True, event_data
 
     async def open_pending(
-            self,
-            amount: float,
-            asset: str,
-            direction: str,
-            duration: int,
-            open_time: str | None = None
+            self, amount: float, asset: str, direction: str, duration: int, open_time: str | None = None
     ) -> tuple[bool, Any]:
         """Places a pending order to be executed at a specific future time."""
         if self.api is None:
@@ -95,16 +82,9 @@ class TradingMixin:
         user_settings = await self.get_profile()
         offset_zone = user_settings.offset if user_settings else 0
         open_time_int = int(
-            expiration.get_next_timeframe(
-                int(time.time()),
-                offset_zone,
-                duration,
-                open_time
-            )
+            expiration.get_next_timeframe(int(time.time()), offset_zone, duration, open_time)
         )
-        await self.api.open_pending(
-            amount, asset, direction, duration, open_time_int
-        )
+        await self.api.open_pending(amount, asset, direction, duration, open_time_int)
         if self.api.pending_id is None:
             try:
                 await self.api.slots.pending_confirm.wait(timeout=DEFAULT_TIMEOUT)
@@ -119,16 +99,12 @@ class TradingMixin:
         status_buy = False
         if self.api.pending_id is not None:
             status_buy = True
-            await self.api.instruments_follow(
-                amount, asset, direction, duration, open_time_int
-            )
+            await self.api.instruments_follow(amount, asset, direction, duration, open_time_int)
 
         return status_buy, self.api.pending_successful
 
     async def sell_option(
-            self,
-            options_ids: list[str] | str,
-            timeout: int = DEFAULT_TIMEOUT
+            self, options_ids: list[str] | str, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
         """Sells active options back to the broker before expiration."""
         if self.api is None:
@@ -152,9 +128,7 @@ class TradingMixin:
             raise TimeoutError("Timeout waiting for sell option response.")
         return self.api.sold_options_respond
 
-    async def check_win(
-            self, order_id: str | int, duration: int = 0
-    ) -> tuple[str, float]:
+    async def check_win(self, order_id: str | int, duration: int = 0) -> tuple[str, float]:
         """Checks if a trade operation resulted in a win based on its ID."""
         if self.api is None:
             return "loss", 0.0

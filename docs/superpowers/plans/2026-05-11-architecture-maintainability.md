@@ -93,6 +93,7 @@ Run once before the refactor and commit tests/fixtures/api_surface.json.
 The regression test in tests/test_api_surface.py compares the live class
 against this snapshot.
 """
+
 import inspect
 import json
 from pathlib import Path
@@ -195,6 +196,7 @@ Create `tests/test_api_surface.py`:
 
 ```python
 """Regression test: Quotex's public surface must not shrink during refactors."""
+
 import inspect
 import json
 from pathlib import Path
@@ -241,14 +243,10 @@ def test_public_method_params_unchanged():
             continue
         if name not in current:
             continue  # caught by previous test
-        baseline_params = [
-            p["name"] for p in baseline_entry["signature"]["parameters"]
-        ]
+        baseline_params = [p["name"] for p in baseline_entry["signature"]["parameters"]]
         current_params = current[name].get("params", [])
         if baseline_params != current_params:
-            diffs.append(
-                f"{name}: baseline={baseline_params} current={current_params}"
-            )
+            diffs.append(f"{name}: baseline={baseline_params} current={current_params}")
     assert not diffs, "Parameter signatures changed:\n" + "\n".join(diffs)
 ```
 
@@ -281,8 +279,10 @@ Create `tests/test_import_compat.py`:
 ```python
 """Verify legacy import paths continue to resolve."""
 
+
 def test_stable_api_quotex_importable():
     from pyquotex.stable_api import Quotex
+
     assert Quotex is not None
     assert hasattr(Quotex, "buy")
     assert hasattr(Quotex, "get_balance")
@@ -291,17 +291,20 @@ def test_stable_api_quotex_importable():
 
 def test_quotex_api_importable():
     from pyquotex.api import QuotexAPI
+
     assert QuotexAPI is not None
 
 
 def test_account_type_importable():
     from pyquotex.utils.account_type import AccountType
+
     assert AccountType.DEMO is not None
     assert AccountType.REAL is not None
 
 
 def test_indicators_importable():
     from pyquotex.utils.indicators import TechnicalIndicators
+
     assert TechnicalIndicators is not None
 ```
 
@@ -333,6 +336,7 @@ Create `tests/test_cli_smoke.py`:
 
 ```python
 """Smoke tests: CLI entrypoints respond to --help."""
+
 import subprocess
 import sys
 
@@ -382,9 +386,10 @@ Confirm it routes to `app.py`'s parser. If it does not list commands, mark this 
 
 ```python
 import pytest
+
+
 @pytest.mark.skip(reason="python -m pyquotex wired up in Phase 4")
-def test_module_invocation_help_runs():
-    ...
+def test_module_invocation_help_runs(): ...
 ```
 
 - [ ] **Step 4: Re-run**
@@ -418,6 +423,7 @@ Append to `tests/test_import_compat.py`:
 ```python
 def test_exceptions_importable():
     from pyquotex.exceptions import QuotexTimeoutError
+
     assert issubclass(QuotexTimeoutError, Exception)
 ```
 
@@ -506,6 +512,7 @@ Create `tests/test_waits.py`:
 
 ```python
 """Unit tests for WaitableSlot and wait_until."""
+
 import asyncio
 import pytest
 
@@ -591,6 +598,7 @@ wait_until() exists for cases where the desired state cannot be signaled
 from the WS handler. It still uses short polling internally but enforces
 a hard timeout.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -636,6 +644,7 @@ async def wait_until(
     poll_interval: float = 0.05,
 ) -> None:
     """Poll predicate() until truthy or raise asyncio.TimeoutError."""
+
     async def _loop() -> None:
         while not predicate():
             await asyncio.sleep(poll_interval)
@@ -805,9 +814,10 @@ In `pyquotex/api.py`, find the line:
 Replace with:
 
 ```python
-        self.event_registry = EventRegistry()
-        from pyquotex._api._waits import SlotRegistry
-        self.slots = SlotRegistry()
+self.event_registry = EventRegistry()
+from pyquotex._api._waits import SlotRegistry
+
+self.slots = SlotRegistry()
 ```
 
 (Inline import avoids a circular import risk; `_waits.py` does not import from `pyquotex.api`.)
@@ -943,14 +953,13 @@ In `pyquotex/stable_api.py`, locate the `get_balance` method body. Replace the p
 with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        if self.api.account_balance is None:
-            try:
-                await self.api.slots.balance.wait(timeout=timeout)
-            except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"get_balance timed out after {timeout}s"
-                )
+from pyquotex.exceptions import QuotexTimeoutError
+
+if self.api.account_balance is None:
+    try:
+        await self.api.slots.balance.wait(timeout=timeout)
+    except asyncio.TimeoutError:
+        raise QuotexTimeoutError(f"get_balance timed out after {timeout}s")
 ```
 
 Important: keep the existing `timeout` parameter handling and surrounding logic intact. The change is only inside the polling loop region.
@@ -1014,14 +1023,13 @@ In `pyquotex/stable_api.py`, locate line 658. Replace:
 with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        if self.api.training_balance_edit_request is None:
-            try:
-                await self.api.slots.training_balance_edit.wait(timeout=DEFAULT_TIMEOUT)
-            except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"edit_practice_balance timed out after {DEFAULT_TIMEOUT}s"
-                )
+from pyquotex.exceptions import QuotexTimeoutError
+
+if self.api.training_balance_edit_request is None:
+    try:
+        await self.api.slots.training_balance_edit.wait(timeout=DEFAULT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise QuotexTimeoutError(f"edit_practice_balance timed out after {DEFAULT_TIMEOUT}s")
 ```
 
 - [ ] **Step 4: Run all unit tests**
@@ -1082,14 +1090,13 @@ In `pyquotex/stable_api.py` `buy()` method, locate the polling loop (around line
 with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        if self.api.buy_id is None:
-            try:
-                await self.api.slots.buy_confirm.wait(timeout=DEFAULT_TIMEOUT)
-            except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"buy timed out after {DEFAULT_TIMEOUT}s"
-                )
+from pyquotex.exceptions import QuotexTimeoutError
+
+if self.api.buy_id is None:
+    try:
+        await self.api.slots.buy_confirm.wait(timeout=DEFAULT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise QuotexTimeoutError(f"buy timed out after {DEFAULT_TIMEOUT}s")
 ```
 
 - [ ] **Step 5: Replace consumer polling for `open_pending`**
@@ -1161,14 +1168,13 @@ In `pyquotex/stable_api.py` around line 533, replace:
 with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        if self.api.candle_v2_data.get(asset) is None:
-            try:
-                await self.api.slots.candle_v2(asset).wait(timeout=DEFAULT_TIMEOUT)
-            except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"get_candle_v2({asset}) timed out after {DEFAULT_TIMEOUT}s"
-                )
+from pyquotex.exceptions import QuotexTimeoutError
+
+if self.api.candle_v2_data.get(asset) is None:
+    try:
+        await self.api.slots.candle_v2(asset).wait(timeout=DEFAULT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise QuotexTimeoutError(f"get_candle_v2({asset}) timed out after {DEFAULT_TIMEOUT}s")
 ```
 
 - [ ] **Step 4: Run tests**
@@ -1214,14 +1220,13 @@ In `pyquotex/stable_api.py` around line 509, replace:
 with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        if self.api.historical_candles is None:
-            try:
-                await self.api.slots.historical_ready.wait(timeout=DEFAULT_TIMEOUT)
-            except asyncio.TimeoutError:
-                raise QuotexTimeoutError(
-                    f"historical_candles wait timed out after {DEFAULT_TIMEOUT}s"
-                )
+from pyquotex.exceptions import QuotexTimeoutError
+
+if self.api.historical_candles is None:
+    try:
+        await self.api.slots.historical_ready.wait(timeout=DEFAULT_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise QuotexTimeoutError(f"historical_candles wait timed out after {DEFAULT_TIMEOUT}s")
 ```
 
 - [ ] **Step 3: Run tests**
@@ -1271,15 +1276,14 @@ Use `wait_until(lambda: <predicate over self.api.realtime_candles[asset]>, timeo
 Use the keyed `win_result` slot in `SlotRegistry`. Find the WS handler that updates win/loss state and fire `self.slots.win_result(operation_id).set(result)`. Replace polling with:
 
 ```python
-        from pyquotex.exceptions import QuotexTimeoutError
-        try:
-            result = await self.api.slots.win_result(operation_id).wait(timeout=timeout)
-        except asyncio.TimeoutError:
-            raise QuotexTimeoutError(
-                f"check_win({operation_id}) timed out after {timeout}s"
-            )
-        finally:
-            self.api.slots.release_win_result(operation_id)
+from pyquotex.exceptions import QuotexTimeoutError
+
+try:
+    result = await self.api.slots.win_result(operation_id).wait(timeout=timeout)
+except asyncio.TimeoutError:
+    raise QuotexTimeoutError(f"check_win({operation_id}) timed out after {timeout}s")
+finally:
+    self.api.slots.release_win_result(operation_id)
 ```
 
 - [ ] **Step 5: Run all tests**
@@ -1340,7 +1344,7 @@ async def backoff_sleep(
 
     attempt is zero-indexed (0, 1, 2, ...).
     """
-    delay = min(cap, base * (2 ** attempt))
+    delay = min(cap, base * (2**attempt))
     delay = delay * (1.0 + random.uniform(-jitter, jitter))
     await asyncio.sleep(max(0.0, delay))
 ```
@@ -1427,6 +1431,7 @@ Create `pyquotex/_api/account.py`:
 This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.session_data, etc. (set up in Quotex.__init__).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -1507,6 +1512,7 @@ Create `pyquotex/_api/trading.py`:
 
 ```python
 """Trading methods (buy, sell, pending, results) extracted from Quotex."""
+
 from __future__ import annotations
 
 import asyncio
@@ -1574,6 +1580,7 @@ Create `pyquotex/_api/history.py`:
 
 ```python
 """Candle and historical data methods extracted from Quotex."""
+
 from __future__ import annotations
 
 import asyncio
@@ -1639,6 +1646,7 @@ Create `pyquotex/_api/realtime.py`:
 
 ```python
 """Realtime streaming methods extracted from Quotex."""
+
 from __future__ import annotations
 
 import asyncio
@@ -1699,6 +1707,7 @@ Create `pyquotex/_api/assets.py`:
 
 ```python
 """Asset metadata and payout methods extracted from Quotex."""
+
 from __future__ import annotations
 
 import asyncio
@@ -1784,6 +1793,7 @@ Read [app.py](../../../app.py) lines 99-360 to confirm the bounds of `make_parse
 
 ```python
 """argparse parser construction for pyquotex CLI."""
+
 import argparse
 
 # ... copy make_parser() and its helpers verbatim ...
@@ -1858,6 +1868,7 @@ Create `pyquotex/cli/commands/__init__.py`:
 
 ```python
 """Registry mapping CLI command names to async handler functions."""
+
 from pyquotex.cli.commands.account import (
     cmd_login,
     cmd_balance,
@@ -1938,6 +1949,7 @@ For each row in the mapping table, create the corresponding file (e.g., `pyquote
 
 ```python
 """<group> CLI command handlers."""
+
 import argparse
 from rich.console import Console
 from rich.table import Table
@@ -1998,6 +2010,7 @@ Create `pyquotex/cli/__main__.py`:
 
 ```python
 """pyquotex CLI entry point. Run with `python -m pyquotex` or via app.py."""
+
 import asyncio
 import sys
 
@@ -2083,6 +2096,7 @@ Replace the entire content of `app.py` with:
 
 Kept so that documented usage `python app.py <command>` continues to work.
 """
+
 from pyquotex.cli.__main__ import cli_main
 
 if __name__ == "__main__":

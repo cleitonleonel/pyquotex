@@ -24,7 +24,23 @@ def test_ema_calculation():
 
 
 def test_rsi_calculation():
-    prices = [44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08, 45.89, 46.03, 45.61, 46.28, 46.28]
+    prices = [
+        44.34,
+        44.09,
+        44.15,
+        43.61,
+        44.33,
+        44.83,
+        45.10,
+        45.42,
+        45.84,
+        46.08,
+        45.89,
+        46.03,
+        45.61,
+        46.28,
+        46.28,
+    ]
     period = 14
     result = TechnicalIndicators.calculate_rsi(prices, period)
     assert len(result) > 0

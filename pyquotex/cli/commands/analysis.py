@@ -1,4 +1,5 @@
 """Analysis CLI command handlers."""
+
 import argparse
 import asyncio
 from datetime import datetime
@@ -80,17 +81,13 @@ async def cmd_history(client: Quotex, args: argparse.Namespace) -> None:
     for t in all_trades:
         profit = float(t.get("profitAmount", 0))
         result_str = (
-            "[green]WIN[/]" if profit > 0
-            else "[red]LOSS[/]" if profit < 0
-            else "[dim]DRAW[/]"
+            "[green]WIN[/]" if profit > 0 else "[red]LOSS[/]" if profit < 0 else "[dim]DRAW[/]"
         )
         direction = t.get("command", t.get("direction", "?")).upper()
         dir_color = "green" if direction in ("CALL", "BUY", "UP") else "red"
         ts = t.get("openTimestamp", t.get("createdAt", ""))
         try:
-            ts_str = datetime.fromtimestamp(int(ts)).strftime(
-                "%m-%d %H:%M"
-            ) if ts else "—"
+            ts_str = datetime.fromtimestamp(int(ts)).strftime("%m-%d %H:%M") if ts else "—"
         except Exception:
             ts_str = str(ts)
         table.add_row(
@@ -116,8 +113,10 @@ async def cmd_indicator(client: Quotex, args: argparse.Namespace) -> None:
         f"[yellow]{asset}[/] (period={args.period}, tf={args.timeframe}s)"
     )
     with Progress(
-            SpinnerColumn(), TextColumn("[cyan]Fetching history + computing…"),
-            transient=True, console=console
+            SpinnerColumn(),
+            TextColumn("[cyan]Fetching history + computing…"),
+            transient=True,
+            console=console,
     ) as prog:
         prog.add_task("indicator")
         result = await client.calculate_indicator(
@@ -152,8 +151,7 @@ async def cmd_monitor(client: Quotex, args: argparse.Namespace) -> None:
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
     console.print(
-        f"[cyan]Monitoring[/] [bold]{asset}[/] "
-        f"[dim](period={args.period}s — Ctrl+C to stop)[/]"
+        f"[cyan]Monitoring[/] [bold]{asset}[/] [dim](period={args.period}s — Ctrl+C to stop)[/]"
     )
     await client.start_candles_stream(asset, args.period)
     prev_price = None
@@ -167,8 +165,10 @@ async def cmd_monitor(client: Quotex, args: argparse.Namespace) -> None:
                 if prev_price is not None:
                     delta = float(price) - float(prev_price)
                     change = (
-                        f" [green]+{delta:.5f}[/]" if delta > 0
-                        else f" [red]{delta:.5f}[/]" if delta < 0
+                        f" [green]+{delta:.5f}[/]"
+                        if delta > 0
+                        else f" [red]{delta:.5f}[/]"
+                        if delta < 0
                         else " [dim]—[/]"
                     )
                 console.print(
@@ -193,13 +193,15 @@ async def cmd_strategy(client: Quotex, args: argparse.Namespace) -> None:
         asset=args.asset,
         period=args.period,
     )
-    console.print(Panel(
-        f"[bold cyan]Asset:[/]      {args.asset}\n"
-        f"[bold cyan]Period:[/]     {args.period}s\n"
-        f"[bold cyan]Auto-trade:[/] {'YES ⚠ DEMO ONLY' if args.auto_trade else 'NO (signal only)'}",
-        title="🧠 [bold]Triple Confirmation Strategy[/]",
-        border_style="magenta",
-        box=box.ROUNDED,
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Asset:[/]      {args.asset}\n"
+            f"[bold cyan]Period:[/]     {args.period}s\n"
+            f"[bold cyan]Auto-trade:[/] {'YES ⚠ DEMO ONLY' if args.auto_trade else 'NO (signal only)'}",
+            title="🧠 [bold]Triple Confirmation Strategy[/]",
+            border_style="magenta",
+            box=box.ROUNDED,
+            expand=False,
+        )
+    )
     await strategy.run(auto_trade=args.auto_trade)

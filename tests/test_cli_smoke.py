@@ -1,4 +1,5 @@
 """Smoke tests: CLI entrypoints respond to --help."""
+
 import subprocess
 import sys
 

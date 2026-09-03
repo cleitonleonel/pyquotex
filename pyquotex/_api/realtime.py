@@ -4,6 +4,7 @@ This mixin is composed into Quotex via multiple inheritance. It uses
 self.api, self.codes_asset, etc. — all set up in Quotex.__init__ inside
 pyquotex/stable_api.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,7 @@ class RealtimeMixin:
             indicator: str,
             params: dict[str, Any] | None = None,
             history_size: int = 3600,
-            timeframe: int = 60
+            timeframe: int = 60,
     ) -> dict[str, Any]:
         """Calcula indicadores técnicos para um ativo dado."""
         if params is None:
@@ -38,23 +39,14 @@ class RealtimeMixin:
 
         valid_timeframes = [60, 300, 900, 1800, 3600, 7200, 14400, 86400]
         if timeframe not in valid_timeframes:
-            return {
-                "error": (
-                    f"Timeframe inválido. "
-                    f"Valores permitidos: {valid_timeframes}"
-                )
-            }
+            return {"error": (f"Timeframe inválido. Valores permitidos: {valid_timeframes}")}
 
         adjusted_history = max(history_size, timeframe * 50)
 
-        candles = await self.get_candles(
-            asset, time.time(), adjusted_history, timeframe
-        )
+        candles = await self.get_candles(asset, time.time(), adjusted_history, timeframe)
 
         if not candles:
-            return {
-                "error": f"Não há dados disponíveis para o ativo {asset}"
-            }
+            return {"error": f"Não há dados disponíveis para o ativo {asset}"}
 
         prices = [float(candle["close"]) for candle in candles]
         highs = [float(candle["high"]) for candle in candles]
@@ -73,9 +65,7 @@ class RealtimeMixin:
                     "current": values[-1] if values else None,
                     "history_size": len(values),
                     "timeframe": timeframe,
-                    "timestamps": (
-                        timestamps[-len(values):] if values else []
-                    )
+                    "timestamps": (timestamps[-len(values):] if values else []),
                 }
 
             elif indicator == "MACD":
@@ -87,9 +77,7 @@ class RealtimeMixin:
                 )
                 macd_data["timeframe"] = timeframe
                 macd_data["timestamps"] = (
-                    timestamps[-len(macd_data["macd"]):]
-                    if macd_data["macd"]
-                    else []
+                    timestamps[-len(macd_data["macd"]):] if macd_data["macd"] else []
                 )
                 return macd_data
 
@@ -101,9 +89,7 @@ class RealtimeMixin:
                     "current": values[-1] if values else None,
                     "history_size": len(values),
                     "timeframe": timeframe,
-                    "timestamps": (
-                        timestamps[-len(values):] if values else []
-                    )
+                    "timestamps": (timestamps[-len(values):] if values else []),
                 }
 
             elif indicator == "EMA":
@@ -114,22 +100,16 @@ class RealtimeMixin:
                     "current": values[-1] if values else None,
                     "history_size": len(values),
                     "timeframe": timeframe,
-                    "timestamps": (
-                        timestamps[-len(values):] if values else []
-                    )
+                    "timestamps": (timestamps[-len(values):] if values else []),
                 }
 
             elif indicator == "BOLLINGER":
                 period = params.get("period", 20)
                 num_std = params.get("std", 2)
-                bb_data = indicators.calculate_bollinger_bands(
-                    prices, period, num_std
-                )
+                bb_data = indicators.calculate_bollinger_bands(prices, period, num_std)
                 bb_data["timeframe"] = timeframe
                 bb_data["timestamps"] = (
-                    timestamps[-len(bb_data["middle"]):]
-                    if bb_data["middle"]
-                    else []
+                    timestamps[-len(bb_data["middle"]):] if bb_data["middle"] else []
                 )
                 return bb_data
 
@@ -141,9 +121,7 @@ class RealtimeMixin:
                 )
                 stoch_data["timeframe"] = timeframe
                 stoch_data["timestamps"] = (
-                    timestamps[-len(stoch_data["k"]):]
-                    if stoch_data["k"]
-                    else []
+                    timestamps[-len(stoch_data["k"]):] if stoch_data["k"] else []
                 )
                 return stoch_data
 
@@ -155,21 +133,15 @@ class RealtimeMixin:
                     "current": values[-1] if values else None,
                     "history_size": len(values),
                     "timeframe": timeframe,
-                    "timestamps": (
-                        timestamps[-len(values):] if values else []
-                    )
+                    "timestamps": (timestamps[-len(values):] if values else []),
                 }
 
             elif indicator == "ADX":
                 period = params.get("period", 14)
-                adx_data = indicators.calculate_adx(
-                    highs, lows, prices, period
-                )
+                adx_data = indicators.calculate_adx(highs, lows, prices, period)
                 adx_data["timeframe"] = timeframe
                 adx_data["timestamps"] = (
-                    timestamps[-len(adx_data["adx"]):]
-                    if adx_data["adx"]
-                    else []
+                    timestamps[-len(adx_data["adx"]):] if adx_data["adx"] else []
                 )
                 return adx_data
 
@@ -182,9 +154,7 @@ class RealtimeMixin:
                 )
                 ichimoku_data["timeframe"] = timeframe
                 ichimoku_data["timestamps"] = (
-                    timestamps[-len(ichimoku_data["tenkan"]):]
-                    if ichimoku_data["tenkan"]
-                    else []
+                    timestamps[-len(ichimoku_data["tenkan"]):] if ichimoku_data["tenkan"] else []
                 )
                 return ichimoku_data
 
@@ -200,7 +170,7 @@ class RealtimeMixin:
             indicator: str,
             params: dict[str, Any] | None = None,
             callback: Callable[[dict[str, Any]], Any] | None = None,
-            timeframe: int = 60
+            timeframe: int = 60,
     ) -> None:
         """
         Subscribes to real-time indicator updates with high performance.
@@ -217,8 +187,15 @@ class RealtimeMixin:
 
         indicator_upper = indicator.upper()
         min_periods = {
-            "RSI": 14, "MACD": 26, "BOLLINGER": 20, "STOCHASTIC": 14,
-            "ADX": 14, "ATR": 14, "SMA": 20, "EMA": 20, "ICHIMOKU": 52
+            "RSI": 14,
+            "MACD": 26,
+            "BOLLINGER": 20,
+            "STOCHASTIC": 14,
+            "ADX": 14,
+            "ATR": 14,
+            "SMA": 20,
+            "EMA": 20,
+            "ICHIMOKU": 52,
         }
         required_periods = min_periods.get(indicator_upper, 20)
 
@@ -228,10 +205,7 @@ class RealtimeMixin:
             # 1. Initial Data Loading
             # Fetch history to satisfy the indicator's window
             history = await self.get_candles(
-                asset,
-                time.time(),
-                timeframe * (required_periods + 20),
-                timeframe
+                asset, time.time(), timeframe * (required_periods + 20), timeframe
             )
 
             if not history:
@@ -257,9 +231,7 @@ class RealtimeMixin:
                         )
                     except TimeoutError:
                         # Check if data arrived but event was missed
-                        msg_data = self.api.candle_generated_check[
-                            str(asset)
-                        ].get(timeframe)
+                        msg_data = self.api.candle_generated_check[str(asset)].get(timeframe)
 
                     if not msg_data:
                         await asyncio.sleep(1)
@@ -290,7 +262,7 @@ class RealtimeMixin:
                         "time": last_ts,
                         "timeframe": timeframe,
                         "asset": asset,
-                        "indicator": indicator_upper
+                        "indicator": indicator_upper,
                     }
 
                     if indicator_upper == "RSI":
@@ -308,16 +280,12 @@ class RealtimeMixin:
                     elif indicator_upper == "BOLLINGER":
                         period = params.get("period", 20)
                         std = params.get("std", 2)
-                        result.update(
-                            ti.calculate_bollinger_bands(prices, period, std)
-                        )
+                        result.update(ti.calculate_bollinger_bands(prices, period, std))
 
                     elif indicator_upper == "STOCHASTIC":
                         k = params.get("k_period", 14)
                         d = params.get("d_period", 3)
-                        result.update(
-                            ti.calculate_stochastic(prices, highs, lows, k, d)
-                        )
+                        result.update(ti.calculate_stochastic(prices, highs, lows, k, d))
 
                     elif indicator_upper == "SMA":
                         period = params.get("period", 20)
@@ -333,9 +301,7 @@ class RealtimeMixin:
 
                     elif indicator_upper == "ADX":
                         period = params.get("period", 14)
-                        result.update(
-                            ti.calculate_adx(highs, lows, prices, period)
-                        )
+                        result.update(ti.calculate_adx(highs, lows, prices, period))
 
                     elif indicator_upper == "ATR":
                         period = params.get("period", 14)
@@ -347,9 +313,7 @@ class RealtimeMixin:
                         t = params.get("tenkan", 9)
                         k = params.get("kijun", 26)
                         s = params.get("senkou", 52)
-                        result.update(
-                            ti.calculate_ichimoku(highs, lows, t, k, s)
-                        )
+                        result.update(ti.calculate_ichimoku(highs, lows, t, k, s))
 
                     else:
                         result["error"] = f"Indicator {indicator} not supported"
@@ -367,9 +331,7 @@ class RealtimeMixin:
             except Exception:
                 pass
 
-    async def start_candles_stream(
-            self, asset: str = "EURUSD", period: int = 0
-    ) -> None:
+    async def start_candles_stream(self, asset: str = "EURUSD", period: int = 0) -> None:
         """Start streaming candle data for a specified asset."""
         if self.api:
             self.api.current_asset = asset
@@ -390,9 +352,7 @@ class RealtimeMixin:
         if self.api:
             await self.api.signals_subscribe()
 
-    async def opening_closing_current_candle(
-            self, asset: str, period: int = 0
-    ) -> dict[str, Any]:
+    async def opening_closing_current_candle(self, asset: str, period: int = 0) -> dict[str, Any]:
         """Calculates the opening, closing, and remaining time for the
         current candle."""
         candles_data: dict[int, Any] = {}
@@ -402,23 +362,19 @@ class RealtimeMixin:
         # This part might need adjustment depending on what
         # get_realtime_candles returns
         aggregate = aggregate_candle(
-            candles_tick if isinstance(candles_tick, dict) else {},
-            candles_data
+            candles_tick if isinstance(candles_tick, dict) else {}, candles_data
         )
         logger.debug("Aggregated candle: %s", aggregate)
         if not aggregate:
             return {}
         candles_dict = list(aggregate.values())[0]
-        candles_dict['opening'] = candles_dict.pop('timestamp')
-        candles_dict['closing'] = candles_dict['opening'] + period
-        candles_dict['remaining'] = candles_dict['closing'] - int(time.time())
+        candles_dict["opening"] = candles_dict.pop("timestamp")
+        candles_dict["closing"] = candles_dict["opening"] + period
+        candles_dict["remaining"] = candles_dict["closing"] - int(time.time())
         return candles_dict
 
     async def start_realtime_price(
-            self,
-            asset: str,
-            period: int = 0,
-            timeout: int = DEFAULT_TIMEOUT
+            self, asset: str, period: int = 0, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
         """Starts following real-time price for an asset."""
         if self.api is None:
@@ -430,16 +386,11 @@ class RealtimeMixin:
             if self.api.realtime_price.get(asset):
                 return self.api.realtime_price
             if time.time() - start > timeout:
-                raise TimeoutError(
-                    f"Timeout waiting for realtime price data for {asset}."
-                )
+                raise TimeoutError(f"Timeout waiting for realtime price data for {asset}.")
             await asyncio.sleep(0.2)
 
     async def start_realtime_sentiment(
-            self,
-            asset: str,
-            period: int = 0,
-            timeout: int = DEFAULT_TIMEOUT
+            self, asset: str, period: int = 0, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
         """Starts following real-time trader sentiment for an asset."""
         if self.api is None:
@@ -451,16 +402,11 @@ class RealtimeMixin:
             if self.api.realtime_sentiment.get(asset):
                 return self.api.realtime_sentiment[asset]
             if time.time() - start > timeout:
-                raise TimeoutError(
-                    f"Timeout waiting for realtime sentiment data for {asset}."
-                )
+                raise TimeoutError(f"Timeout waiting for realtime sentiment data for {asset}.")
             await asyncio.sleep(0.2)
 
     async def start_realtime_candle(
-            self,
-            asset: str,
-            period: int = 0,
-            timeout: int = DEFAULT_TIMEOUT
+            self, asset: str, period: int = 0, timeout: int = DEFAULT_TIMEOUT
     ) -> dict[int, Any]:
         """Starts following and processing real-time candle ticks for
         an asset."""
@@ -477,14 +423,10 @@ class RealtimeMixin:
                     return process_tick(candle_data, period, data)
                 return data
             if time.time() - start > timeout:
-                raise TimeoutError(
-                    f"Timeout waiting for realtime candle data for {asset}."
-                )
+                raise TimeoutError(f"Timeout waiting for realtime candle data for {asset}.")
             await asyncio.sleep(0.2)
 
-    async def get_realtime_candles(
-            self, asset: str
-    ) -> list[Any] | dict[Any, Any]:
+    async def get_realtime_candles(self, asset: str) -> list[Any] | dict[Any, Any]:
         """Retrieves current real-time price history for an asset from
         shared state."""
         if self.api:
@@ -531,13 +473,11 @@ class RealtimeMixin:
         try:
             await self.api.follow_candle(self.codes_asset[asset])
         except Exception as e:
-            logger.error('**error** start_candles_stream reconnect: %s', e)
+            logger.error("**error** start_candles_stream reconnect: %s", e)
             await self.connect()
         while True:
             if time.time() - start > 20:
-                logger.error(
-                    '**error** start_candles_one_stream late for 20 sec'
-                )
+                logger.error("**error** start_candles_one_stream late for 20 sec")
                 return False
             try:
                 if self.api.candle_generated_check[str(asset)][int(size)]:
@@ -560,11 +500,11 @@ class RealtimeMixin:
         self.api._track_subscription("candle_all_size", asset)
         start = time.time()
         while await self.check_connect():
-            if self.api is None: break
+            if self.api is None:
+                break
             if time.time() - start > 20:
                 logger.error(
-                    f'**error** fail {asset} '
-                    'start_candles_all_size_stream late for 10 sec'
+                    f"**error** fail {asset} start_candles_all_size_stream late for 10 sec"
                 )
                 return False
             try:
@@ -577,16 +517,12 @@ class RealtimeMixin:
                 if hasattr(self.api, "subscribe_all_size"):
                     self.api.subscribe_all_size(self.codes_asset[asset])
             except Exception as e:
-                logger.error(
-                    '**error** start_candles_all_size_stream reconnect: %s', e
-                )
+                logger.error("**error** start_candles_all_size_stream reconnect: %s", e)
                 await self.connect()
             await asyncio.sleep(0.2)
         return False
 
-    async def start_mood_stream(
-            self, asset: str, instrument: str = "turbo-option"
-    ) -> None:
+    async def start_mood_stream(self, asset: str, instrument: str = "turbo-option") -> None:
         """Internal helper to start the mood (sentiment) stream."""
         if self.api is None:
             return
@@ -595,7 +531,8 @@ class RealtimeMixin:
             self.subscribe_mood.append(asset)
         self.api._track_subscription("mood", asset, instrument=instrument)
         while True:
-            if self.api is None: break
+            if self.api is None:
+                break
             if hasattr(self.api, "subscribe_Traders_mood"):
                 self.api.subscribe_Traders_mood(asset, instrument)
             try:

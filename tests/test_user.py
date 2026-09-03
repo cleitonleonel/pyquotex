@@ -9,20 +9,19 @@ USER_AGENT = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 F
 
 
 class QuotexExchange:
-
     def __init__(self, **kwargs):
         # Initialize the Quotex client using the new library
         self.client = Quotex(
-            email=kwargs.get('email'),
-            password=kwargs.get('password'),
-            lang=kwargs.get('lang', 'pt'),  # Language default set to Portuguese
+            email=kwargs.get("email"),
+            password=kwargs.get("password"),
+            lang=kwargs.get("lang", "pt"),  # Language default set to Portuguese
         )
         self.client.set_session(user_agent=USER_AGENT)
         self.client.debug_ws_enable = True
         self.connected = False
-        self.max_retries = int(kwargs.get('retry', 5))  # Retry attempts for connection
-        self.practice = kwargs.get('practice', 'yes').lower() == 'yes'  # Practice mode
-        self.otc = kwargs.get('otc', 'yes').lower() == 'yes'  # OTC mode
+        self.max_retries = int(kwargs.get("retry", 5))  # Retry attempts for connection
+        self.practice = kwargs.get("practice", "yes").lower() == "yes"  # Practice mode
+        self.otc = kwargs.get("otc", "yes").lower() == "yes"  # OTC mode
 
     async def connect(self):
         return await self.client.connect()
@@ -40,11 +39,7 @@ class QuotexExchange:
 @pytest.mark.asyncio
 async def test_user():
     email, password = credentials()
-    params = {
-        "email": email,
-        "password": password,
-        "lang": "pt"
-    }
+    params = {"email": email, "password": password, "lang": "pt"}
     trade = QuotexExchange(**params)
     await trade.connect()
     is_connected = await trade.check_connect()

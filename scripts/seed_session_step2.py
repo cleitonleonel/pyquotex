@@ -3,6 +3,7 @@
 Usage:
     PYTHONPATH=. python scripts/seed_session_step2.py <CODE>
 """
+
 from __future__ import annotations
 
 import json
@@ -18,10 +19,7 @@ from pyquotex.config import credentials, resource_path
 BASE = "https://qxbroker.com"
 LANG = "en"
 IMPERSONATE = "firefox133"
-UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) "
-    "Gecko/20100101 Firefox/127.0"
-)
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 STATE_PATH = Path("/tmp/qx_seed_state.json")
 
 
@@ -66,7 +64,8 @@ def main(code: str) -> int:
         Path("/tmp/qx_step2_response.html").write_text(r.text)
         m = re.search(
             r'<div[^>]*class="[^"]*error[^"]*"[^>]*>(.*?)</div>',
-            r.text, re.S,
+            r.text,
+            re.S,
         )
         if m:
             print(f"  Error: {m.group(1).strip()[:200]}")

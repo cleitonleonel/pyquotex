@@ -1,4 +1,5 @@
 """Tests for ``pyquotex.utils.cache.TTLCache``."""
+
 import time
 
 import pytest

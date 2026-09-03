@@ -1,4 +1,5 @@
 """Candles CLI command handlers."""
+
 import argparse
 import asyncio
 import time
@@ -28,9 +29,7 @@ async def cmd_candles(client: Quotex, args: argparse.Namespace) -> None:
     if not await connect_with_retry(client, is_demo):
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
-    candles = await client.get_candles(
-        asset, time.time(), args.period * args.count, args.period
-    )
+    candles = await client.get_candles(asset, time.time(), args.period * args.count, args.period)
     if not candles:
         console.print("[red]No candle data received.[/]")
         return
@@ -56,10 +55,7 @@ async def cmd_candles_deep(client: Quotex, args: argparse.Namespace) -> None:
     if not await connect_with_retry(client, is_demo):
         return
     if args.workers > 10:
-        console.print(
-            "[bold red]⚠ WARNING:[/] workers > 10 may cause a ban. "
-            "Clamping to 10."
-        )
+        console.print("[bold red]⚠ WARNING:[/] workers > 10 may cause a ban. Clamping to 10.")
         args.workers = 10
 
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
@@ -89,8 +85,9 @@ async def cmd_candles_deep(client: Quotex, args: argparse.Namespace) -> None:
         )
 
     console.print(f"\n[green]✓[/] {len(candles)} candles fetched.")
-    _print_candles_table(candles[-20:], asset, args.period,
-                         title=f"Last 20 of {len(candles)} candles (deep)")
+    _print_candles_table(
+        candles[-20:], asset, args.period, title=f"Last 20 of {len(candles)} candles (deep)"
+    )
 
     if args.output:
         _save_candles_csv(candles, args.output)
@@ -104,18 +101,18 @@ async def cmd_history_line(client: Quotex, args: argparse.Namespace) -> None:
         return
     asset, _ = await client.get_available_asset(args.asset, force_open=True)
     await client.get_all_assets()
-    data = await client.get_history_line(
-        asset, time.time(), args.offset
-    )
+    data = await client.get_history_line(asset, time.time(), args.offset)
     if not data:
         console.print("[red]No history-line data received.[/]")
         return
-    console.print(Panel(
-        str(data)[:2000],
-        title=f"📈 [bold]History Line — {asset}[/]",
-        border_style="blue",
-        box=box.ROUNDED,
-    ))
+    console.print(
+        Panel(
+            str(data)[:2000],
+            title=f"📈 [bold]History Line — {asset}[/]",
+            border_style="blue",
+            box=box.ROUNDED,
+        )
+    )
 
 
 async def cmd_candle_info(client: Quotex, args: argparse.Namespace) -> None:
@@ -132,15 +129,17 @@ async def cmd_candle_info(client: Quotex, args: argparse.Namespace) -> None:
         return
     opening = datetime.fromtimestamp(info.get("opening", 0))
     closing = datetime.fromtimestamp(info.get("closing", 0))
-    console.print(Panel(
-        f"[bold cyan]Asset:[/]      {asset}\n"
-        f"[bold cyan]Period:[/]     {args.period}s\n"
-        f"[bold cyan]Opening:[/]    {opening.strftime('%H:%M:%S')}\n"
-        f"[bold cyan]Closing:[/]    {closing.strftime('%H:%M:%S')}\n"
-        f"[bold yellow]Remaining:[/] {info.get('remaining', '?')}s",
-        title="🕯️  [bold]Current Candle Info[/]",
-        border_style="cyan",
-        box=box.ROUNDED,
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Asset:[/]      {asset}\n"
+            f"[bold cyan]Period:[/]     {args.period}s\n"
+            f"[bold cyan]Opening:[/]    {opening.strftime('%H:%M:%S')}\n"
+            f"[bold cyan]Closing:[/]    {closing.strftime('%H:%M:%S')}\n"
+            f"[bold yellow]Remaining:[/] {info.get('remaining', '?')}s",
+            title="🕯️  [bold]Current Candle Info[/]",
+            border_style="cyan",
+            box=box.ROUNDED,
+            expand=False,
+        )
+    )
     await client.stop_candles_stream(asset)

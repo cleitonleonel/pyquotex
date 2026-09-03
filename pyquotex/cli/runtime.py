@@ -1,4 +1,5 @@
 """CLI runtime helpers: connection retry, OTP prompt, demo detection."""
+
 import argparse
 import asyncio
 
@@ -39,9 +40,7 @@ async def connect_with_retry(
     for attempt in range(1, max_attempts + 1):
         with Progress(
                 SpinnerColumn(),
-                TextColumn(
-                    f"[cyan]Connecting (attempt {attempt}/{max_attempts})…"
-                ),
+                TextColumn(f"[cyan]Connecting (attempt {attempt}/{max_attempts})…"),
                 transient=True,
                 console=console,
         ) as prog:
@@ -58,10 +57,7 @@ async def connect_with_retry(
             console.print(f"[bold green]✓[/] Connected — {reason}")
             return True
 
-        console.print(
-            f"[yellow]⚠ Connection failed:[/] {reason}. "
-            f"Retrying in {delay:.0f}s…"
-        )
+        console.print(f"[yellow]⚠ Connection failed:[/] {reason}. Retrying in {delay:.0f}s…")
         await asyncio.sleep(delay)
         delay = min(delay * 2, 30)
 

@@ -19,6 +19,7 @@ Usage
 ...     if value is not None:
 ...         print(value)  # warmed up
 """
+
 from __future__ import annotations
 
 import statistics
@@ -188,9 +189,7 @@ class StreamingBollinger:
     def ready(self) -> bool:
         return len(self._window) == self._period
 
-    def update(
-        self, price: float
-    ) -> tuple[float, float, float] | None:
+    def update(self, price: float) -> tuple[float, float, float] | None:
         """Return ``(upper, middle, lower)`` once warmed up."""
         if len(self._window) == self._period:
             self._sum -= self._window[0]
@@ -206,9 +205,7 @@ class StreamingBollinger:
             middle - self._num_std * std,
         )
 
-    def seed(
-        self, prices: Iterable[float]
-    ) -> tuple[float, float, float] | None:
+    def seed(self, prices: Iterable[float]) -> tuple[float, float, float] | None:
         result: tuple[float, float, float] | None = None
         for p in prices:
             result = self.update(p)

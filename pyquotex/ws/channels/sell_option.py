@@ -12,17 +12,9 @@ class SellOption(Base):
         :param options_ids: list or int/str
         """
         if not isinstance(options_ids, list):
-            payload = {
-                "ticket": options_ids
-            }
-            await self.send_websocket_request(
-                f'42["orders/cancel",{json.dumps_str(payload)}]'
-            )
+            payload = {"ticket": options_ids}
+            await self.send_websocket_request(f'42["orders/cancel",{json.dumps_str(payload)}]')
         else:
             for ids in options_ids:
-                payload = {
-                    "ticket": ids
-                }
-                await self.send_websocket_request(
-                    f'42["orders/cancel",{json.dumps_str(payload)}]'
-                )
+                payload = {"ticket": ids}
+                await self.send_websocket_request(f'42["orders/cancel",{json.dumps_str(payload)}]')

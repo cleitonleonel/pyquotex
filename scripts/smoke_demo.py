@@ -14,6 +14,7 @@ Exercises everything that cannot be verified offline:
 Run:
     PYTHONPATH=. python scripts/smoke_demo.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -58,13 +59,13 @@ async def step_candles_cache(q: Quotex) -> None:
     first = await q.get_candles(asset, None, 3600, period, use_cache=True)
     t1 = time.monotonic() - t0
     n_first = len(first) if first else 0
-    print(f"  First call: {n_first} candles in {t1*1000:.1f} ms")
+    print(f"  First call: {n_first} candles in {t1 * 1000:.1f} ms")
 
     t0 = time.monotonic()
     second = await q.get_candles(asset, None, 3600, period, use_cache=True)
     t2 = time.monotonic() - t0
     n_second = len(second) if second else 0
-    print(f"  Cached call: {n_second} candles in {t2*1000:.1f} ms")
+    print(f"  Cached call: {n_second} candles in {t2 * 1000:.1f} ms")
     if t2 < t1 * 0.5 or t2 < 0.005:
         print("  ✅ cache hit confirmed (second call is much faster)")
     else:
@@ -94,10 +95,13 @@ async def step_streaming_indicators(candles: list[dict[str, Any]]) -> None:
     print(f"  RSI(14) latest: {last_rsi}")
     # Sanity check against batch
     from pyquotex.utils.indicators import TechnicalIndicators
+
     batch = TechnicalIndicators.calculate_sma(closes, 14)
     batch_last = batch[-1] if batch else None
-    print(f"  SMA(14) batch:  {batch_last}  (rounded match: "
-          f"{round(last_sma or 0, 2) == round(batch_last or 0, 2)})")
+    print(
+        f"  SMA(14) batch:  {batch_last}  (rounded match: "
+        f"{round(last_sma or 0, 2) == round(batch_last or 0, 2)})"
+    )
 
 
 async def step_typed_candle(candles: list[dict[str, Any]]) -> None:
@@ -106,8 +110,7 @@ async def step_typed_candle(candles: list[dict[str, Any]]) -> None:
         return
     typed = [Candle.from_dict(c) for c in candles[-3:]]
     for c in typed:
-        print(f"  t={c.time} o={c.open} h={c.high} l={c.low} c={c.close} "
-              f"color={c.color}")
+        print(f"  t={c.time} o={c.open} h={c.high} l={c.low} c={c.close} color={c.color}")
 
 
 async def step_subscription_replay(q: Quotex, asset: str, period: int) -> None:
@@ -117,8 +120,7 @@ async def step_subscription_replay(q: Quotex, asset: str, period: int) -> None:
     await q.start_candles_stream(asset, period)
     subs = q.api._subscriptions  # noqa: SLF001 — smoke test
     print(f"  Subscriptions tracked: {list(subs.keys())}")
-    assert any(s.startswith("candle:" + asset) for s in subs), \
-        "candle subscription not tracked"
+    assert any(s.startswith("candle:" + asset) for s in subs), "candle subscription not tracked"
 
     # Force a reconnect by closing the underlying socket directly.
     ws_client = q.api.websocket_client
@@ -131,8 +133,9 @@ async def step_subscription_replay(q: Quotex, asset: str, period: int) -> None:
     for i in range(40):
         await asyncio.sleep(0.5)
         if ws_client.is_alive():
-            print(f"  ✅ Reconnected after ~{(i + 1) * 0.5:.1f}s "
-                  f"(open_count={ws_client._open_count})")
+            print(
+                f"  ✅ Reconnected after ~{(i + 1) * 0.5:.1f}s (open_count={ws_client._open_count})"
+            )
             break
     else:
         print("  ❌ Did not reconnect within 20s")
@@ -141,8 +144,7 @@ async def step_subscription_replay(q: Quotex, asset: str, period: int) -> None:
     # Confirm subscription is still tracked (replay does NOT clear it).
     subs_after = q.api._subscriptions  # noqa: SLF001
     if any(s.startswith("candle:" + asset) for s in subs_after):
-        print(f"  ✅ Subscription still tracked post-reconnect: "
-              f"{list(subs_after.keys())}")
+        print(f"  ✅ Subscription still tracked post-reconnect: {list(subs_after.keys())}")
 
     # Confirm fresh candles flow.
     fresh = await q.get_candles(asset, None, 600, period)
@@ -212,10 +214,7 @@ async def main() -> None:
     )
 
     log.info("Connecting as %s with auto-reconnect…", email)
-    real_ua = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) "
-        "Gecko/20100101 Firefox/127.0"
-    )
+    real_ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
     async with Quotex(
         email=email,
         password=password,
@@ -227,6 +226,7 @@ async def main() -> None:
         # Re-issue change_account on the WS so the session is on DEMO.
         if q.api is not None:
             from pyquotex.utils.account_type import AccountType
+
             await q.api.change_account(AccountType.DEMO)
             await asyncio.sleep(0.5)
 

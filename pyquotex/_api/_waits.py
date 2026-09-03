@@ -7,6 +7,7 @@ wait_until() exists for cases where the desired state cannot be signaled
 from the WS handler. It still uses short polling internally but enforces
 a hard timeout.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -64,6 +65,7 @@ async def wait_until(
     poll_interval: float = 0.05,
 ) -> None:
     """Poll predicate() until truthy or raise asyncio.TimeoutError."""
+
     async def _loop() -> None:
         while not predicate():
             await asyncio.sleep(poll_interval)
