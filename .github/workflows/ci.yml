@@ -44,7 +44,7 @@ jobs:
       - name: mypy (public surface only)
         run: |
           mypy --ignore-missing-imports --no-strict-optional \
-            pyquotex/types.py \
+            pyquotex/qxtypes.py \
             pyquotex/utils/streaming_indicators.py \
             pyquotex/utils/cache.py \
             pyquotex/utils/json_utils.py \
