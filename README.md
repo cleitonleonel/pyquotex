@@ -45,6 +45,14 @@ Prover ferramentas para desenvolvedores integrarem seus sistemas com a plataform
 # 📚 Documentação Completa
 https://cleitonleonel.github.io/pyquotex/
 
+## 🛡 Motor de Rede (Anti-Bloqueio)
+
+A partir de sua versão mais recente, o PyQuotex adotou uma nova arquitetura de rede. Todo o motor de conexão (`httpx` e
+`websockets`) foi substituído e unificado utilizando a biblioteca **`curl_cffi`**.
+
+Isso significa que a sua aplicação agora emula perfeitamente a *fingerprint* (assinatura) de TLS (JA3) do navegador
+Google Chrome. Essa mudança resolve de forma definitiva os problemas com **Erros 403 (Forbidden)** e banimentos
+repentinos de conexão aplicados pelas proteções do Cloudflare na corretora.
 
 ## 🏗 Arquitectura interna
 
