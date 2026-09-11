@@ -145,7 +145,7 @@ class WebsocketClient:
             if self._ws and not getattr(self._ws, "closed", False):
                 try:
                     await self._ws.close()
-                except:
+                except Exception:
                     pass
 
     def _handle_close_exception(self, exc: Exception) -> None:
@@ -232,7 +232,7 @@ class WebsocketClient:
         if self._ws and not getattr(self._ws, "closed", False):
             try:
                 await self._ws.close()
-            except:
+            except Exception:
                 pass
 
     def is_alive(self) -> bool:
