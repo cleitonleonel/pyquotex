@@ -1,12 +1,8 @@
-"""Module for Quotex websocket."""
-
 import asyncio
 import logging
 import time
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
-
-import httpx
 
 from .global_value import AuthStatus, ConnectionState, WebsocketStatus
 from .network.history import GetHistory
@@ -579,12 +575,12 @@ class QuotexAPI:
             await login_obj.close()
         return status, msg
 
-    async def send_http_request_v1(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    async def send_http_request_v1(self, method: str, url: str, **kwargs: Any) -> Any:
         """Sends an HTTP request using the internal browser client (v1)."""
         # Browser.send_request uses self._client.request internally
         return await self.browser.send_request(method, url, **kwargs)
 
-    async def send_http_request_v2(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    async def send_http_request_v2(self, method: str, url: str, **kwargs: Any) -> Any:
         """Sends an HTTP request using the internal browser client (v2)."""
         return await self.browser.send_request(method, url, **kwargs)
 
