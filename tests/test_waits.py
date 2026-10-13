@@ -148,7 +148,7 @@ def test_quotex_api_has_slot_registry():
     from pyquotex.api import QuotexAPI
 
     api = QuotexAPI(
-        host="qxbroker.com",
+        host="quotex.com",
         username="x",
         password="x",
         lang="en",

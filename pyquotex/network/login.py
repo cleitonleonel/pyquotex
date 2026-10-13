@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import re
 import sys
@@ -18,31 +17,47 @@ class Login(Browser):
     url: str = ""
     cookies: str | None = None
     ssid: str | None = None
-    base_url: str = 'qxbroker.com'
-    https_base_url: str = f'https://{base_url}'
-
     def __init__(self, api: Any, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.api = api
         self.html: Any = None
         self.headers: dict[str, str] = self.get_headers()
-        self.full_url: str = f"{self.https_base_url}/{api.lang}"
+        self.full_url: str = f"{api.https_url}/{api.lang}"
+
+    def _nav_headers(self, referer: str) -> dict[str, str]:
+        """Headers Chrome sends on a top-level/iframe document navigation.
+
+        Cloudflare's managed rules challenge login POSTs that lack the
+        ``Sec-Fetch-*``/``Origin`` set a real browser would send, even when
+        the TLS fingerprint is impersonated correctly.
+        """
+        return {
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,image/apng,*/*;q=0.8"
+            ),
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": referer,
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+            "Sec-Fetch-User": "?1",
+        }
+
+    def _form_headers(self, referer: str) -> dict[str, str]:
+        """Headers Chrome sends when submitting an HTML form (POST)."""
+        headers = self._nav_headers(referer)
+        headers.update({
+            "Origin": self.api.https_url,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cache-Control": "max-age=0",
+        })
+        return headers
 
     async def get_sign_page(self):
-        headers = {}
-        headers["Connection"] = "keep-alive"
-        headers["Accept-Encoding"] = "gzip, deflate, br"
-        headers["Accept-Language"] = "pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.3"
-        headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-        headers["Referer"] = self.api.https_url
-        headers["Upgrade-Insecure-Requests"] = "1"
-        headers["Sec-Ch-Ua-Mobile"] = "?0"
-        headers["Sec-Ch-Ua-Platform"] = '"Linux"'
-        headers["Sec-Fetch-Site"] = "same-origin"
-        headers["Sec-Fetch-User"] = "?1"
+        headers = self._nav_headers(self.api.https_url)
         headers["Sec-Fetch-Dest"] = "document"
-        headers["Sec-Fetch-Mode"] = "navigate"
-        headers["Dnt"] = "1"
         response = await self.send_request(
             method="GET",
             url=self.full_url,
@@ -59,10 +74,10 @@ class Login(Browser):
 
     async def get_token(self) -> None | str | AttributeValueList:
         self.headers["Cookie"] = self.cookies or ''
-        self.headers["Referer"] = f"{self.full_url}/sign-in"
         await self.send_request(
             "GET",
-            f"{self.full_url}/sign-in/modal/"
+            f"{self.full_url}/sign-in/modal/",
+            headers=self._nav_headers(f"{self.full_url}/sign-in"),
         )
         html = self.get_soup()
         match = html.find(
@@ -77,7 +92,7 @@ class Login(Browser):
             input_message: str
     ) -> None:
         self.headers["Content-Type"] = "application/x-www-form-urlencoded"
-        self.headers["Referer"] = f"{self.full_url}/sign-in/modal"
+        self.headers["Referer"] = f"{self.full_url}/sign-in/modal/"
         data["keep_code"] = 1
         try:
             if self.api.on_otp_callback:
@@ -101,10 +116,11 @@ class Login(Browser):
         # a proper retry counter should be introduced when this method is
         # refactored to handle transient PIN-submission failures.
         await backoff_sleep(0)
-        await self.send_request(
+        self.response = await self.send_request(
             method="POST",
-            url=f"{self.full_url}/sign-in/modal",
-            data=data
+            url=f"{self.full_url}/sign-in/modal/",
+            data=data,
+            headers=self._form_headers(f"{self.full_url}/sign-in/modal/"),
         )
 
     async def get_profile(self):
@@ -156,7 +172,8 @@ class Login(Browser):
         self.response = await self.send_request(
             method="POST",
             url=f"{self.full_url}/sign-in/",
-            data=data
+            data=data,
+            headers=self._form_headers(f"{self.full_url}/sign-in/modal/"),
         )
         required_keep_code = self.get_soup().find(
             "input", {"name": "keep_code"}

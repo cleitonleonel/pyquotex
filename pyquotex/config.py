@@ -40,6 +40,15 @@ def credentials() -> tuple[str, str]:
     return email, password
 
 
+def host() -> str:
+    """Get the broker host configured in settings/config.ini."""
+    if not config_path.exists():
+        return "quotex.com"
+
+    config.read(config_path, encoding="utf-8")
+    return config.get("settings", "host", fallback="quotex.com").strip()
+
+
 def resource_path(relative_path: str | Path) -> Path:
     """Get absolute path to resource, works for dev and for PyInstaller"""
     global base_dir

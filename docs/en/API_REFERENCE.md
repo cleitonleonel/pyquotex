@@ -31,7 +31,7 @@ client = Quotex(
     email="your@email.com",
     password="your_password",
     lang="en",  # "pt" | "en" | "es"
-    host="qxbroker.com",  # default
+    host="quotex.com",  # default
     root_path=".",  # local storage root
     user_data_dir="browser",  # browser profile folder
     asset_default="EURUSD",  # default asset
@@ -43,18 +43,18 @@ client = Quotex(
 
 ### Constructor Parameters
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `email` | `str` | required | Account email |
-| `password` | `str` | required | Account password |
-| `lang` | `str` | `"pt"` | Platform language (`pt`, `en`, `es`) |
-| `host` | `str` | `"qxbroker.com"` | Broker hostname |
-| `root_path` | `str` | `"."` | Root path for local session storage |
-| `user_data_dir` | `str` | `"browser"` | Browser profile directory |
-| `asset_default` | `str` | `"EURUSD"` | Default asset |
-| `period_default` | `int` | `60` | Default candle period (seconds) |
-| `proxies` | `dict \| None` | `None` | HTTP/HTTPS proxy settings |
-| `on_otp_callback` | `callable \| None` | `None` | Async callback for OTP/2FA input |
+| Parameter         | Type               | Default        | Description                          |
+|-------------------|--------------------|----------------|--------------------------------------|
+| `email`           | `str`              | required       | Account email                        |
+| `password`        | `str`              | required       | Account password                     |
+| `lang`            | `str`              | `"pt"`         | Platform language (`pt`, `en`, `es`) |
+| `host`            | `str`              | `"quotex.com"` | Broker hostname                      |
+| `root_path`       | `str`              | `"."`          | Root path for local session storage  |
+| `user_data_dir`   | `str`              | `"browser"`    | Browser profile directory            |
+| `asset_default`   | `str`              | `"EURUSD"`     | Default asset                        |
+| `period_default`  | `int`              | `60`           | Default candle period (seconds)      |
+| `proxies`         | `dict \| None`     | `None`         | HTTP/HTTPS proxy settings            |
+| `on_otp_callback` | `callable \| None` | `None`         | Async callback for OTP/2FA input     |
 
 ---
 

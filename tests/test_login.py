@@ -11,7 +11,7 @@ class Api:
     lang = "pt"
     session_data = {}
     resource_path = os.getcwd()
-    https_url = "https://qxbroker.com"
+    https_url = "https://quotex.com"
     username = "test@example.com"
     on_otp_callback = None
 

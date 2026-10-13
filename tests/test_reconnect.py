@@ -198,7 +198,7 @@ def test_api_tracks_and_forgets_subscriptions() -> None:
     from pyquotex.api import QuotexAPI
 
     api = QuotexAPI(
-        host="qxbroker.com",
+        host="quotex.com",
         username="x",
         password="x",
         lang="en",

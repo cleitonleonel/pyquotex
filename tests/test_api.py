@@ -17,7 +17,7 @@ def test_connection_state_independent():
 
 def test_quotex_api_instantiation():
     """Test that the QuotexAPI instance initializes the state properly."""
-    api = QuotexAPI("qxbroker.com", "test@test.com", "password", None, "en", 1)
+    api = QuotexAPI("quotex.com", "test@test.com", "password", None, "en", 1)
 
     # Assert connection state exists
     assert hasattr(api, "state")

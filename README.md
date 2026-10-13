@@ -103,8 +103,7 @@ inicializar a classe `Quotex`. Alternativas comuns incluem:
 If you experience connection issues or your region blocks the default domain, you can change the `host` parameter when
 initializing the `Quotex` class. Common alternatives include:
 
-- `qxbroker.com` (default)
-- `quotex.com`
+- `quotex.com` (default)
 - `qxbroker.io`
 - `quotex.io`
 - `qxbroker.sqldb.tc`
@@ -118,7 +117,7 @@ client = Quotex(
     email="your_email",
     password="your_password",
     lang="pt",  # ou "en", "es"
-    host="qxbroker.com",  # Altere se bloqueado em sua região / Change if blocked in your region (e.g. "quotex.com", "qxbroker.io")
+    host="quotex.com",  # Altere se bloqueado em sua região / Change if blocked in your region (e.g. "quotex.com", "qxbroker.io")
 )
 
 await client.connect()

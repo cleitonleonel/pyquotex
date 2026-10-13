@@ -138,13 +138,31 @@ class Browser:
             for cookie in self._client.cookies.jar
         )
 
+    def is_cloudflare_challenge(self) -> bool:
+        """True when the last response is a Cloudflare JS/managed challenge."""
+        if self.response is None or self.response.status_code not in (403, 503):
+            return False
+        if self.response.headers.get("cf-mitigated") == "challenge":
+            return True
+        return "Just a moment" in (self.response.text or "")[:2048]
+
+    def _raise_for_error(self) -> None:
+        if self.response is None or self.response.status_code < 400:
+            return
+        if self.is_cloudflare_challenge():
+            raise RuntimeError(
+                f"HTTP {self.response.status_code}: blocked by Cloudflare "
+                f"challenge at {self.response.url}. Your IP may be temporarily "
+                "flagged; wait a few minutes or use a different IP/proxy."
+            )
+        raise RuntimeError(
+            f"HTTP {self.response.status_code}: "
+            f"{self.response.reason or ''} ({self.response.url})"
+        )
+
     def get_soup(self) -> BeautifulSoup:
         """Parse the last response content with BeautifulSoup."""
-        if self.response and self.response.status_code >= 400:
-            raise RuntimeError(
-                f"HTTP {self.response.status_code}: "
-                f"{self.response.reason}"
-            )
+        self._raise_for_error()
         return BeautifulSoup(
             self.response.content if self.response else b"",
             "html.parser"
@@ -152,11 +170,7 @@ class Browser:
 
     def get_json(self) -> Any:
         """Parse the last response as JSON."""
-        if self.response and self.response.status_code >= 400:
-            raise RuntimeError(
-                f"HTTP {self.response.status_code}: "
-                f"{self.response.reason}"
-            )
+        self._raise_for_error()
         try:
             return self.response.json() if self.response else None
         except Exception:

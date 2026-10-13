@@ -258,16 +258,16 @@ class QuotexAPI:
             msg_str = msg.decode("utf-8", errors="ignore") if isinstance(msg, bytes) else str(msg)
 
             if self.state.auth_status != AuthStatus.AUTHENTICATED:
-                print(f"[WS DEBUG] Received while not authenticated: {msg_str[:200]}")
+                logger.debug("WS received while not authenticated: %s", msg_str[:200])
 
             if "authorization/reject" in msg_str:
-                print(f"[DEBUG] Websocket authorization rejected: {msg_str}")
+                logger.debug("Websocket authorization rejected (session expired?): %s", msg_str)
                 self.state.websocket_error_reason = "Websocket connection rejected."
                 self.state.auth_status = AuthStatus.FAILED
                 await self.event_registry.set_event("auth_changed", self.state.auth_status)
                 return
             elif "s_authorization" in msg_str:
-                print("[DEBUG] Websocket authorization SUCCESS!")
+                logger.debug("Websocket authorization succeeded")
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.status = WebsocketStatus.CONNECTED
                 await self.event_registry.set_event("auth_changed", self.state.auth_status)

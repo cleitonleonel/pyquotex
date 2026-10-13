@@ -8,6 +8,7 @@ from ._api.history import HistoryMixin
 from ._api.realtime import RealtimeMixin
 from ._api.trading import TradingMixin
 from .api import QuotexAPI
+from .config import host as configured_host
 from .config import load_session, resource_path, update_session
 from .global_value import AuthStatus
 from .qxtypes import ReconnectPolicy
@@ -29,7 +30,7 @@ class Quotex(
             self,
             email: str,
             password: str,
-            host: str = "qxbroker.com",
+            host: str | None = None,
             lang: str = "pt",
             user_agent: str = "Quotex/1.0",
             root_path: str = ".",
@@ -47,7 +48,8 @@ class Quotex(
         Args:
             email (str): User email.
             password (str): User password.
-            host (str): Broker hostname. Defaults to "qxbroker.com".
+            host (str): Broker hostname. Defaults to the value configured in
+                ``settings/config.ini``.
             lang (str): Language code. Defaults to "pt".
             user_agent (str): Browser User-Agent. Defaults to "Quotex/1.0".
             root_path (str): Root directory for local storage. Defaults to ".".
@@ -66,7 +68,7 @@ class Quotex(
         self.size = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 86400]
         self.email = email
         self.password = password
-        self.host = host
+        self.host = host or configured_host()
         self.lang = lang
         self.proxies = proxies
         self.resource_path = root_path

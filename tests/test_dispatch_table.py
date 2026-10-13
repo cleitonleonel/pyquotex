@@ -12,7 +12,7 @@ from pyquotex.global_value import AuthStatus
 
 def _make_api() -> QuotexAPI:
     return QuotexAPI(
-        host="qxbroker.com",
+        host="quotex.com",
         username="x",
         password="x",
         lang="en",

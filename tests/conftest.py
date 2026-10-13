@@ -52,7 +52,7 @@ def pytest_configure(config: pytest.Config) -> None:
     for marker, description in (
         ("unit", "Pure-Python unit test, no I/O"),
         ("integration", "Uses the WSReplayServer or fakes, but stays offline"),
-        ("live", "Hits qxbroker.com; requires credentials and PYQUOTEX_LIVE=1"),
+        ("live", "Hits quotex.com; requires credentials and PYQUOTEX_LIVE=1"),
     ):
         config.addinivalue_line("markers", f"{marker}: {description}")
 
