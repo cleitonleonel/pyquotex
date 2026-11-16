@@ -21,6 +21,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           escape_markdown() {
             local input="$1"
@@ -35,7 +36,6 @@ jobs:
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             ACTION="${{ github.event.action }}"
             PR_URL="${{ github.event.pull_request.html_url }}"
-            PR_TITLE="${{ github.event.pull_request.title }}"
             MESSAGE="📌 *Pull Request ${ACTION}:*\n\n🔧 Repository: ${{ github.repository }}\n👤 Actor: ${{ github.actor }}\n📝 Title: ${PR_TITLE}\n🔗 [View PR](${PR_URL})"
           fi
 
